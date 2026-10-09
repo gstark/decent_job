@@ -270,11 +270,11 @@ describe DecentJob::Base do
     end
   end
 
-  # Phase 5 replaces this with a run that loads neither Active Job nor
-  # ActiveSupport.
-  it "performs with callbacks and retries in a fresh process" do
+  it "performs with callbacks and retries without Active Job or ActiveSupport" do
     script = <<~RUBY
       require "decent_job"
+      raise "Active Job loaded" if defined?(ActiveJob)
+      raise "ActiveSupport loaded" if defined?(ActiveSupport)
 
       class Adapter
         attr_reader :timestamps

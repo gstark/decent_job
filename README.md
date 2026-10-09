@@ -1,6 +1,6 @@
 # DecentJob
 
-A PostgreSQL backend for Active Job with two direct runtime dependencies: `activejob` and `pg`.
+A PostgreSQL job runner. It has its own job API, `DecentJob::Base`, and an optional Active Job adapter. The only runtime dependency is `pg`.
 
 The current implementation supports persistent jobs, delayed execution, priorities, queue pools, bulk capture, batches, labels, concurrency limits and throttles, persistent pauses, recurring schedules with restart catch-up, retries, discards, execution history, inline and async execution, and external workers. Workers offer advisory, SKIP LOCKED, and hybrid claims, with LISTEN/NOTIFY and polling for wakeups.
 
@@ -12,7 +12,7 @@ Numeric and natural-language cron parsing are implemented as a foundation for re
 
 ## Install and run
 
-Requires Ruby 3.2 or newer and PostgreSQL. Local verification uses Ruby 3.4 and PostgreSQL 17. The lockfile targets Active Job 8.1.4 and pg 1.7.0.
+Requires Ruby 3.2 or newer and PostgreSQL. Local verification uses Ruby 3.4 and PostgreSQL 17. The lockfile targets pg 1.7.0, and Active Job 8.1.4 for the optional adapter.
 
 Until a release is published, add the checkout to your application's Gemfile:
 
@@ -36,9 +36,7 @@ Create an application file, such as `jobs.rb`:
 ```ruby
 require "decent_job"
 
-ActiveJob::Base.queue_adapter = :decent_job
-
-class GreetingJob < ActiveJob::Base
+class GreetingJob < DecentJob::Base
   retry_on IOError, wait: 5, attempts: 3
 
   def perform(name)
@@ -52,8 +50,27 @@ Enqueue jobs from your application:
 ```ruby
 GreetingJob.perform_later("Ada")
 GreetingJob.set(queue: "mailers", priority: -10, wait: 60).perform_later("Grace")
-ActiveJob.perform_all_later(GreetingJob.new("Linus"), GreetingJob.new("Matz"))
+DecentJob.perform_all_later(GreetingJob.new("Linus"), GreetingJob.new("Matz"))
 ```
+
+`DecentJob::Base` follows the Active Job API: callbacks, `retry_on`, `discard_on`, `rescue_from`, and the same argument types. See [native jobs](docs/native-jobs.md).
+
+To use Active Job instead, set the adapter after you require both gems:
+
+```ruby
+require "active_job"
+require "decent_job"
+
+ActiveJob::Base.queue_adapter = :decent_job
+
+class GreetingJob < ActiveJob::Base
+  def perform(name)
+    puts "Hello, #{name}!"
+  end
+end
+```
+
+Rails applications set `config.active_job.queue_adapter = :decent_job`. See [Rails integration](docs/rails-integration.md). Both kinds of job can share a database and workers.
 
 Run a worker that loads those job classes:
 
@@ -121,7 +138,7 @@ Set `DecentJob.logger` to choose the default logging destination, or use `Decent
 
 Use `execution_mode = :async_all` to start background workers on the first enqueue in a standalone process. The `async` and `async_server` modes start embedded workers only in detected web servers. Rails starts eligible adapters after application boot. See [Rails integration](docs/rails-integration.md) for configuration, reloading, and transaction deferral. Call `DecentJob.shutdown(timeout: 30)` to stop registered workers and cron managers with one shared deadline. Enqueues after global shutdown remain persisted until an explicit start or restart reopens execution. `DecentJob.start` starts the default worker for jobs already in the database; `DecentJob.restart(timeout: 30)` resumes registered owners. Use `adapter.restart(timeout: 30)` for an explicitly stopped adapter. See [lifecycle and restart](docs/lifecycle.md).
 
-Use `execution_mode = :inline` to run due jobs before enqueue returns. Future jobs stay persisted. Inline mode records and propagates unhandled job errors; handled retries and discards retain Active Job behavior. Nested inline jobs and immediate retries drain iteratively.
+Use `execution_mode = :inline` to run due jobs before enqueue returns. Future jobs stay persisted. Inline mode records and propagates unhandled job errors; handled retries and discards keep the job class's own retry and discard behavior. Nested inline jobs and immediate retries drain iteratively.
 
 `DecentJob.perform_inline(queues: "*", limit: nil)` drains currently due jobs explicitly until no eligible job remains. It returns the number of attempted executions, including immediate retries. Pass a nonnegative integer to cap attempts; zero returns zero without opening the database. Future jobs remain pending until due, and unhandled errors propagate after their attempt is recorded. An unlimited drain can keep running while jobs keep arriving or retrying immediately, so use a finite limit when the caller needs a bound.
 
@@ -148,7 +165,7 @@ Directly constructed workers belong to their caller. Shut them down before closi
 
 ## Labels, concurrency, and pauses
 
-Include the labels extension for searchable job metadata:
+Native jobs include labels and concurrency controls by default. Active Job classes include the extensions explicitly. Labels are searchable job metadata:
 
 ```ruby
 class AccountJob < ActiveJob::Base
@@ -181,11 +198,11 @@ A callable rule key returning nil, false, or a blank string disables that rule f
 
 The reference deprecates supplying both a label and a key. Use a label-only rule; DecentJob keeps the label precedence for existing configurations and does not evaluate the ignored key or emit a deprecation warning.
 
-Enqueue limits count unfinished jobs, excluding executing jobs for an enqueue-only limit. Admission and insertion share a PostgreSQL transaction and scope lock. Rejected `perform_later` calls return `false`. Limits run after application enqueue callbacks. The named callback `:_decent_job_concurrency_before_enqueue` supports Active Job's `skip_callback` API.
+Enqueue limits count unfinished jobs, excluding executing jobs for an enqueue-only limit. Admission and insertion share a PostgreSQL transaction and scope lock. Rejected `perform_later` calls return `false`. Limits run after application enqueue callbacks. For Active Job classes, the named callback `:_decent_job_concurrency_before_enqueue` supports `skip_callback`. Native jobs run the check after all their enqueue callbacks.
 
 If a configured `enqueue_limit` callable returns nil, the numeric limit falls back to `total_limit` while still excluding executing jobs, matching the reference's enqueue-only flag.
 
-Perform-limit rejections retry with Active Job's polynomial delay. Durable waiting claims let completion or crash recovery move a waiter forward immediately. Promotion does not reserve capacity; the job must pass its rules again. Controls are bypassed for direct `perform_now` and other queue adapters.
+Perform-limit rejections retry with the `:polynomially_longer` delay of `retry_on`. Durable waiting claims let completion or crash recovery move a waiter forward immediately. Promotion does not reserve capacity; the job must pass its rules again. Controls are bypassed for direct `perform_now` and other queue adapters.
 
 Both phases accept a rolling throttle, for example `enqueue_throttle: [20, 60]` or `perform_throttle: [10, 60]`. Limits, keys, and throttle arrays may be callables. Perform throttling follows the reference's execution-history semantics: it considers the earliest executions in the window and tests job identity, excluding throttle-rejected attempts. A retry of an already admitted job can remain eligible within that window.
 
@@ -221,7 +238,7 @@ Captured callbacks observe provisional enqueue success. Admission happens after 
 
 `DecentJob::Bulk.capture { ... }` captures jobs without flushing them and restores an enclosing capture afterward. Pass either explicit jobs or a block to these APIs. To make writes across multiple flush groups atomic on one database, wrap bulk enqueue in `DecentJob.database.transaction`.
 
-Outside cron capture, direct adapter `enqueue_all` skips already-persisted Active Job identities and counts the rows it inserts. With distinct input objects sharing an identity, only the first inserted object receives a provider ID and success flag. Repeating the same object counts it once and keeps its successful status. Single-job duplicate enqueue still raises an enqueue error. This avoids the reference's overcount when several input objects map to one inserted identity. Cron capture only skips duplicate occurrences and still raises unrelated uniqueness errors.
+Outside cron capture, direct adapter `enqueue_all` skips already-persisted job identities and counts the rows it inserts. With distinct input objects sharing an identity, only the first inserted object receives a provider ID and success flag. Repeating the same object counts it once and keeps its successful status. Single-job duplicate enqueue still raises an enqueue error. This avoids the reference's overcount when several input objects map to one inserted identity. Cron capture only skips duplicate occurrences and still raises unrelated uniqueness errors.
 
 ## Batches
 
@@ -250,13 +267,13 @@ batch.reload.finished?      # All members and callback jobs have finished.
 batch.reload.succeeded?     # Finished with no discarded member or callback.
 ```
 
-`on_success` fires when all members finish without a discard. `on_discard` fires on the first discarded member or callback; it can fire before the other members finish. `on_finish` fires once all members finish. Each receives the batch and `{event: :success}`, `{event: :discard}`, or `{event: :finish}`. Callback jobs can use ordinary Active Job retry handlers. Callback ordering is not guaranteed.
+`on_success` fires when all members finish without a discard. `on_discard` fires on the first discarded member or callback; it can fire before the other members finish. `on_finish` fires once all members finish. Each receives the batch and `{event: :success}`, `{event: :discard}`, or `{event: :finish}`. Callback jobs can use ordinary retry handlers. Callback ordering is not guaranteed.
 
-Batch properties use Active Job serialization, including symbols, dates, and GlobalID objects. Supply arbitrary keyword properties or an explicit `properties:` hash. Batches themselves support GlobalID serialization. Use `DecentJob::Batch.find(id)` to load a batch and `reload` to refresh an existing object's state.
+Batch properties use the job argument encoding, `DecentJob::Arguments`, including symbols, dates, and GlobalID objects. Supply arbitrary keyword properties or an explicit `properties:` hash. Batches themselves support GlobalID serialization. Use `DecentJob::Batch.find(id)` to load a batch and `reload` to refresh an existing object's state.
 
 To build a batch incrementally, use `Batch.new`, `add(jobs)` or an `add` block, then `enqueue`. Added jobs are persisted immediately, while finish/success callbacks wait until the batch is marked enqueued. `enqueue` accepts an array and a block together. The class method returns the batch; instance `enqueue` and `add` return accepted jobs. Existing jobs can be attached without inserting them again. A running job can access its batch through `batch` and `batch?`; ordinary jobs it enqueues do not automatically inherit membership.
 
-Calling `enqueue` again reopens the same batch. Calling `retry` reopens it and retries only discarded members still in storage, running their Active Job enqueue callbacks and preserving IDs and execution history. Old callback jobs are not manually retried. `job_instances` and `callback_job_instances` return associated deserialized jobs still in storage, including preserved completed jobs.
+Calling `enqueue` again reopens the same batch. Calling `retry` reopens it and retries only discarded members still in storage, running their enqueue callbacks and preserving IDs and execution history. Old callback jobs are not manually retried. `job_instances` and `callback_job_instances` return associated deserialized jobs still in storage, including preserved completed jobs.
 
 Create several new batches in one transaction with pairs of batches and job arrays:
 
@@ -292,7 +309,7 @@ Execution is **at least once**. A process can die after an external side effect 
 
 Advisory and hybrid execution require direct PostgreSQL connections or session pooling. SKIP LOCKED supports [PgBouncer transaction pooling](docs/pgbouncer.md) with LISTEN and advisory heartbeats disabled and polling enabled. See [lock strategies](docs/locking.md) for configuration, migration, mixed workers, and recovery. Nested claims skip jobs already owned by the caller. Stop workers before forking and construct fresh database instances in child processes.
 
-Unhandled job errors are retained as discarded jobs by default. Configure `handled_exceptions` and `retry_on_unhandled_error` to control backend error handling. The opt-in `ActiveJobExtensions::InterruptErrors` module exposes interrupted attempts to Active Job retry/discard handlers; see [execution errors and recovery](docs/execution-recovery.md). [Execution history and timing](docs/execution-history.md) describes attempt snapshots, durations, and latency. Inspect records and attempt histories with:
+Unhandled job errors are retained as discarded jobs by default. Configure `handled_exceptions` and `retry_on_unhandled_error` to control backend error handling. The opt-in `DecentJob::JobExtensions::InterruptErrors` module (also `ActiveJobExtensions::InterruptErrors`) exposes interrupted attempts to retry and discard handlers; see [execution errors and recovery](docs/execution-recovery.md). [Execution history and timing](docs/execution-history.md) describes attempt snapshots, durations, and latency. Inspect records and attempt histories with:
 
 ```ruby
 store = DecentJob::Store.new(DecentJob.database)

@@ -1,6 +1,8 @@
 # Rails integration
 
-DecentJob works with Rails 8.1 while keeping Rails and Active Record optional. Its runtime dependencies remain Active Job and pg. The Railtie loads automatically when Rails is present, or when a Rails application class is defined after DecentJob was loaded. This supports the CLI loading `config/environment.rb`. An application may also explicitly require `decent_job/railtie` before initialization.
+DecentJob works with Rails 8.1 while keeping Rails and Active Record optional. Its only runtime dependency is pg. The Railtie loads automatically when Rails is present, or when a Rails application class is defined after DecentJob was loaded. This supports the CLI loading `config/environment.rb`: before it requires application files, the CLI loads ActiveSupport when it is installed, so the Railtie hook is in place. An application may also explicitly require `decent_job/railtie` before initialization.
+
+The Railtie loads the Active Job adapter when Active Job loads. Rails applications can use Active Job classes, `DecentJob::Base` classes, or both. See [native jobs](native-jobs.md).
 
 Configure the adapter and its PostgreSQL connection in the application:
 

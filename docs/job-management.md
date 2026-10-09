@@ -1,13 +1,13 @@
 # Job management
 
-Load a job using the provider ID returned by Active Job:
+Load a job using the provider ID returned by `perform_later`:
 
 ```ruby
 enqueued = ReportJob.perform_later("weekly")
 job = DecentJob::Job.find(enqueued.provider_job_id)
 
 job.id             # DecentJob provider ID
-job.active_job_id  # Active Job ID
+job.active_job_id  # The job's job_id (the column keeps its Active Job name)
 job.status
 job.attributes
 job.executions
@@ -38,11 +38,11 @@ Force-discard marks the job and its unfinished attempts discarded without stoppi
 
 Batch retry leaves a force-discarded member alone while its previous execution still owns the session lock. Once that execution drains, it can be retried normally. Ordinary completed failures remain eligible for batch retry while their worker finishes batch bookkeeping.
 
-Retry preserves both IDs, existing attempt history, cron metadata, and batch membership. It uses Active Job's retry and enqueue callbacks, with the job's stored locale, and returns the accepted Active Job or `false` when a callback aborts enqueue. A new attempt is recorded only when execution starts. Inline retries execute after the surrounding database transaction commits; async workers are also notified after commit.
+Retry preserves both IDs, existing attempt history, cron metadata, and batch membership. It uses the job class's `retry_job` and enqueue callbacks, and returns the accepted job instance or `false` when a callback aborts enqueue. Active Job retries run with the job's stored locale. A new attempt is recorded only when execution starts. Inline retries execute after the surrounding database transaction commits; async workers are also notified after commit.
 
 A manual retry keeps the prior error with `error_event: "retried"` until the next attempt records its outcome. A successful attempt clears it. Discarding records `"discarded"`; ordinary execution distinguishes unhandled failures, retries, and exhausted retries. Job and attempt records retain the operator's discard even if running code later raises another exception.
 
-Retry requires the job class to exist and use a DecentJob adapter for the same database. Missing classes raise `DecentJob::Job::DeserializationError`; an incompatible job adapter raises `DecentJob::Job::AdapterMismatchError`. Callback-created jobs must also use that database; invalid groups are rejected before their captured writes. Unavailable serialized arguments do not prevent a retry from being queued: Active Job handles deserialization when it executes. Discard and destroy remain available for jobs whose class or arguments can no longer be loaded.
+Retry requires the job class to exist and use a DecentJob adapter for the same database. Missing classes raise `DecentJob::Job::DeserializationError`; an incompatible job adapter raises `DecentJob::Job::AdapterMismatchError`. Callback-created jobs must also use that database; invalid groups are rejected before their captured writes. Unavailable serialized arguments do not prevent a retry from being queued: the job class deserializes them when it executes. Discard and destroy remain available for jobs whose class or arguments can no longer be loaded.
 
 Batch retry uses the same preparation as individual retry. Removed serializers or GlobalID targets retain their serialized arguments, identities, and execution history. Enqueue callbacks still run and may abort retry; inline execution reaches Active Job's deserialization handlers after commit.
 

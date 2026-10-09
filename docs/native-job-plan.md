@@ -167,14 +167,17 @@ Phase 4 verification: 1,855 runs, 8,687 assertions, 0 failures, 4 skips (seed 23
 
 ## Phase 5: packaging, specs, docs
 
-- [ ] Gemspec: runtime dependency on `pg` only. Add `activejob` to the Gemfile development group.
-- [ ] `spec_helper.rb` requires the bridge, so the existing Active Job specs keep running against it.
-- [ ] Add a subprocess spec. It must run a native job end to end with only `require "decent_job"`. It must assert that `ActiveJob` and `ActiveSupport` are not defined.
-- [ ] Run the Rails integration spec (`rake spec:rails`) and the PgBouncer spec.
-- [ ] Update `README.md`, `rails-integration.md`, `instrumentation.md`, and `parity.md`. Add a native job guide.
+- [x] Gemspec: runtime dependency on `pg` only. `activejob` is in the Gemfile development group.
+- [x] `spec_helper.rb` requires the bridge, so the existing Active Job specs run against it (Phase 4).
+- [x] `spec/native_execution_spec.rb` starts a process that loads only `decent_job`. It stores a native job in PostgreSQL, retries it, and performs it, then asserts that Active Job, ActiveSupport, and GlobalID are not defined.
+- [x] `spec/packaging_spec.rb` checks that the built gem depends only on `pg`. The unpacked gem boots with only `pg` activated, and the adapter lookup works when `activejob` is activated.
+- [x] Run the Rails integration spec and the PgBouncer spec.
+- [x] Update `README.md`, `rails-integration.md`, `instrumentation.md`, `job-management.md`, `parity.md`, `pgbouncer.md`, and `implementation-plan.md`. Add `docs/native-jobs.md`.
+
+Phase 5 verification: `bundle exec rake` with seed 2464 passed 1,856 runs and 8,693 assertions, with 0 failures and 4 skips. The first run with that seed had two timeouts (`pauses_spec.rb` and `supervisor_process_spec.rb`). Each file passes three times out of three when run alone. `rake spec:rails` (Rails gemfile): 34 runs, 0 failures. `rake spec:pgbouncer`: 14 runs, 0 failures. Standard and `gem build` passed.
 
 ## Open questions
 
-- `Job#active_job` returns a deserialized job. Native jobs need a name that does not say "active job". A rename changes the public API, so it needs approval in Phase 3.
-- The event payload key `:active_job` in `enqueue_job.decent_job` has the same problem.
-- Native jobs could skip the `locale` and `timezone` payload keys. Active Job jobs keep them.
+- Resolved in Phase 3: `Job#active_job` is now `Job#job_instance`, and the `:active_job` event payload key is now `:job_instance`.
+- Resolved in Phase 2: native jobs do not write `locale` or `timezone`.
+- Open: the `active_job_id` column and the `active_job_ids` event key keep their names. Renaming them needs a schema migration.

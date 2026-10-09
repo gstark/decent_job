@@ -1,6 +1,9 @@
 # frozen_string_literal: true
 
+require "open3"
+require "rbconfig"
 require "spec_helper"
+require "tmpdir"
 
 module NativeExecution
   EVENTS = []
@@ -119,6 +122,39 @@ describe "native job execution" do
     2.times { _(@performer.perform_one.state).must_equal "succeeded" }
     _(NativeExecution::EVENTS).must_equal [[:perform, 2, nil, batch.id], [:callback, batch.id, :finish]]
     _(batch.reload.finished?).must_equal true
+  end
+
+  it "stores, retries and performs a native job without Active Job, ActiveSupport or GlobalID" do
+    script = <<~RUBY
+      require "decent_job"
+
+      class FreshProcessJob < DecentJob::Base
+        retry_on ArgumentError, attempts: 2, wait: 0
+        before_perform { |job| job.decent_job_labels }
+
+        def perform(path, at:)
+          raise ArgumentError, "first attempt" if executions == 1
+          File.write(path, JSON.generate(executions: executions, year: at.year, queue: queue_name))
+        end
+      end
+
+      database = DecentJob::Database.new(url: JSON.parse(ENV.fetch("CONNECTION"), symbolize_names: true), pool_size: 2)
+      FreshProcessJob.queue_adapter = DecentJob::Adapter.new(database: database)
+      FreshProcessJob.set(queue: :fresh).perform_later(ENV.fetch("RESULT"), at: Time.utc(2026))
+      performer = DecentJob::Performer.new(database: database)
+      states = 2.times.map { performer.perform_one.state }
+      raise "states: \#{states}" unless states == ["retried", "succeeded"]
+      loaded = {active_job: defined?(ActiveJob), active_support: defined?(ActiveSupport), global_id: defined?(GlobalID)}.compact
+      raise "loaded: \#{loaded.keys}" unless loaded.empty?
+      database.close
+    RUBY
+    Dir.mktmpdir do |directory|
+      result = File.join(directory, "result.json")
+      environment = {"CONNECTION" => JSON.generate(@connection_options), "RESULT" => result}
+      output, status = Open3.capture2e(environment, RbConfig.ruby, "-Ilib", "-e", script)
+      _(status.success?).must_equal true, output
+      _(JSON.parse(File.read(result))).must_equal("executions" => 2, "year" => 2026, "queue" => "fresh")
+    end
   end
 
   it "enqueues native jobs in bulk" do

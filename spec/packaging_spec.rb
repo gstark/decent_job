@@ -18,7 +18,7 @@ describe "standalone gem packaging" do
       _(status.success?).must_equal true, output
 
       package = Gem::Package.new(artifact)
-      _(package.spec.runtime_dependencies.map(&:name).sort).must_equal %w[activejob pg]
+      _(package.spec.runtime_dependencies.map(&:name)).must_equal %w[pg]
       _(package.spec.executables).must_equal ["decent_job"]
       unpacked = File.join(directory, "unpacked")
       package.extract_files(unpacked)
@@ -29,12 +29,12 @@ describe "standalone gem packaging" do
       environment = {"RUBYOPT" => nil, "RUBYLIB" => nil, "BUNDLE_GEMFILE" => nil,
                      "DECENT_JOB_DATABASE_URL" => nil, "DATABASE_URL" => nil, "PATH" => directory}
       program = <<~RUBY
-        gem "activejob", #{Gem.loaded_specs.fetch("activejob").version.to_s.inspect}
         gem "pg", #{Gem.loaded_specs.fetch("pg").version.to_s.inspect}
-        require "decent_job/active_job"
+        require "decent_job"
         puts JSON.generate(
           loaded_from: $LOADED_FEATURES.find { |path| path.end_with?("/lib/decent_job.rb") },
-          adapter: ActiveJob::QueueAdapters.lookup(:decent_job).name,
+          native: Class.new(DecentJob::Base).new.serialize.key?("job_id"),
+          activated: Gem.loaded_specs.keys & %w[activejob activesupport globalid],
           shutdown: DecentJob.shutdown?,
           zero_attempts: DecentJob.perform_inline(limit: 0),
           forbidden_dependencies: Gem.loaded_specs.keys & %w[rails railties activerecord activemodel fugit thor rack],
@@ -45,11 +45,24 @@ describe "standalone gem packaging" do
       _(status.success?).must_equal true, error
       result = JSON.parse(output)
       _(File.realpath(result.fetch("loaded_from"))).must_equal File.realpath(File.join(unpacked, "lib/decent_job.rb"))
-      _(result.fetch("adapter")).must_equal "ActiveJob::QueueAdapters::DecentJobAdapter"
+      _(result.fetch("native")).must_equal true
+      _(result.fetch("activated")).must_be_empty
       _(result.fetch("shutdown")).must_equal true
       _(result.fetch("zero_attempts")).must_equal 0
       _(result.fetch("forbidden_dependencies")).must_be_empty
       _(result.fetch("frameworks")).must_be_empty
+
+      bridge = <<~RUBY
+        gem "activejob", #{Gem.loaded_specs.fetch("activejob").version.to_s.inspect}
+        gem "pg", #{Gem.loaded_specs.fetch("pg").version.to_s.inspect}
+        require "active_job"
+        require "decent_job"
+        ActiveJob::Base.queue_adapter = :decent_job
+        puts ActiveJob::Base.queue_adapter.class.name
+      RUBY
+      output, error, status = Open3.capture3(environment, RbConfig.ruby, "-I#{unpacked}/lib", "-e", bridge, chdir: directory)
+      _(status.success?).must_equal true, error
+      _(output.strip).must_equal "ActiveJob::QueueAdapters::DecentJobAdapter"
 
       output, status = Open3.capture2e(environment, RbConfig.ruby, "-I#{unpacked}/lib",
         File.join(unpacked, "exe/decent_job"), "--help", chdir: directory)

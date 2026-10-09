@@ -52,7 +52,7 @@ The reference checkout is `/Users/gstark/dev/public/good_job`. All source and sp
 
 Cluster supervision, systemd support, three lock modes, concurrency claim promotion, dynamic labels, bulk/batch concurrency checks, and natural-language cron validation already exist at the release baseline. They must not be mistaken for optional future features.
 
-DecentJob uses its own namespace, SQL schema, and PostgreSQL implementation. Direct runtime dependencies are `activejob` 8.1.4 and `pg` 1.7.0. The version numbers are the agreed target, not a claim that this document has checked the current gem registry. Active Job's transitive dependencies remain available. GoodJob's Active Record, Rails engine, concurrent-ruby, Fugit, Thor, Rack, and other direct dependencies are reference implementation choices, not permission to add runtime dependencies.
+DecentJob uses its own namespace, SQL schema, and PostgreSQL implementation. The only direct runtime dependency is `pg` 1.7.0. Active Job 8.1.4 support is an optional adapter, loaded only when the application uses Active Job. DecentJob has its own job API, `DecentJob::Base`; see [native jobs](native-jobs.md). The version numbers are the agreed target, not a claim that this document has checked the current gem registry. GoodJob's Active Record, Rails engine, concurrent-ruby, Fugit, Thor, Rack, and other direct dependencies are reference implementation choices, not permission to add runtime dependencies.
 
 All new tests must use **Minitest spec syntax**, with `describe` and `it`. GoodJob's RSpec examples are behavioral evidence to translate. Do not copy its test framework or substitute subclass-style Minitest tests.
 

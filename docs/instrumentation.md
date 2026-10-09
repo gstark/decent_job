@@ -1,6 +1,6 @@
 # Instrumentation and logging
 
-DecentJob uses Active Support notifications and log subscribers supplied by Active Job. Standalone applications do not need Rails or Active Record for logging.
+DecentJob sends events through its own bus, `DecentJob::Notifications`, and logs them with the standard library `Logger`. When the application loads ActiveSupport, every event is also sent to `ActiveSupport::Notifications`. Standalone applications need no other gem for logging.
 
 ## Configure logging
 
@@ -18,7 +18,7 @@ For explicit destinations, change the subscriber's logger list and rebuild its b
 
 ```ruby
 file_logger = Logger.new("log/jobs.log")
-console_logger = ActiveSupport::TaggedLogging.new(Logger.new($stdout))
+console_logger = DecentJob::Logging.tagged_logger($stdout)
 console_logger.level = Logger::WARN
 
 DecentJob::LogSubscriber.loggers.replace([file_logger, console_logger])
@@ -26,6 +26,8 @@ DecentJob::LogSubscriber.reset_logger
 ```
 
 Each destination retains its own severity threshold. Explicit destination lists survive runtime configuration and logger replacement. An empty list disables subscriber output. This does not disable notifications, Active Job's own logs, or a configured `on_thread_error` callback.
+
+Destinations can be standard library loggers, `DecentJob::Logging` loggers, or host loggers such as `Rails.logger`. DecentJob adds its tags through a destination's `#tagged` method when it has one, and logs each leaf of a broadcast logger once.
 
 The list follows configuration while it still contains only its tracked default logger. Changing its contents selects explicit destinations. `reset_logger` rebuilds the broadcast logger; it does not restore the default destination.
 
@@ -44,15 +46,17 @@ DecentJob::CLI.log_to_stdout = false
 
 ## Subscribe to events
 
-Use ordinary Active Support subscriptions and unsubscribe when the observer is no longer needed:
+Subscribe with a string or a regular expression, and unsubscribe when the observer is no longer needed. The block receives an event with `name`, `payload`, and `duration` in milliseconds:
 
 ```ruby
-subscription = ActiveSupport::Notifications.subscribe("cleanup_preserved_jobs.decent_job") do |event|
+subscription = DecentJob::Notifications.subscribe("cleanup_preserved_jobs.decent_job") do |event|
   puts "Removed #{event.payload.fetch(:destroyed_records_count)} records"
 end
 
-ActiveSupport::Notifications.unsubscribe(subscription)
+DecentJob::Notifications.unsubscribe(subscription)
 ```
+
+When ActiveSupport is loaded, `ActiveSupport::Notifications.subscribe` receives the same events, so Rails subscribers keep working. The log subscriber listens only on `DecentJob::Notifications`. Events that something else sends only to `ActiveSupport::Notifications` are not logged.
 
 Notification callbacks are synchronous application code. An event observer is separate from the built-in log subscriber and from `configuration.on_thread_error`.
 
@@ -62,7 +66,7 @@ These events are currently emitted by the runtime:
 | --- | --- | --- |
 | `enqueue_job` | Original `job_instance`, original `scheduled_at` argument (nil for ordinary enqueue), `job` snapshot, `accepted`, `create_with_advisory_lock: false` | No default message |
 | `perform_job` | `job` and `execution` snapshots, OS `process_id`, `thread_name`, and outcome fields described below | info |
-| `enqueue_concurrency_limit_exceeded` | Original Active Job as `job`, resolved `key`, `kind`, `scope`, numeric `limit`, observed `count` | info |
+| `enqueue_concurrency_limit_exceeded` | Original job instance as `job`, resolved `key`, `kind`, `scope`, numeric `limit`, observed `count` | info |
 | `enqueue_concurrency_throttle_exceeded` | Same admission fields, plus `window` in seconds | info |
 | `finished_job_task` | Worker/pool metadata, returned `result` (possibly nil), task `error`, completion `time` | error when `error` is present |
 | `finished_timer_task` | Worker/pool metadata, wake `result`, `error`, completion `time` | error when `error` is present |
@@ -100,13 +104,13 @@ The payload's `process_id` is the operating-system PID, distinct from the persis
 | Outcome | Additional payload fields |
 | --- | --- |
 | Successful return | `value` (including nil, false, or zero), `error: nil`, `handled_error: nil`, `retried`, `error_event: nil` |
-| Active Job handles an error | `value`, actual exception in `error` and `handled_error`, `retried`, symbolic `error_event` such as `:retried`, `:discarded`, or `:retry_stopped` |
-| Returned exception object | `value: nil`, exception in `error` and `handled_error`, `error_event: :handled` unless already classified by Active Job |
+| The job class handles an error | `value`, actual exception in `error` and `handled_error`, `retried`, symbolic `error_event` such as `:retried`, `:discarded`, or `:retry_stopped` |
+| Returned exception object | `value: nil`, exception in `error` and `handled_error`, `error_event: :handled` unless already classified by the job class |
 | Exception handled by the backend | Exception in `error` and `unhandled_error`, symbolic `error_event`; no successful-return fields |
 | Exception outside configured handled classes | Standard Active Support `exception` and `exception_object` metadata; the exception propagates |
 | Interrupted/nonlocal exit | `interrupted: true`; no successful-return claim |
 
-`retried` reports an actual Active Job reenqueue, including a direct self-reenqueue. A later backend decision to retry an unhandled exception is separate. Operator force-discard remains authoritative even if the application returned successfully. Event duration includes notification overhead; persisted execution duration measures the Active Job attempt and host execution wrapper without the execution event's start/finish callbacks.
+`retried` reports an actual reenqueue by the job, including a direct self-reenqueue. A later backend decision to retry an unhandled exception is separate. Operator force-discard remains authoritative even if the application returned successfully. Event duration includes notification overhead; persisted execution duration measures the Active Job attempt and host execution wrapper without the execution event's start/finish callbacks.
 
 For these job and admission events, failing start/finish observers are reported through `on_thread_error` without skipping or repeating the application operation or replacing its result or exception. A failing error reporter is contained, and recursive observer-error reporting is suppressed. Observer queries run within a savepoint when the current borrowed connection has a usable transaction, so a failed observer query cannot poison that transaction. An already-aborted application transaction retains its original failure. Observers run outside runtime and pool mutexes, but are synchronous and can delay the caller.
 

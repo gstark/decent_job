@@ -2,7 +2,6 @@ PATH
   remote: .
   specs:
     decent_job (0.1.0)
-      activejob (~> 8.1, >= 8.1.4)
       pg (~> 1.7)
 
 GEM
@@ -104,6 +103,7 @@ PLATFORMS
   x86_64-linux-musl
 
 DEPENDENCIES
+  activejob (~> 8.1, >= 8.1.4)
   decent_job!
   minitest (~> 5.27)
   rake (~> 13.4)

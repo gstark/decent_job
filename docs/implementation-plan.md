@@ -1,6 +1,6 @@
 # DecentJob implementation plan
 
-Approved direction: independent PostgreSQL storage, DecentJob API, two direct runtime dependencies, and Minitest spec syntax exclusively. Reference: GoodJob checkout ad4be5c2, four commits after v4.21.1. No GoodJob table compatibility is promised.
+Approved direction: independent PostgreSQL storage, DecentJob API, two direct runtime dependencies, and Minitest spec syntax exclusively. The [native job plan](native-job-plan.md) later removed the Active Job dependency; `pg` is now the only runtime dependency. Reference: GoodJob checkout ad4be5c2, four commits after v4.21.1. No GoodJob table compatibility is promised.
 
 User direction: defer the dashboard. Continue the library, instrumentation, locking/PgBouncer compatibility, and verification work. Dashboard requirements remain tracked but are outside the current implementation sequence; deferral does not establish full GoodJob parity.
 
