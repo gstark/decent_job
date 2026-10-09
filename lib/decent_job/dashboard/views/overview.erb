@@ -1,0 +1,113 @@
+<%- @selected = [] -%>
+<%- @filter = {} -%>
+<h1 class="page-title">Right now</h1>
+<%= render("ribbon") %>
+
+<div class="columns">
+<section class="panel" aria-labelledby="queues-heading">
+  <h2 id="queues-heading">Queues</h2>
+  <%- if @queues.empty? -%>
+  <p class="empty">No jobs have been enqueued yet. Call <code>perform_later</code> on a job class and this table fills in.</p>
+  <%- else -%>
+  <table class="ledger compact">
+    <thead><tr><th>Queue</th><th class="num">Queued</th><th class="num">Scheduled</th><th class="num">Running</th><th class="num">Discarded</th><th>Next due</th></tr></thead>
+    <tbody>
+      <%- @queues.each do |queue| -%>
+      <tr>
+        <td><a href="<%= h(url("/jobs", "queue" => queue["queue_name"])) %>"><%= h(queue["queue_name"]) %></a><%- if @paused[:queues].include?(queue["queue_name"]) -%> <span class="tag">paused</span><%- end -%></td>
+        <td class="num"><%= number(queue["queued"]) %></td>
+        <td class="num"><%= number(queue["scheduled"]) %></td>
+        <td class="num"><%= number(queue["running"]) %></td>
+        <td class="num"><%= number(queue["discarded"]) %></td>
+        <td><%= time(queue["next_at"]) %></td>
+      </tr>
+      <%- end -%>
+    </tbody>
+  </table>
+  <%- end -%>
+</section>
+
+<section class="panel" aria-labelledby="workers-heading">
+  <h2 id="workers-heading">Workers</h2>
+  <%- active = @processes.select { |p| p["active"] } -%>
+  <%- if active.empty? -%>
+  <p class="empty">No worker is registered. Start one with <code>bundle exec decent_job start</code>. Queued jobs wait until a worker claims them.</p>
+  <%- else -%>
+  <ul class="worker-list">
+    <%- active.each do |process| -%>
+    <%- state = process["state"] -%>
+    <%- threads = state.fetch("schedulers", []).sum { |s| s["active_threads"].to_i } -%>
+    <%- capacity = state.fetch("schedulers", []).sum { |s| s["max_threads"].to_i } -%>
+    <li>
+      <span class="worker-name"><%= h(state["hostname"]) %> <span class="muted">pid <%= h(state["pid"]) %></span></span>
+      <span class="worker-threads" title="Busy execution threads"><%= threads %> of <%= capacity %> threads busy</span>
+      <span class="muted">seen <%= time(process["updated_at"]) %></span>
+    </li>
+    <%- end -%>
+  </ul>
+  <%- end -%>
+  <%- unless @paused.values.all?(&:empty?) -%>
+  <p class="note">Paused: <%= h((@paused[:queues].map { |q| "queue #{q}" } + @paused[:job_classes].map { |c| "class #{c}" } + @paused[:labels].map { |l| "label #{l}" }).join(", ")) %>. <a href="<%= h(url("/pauses")) %>">Manage pauses</a></p>
+  <%- end -%>
+</section>
+</div>
+
+<section class="panel" aria-labelledby="timeline-heading">
+  <h2 id="timeline-heading">Due in the next hour</h2>
+  <%- if @upcoming.empty? -%>
+  <p class="empty">Nothing is scheduled for the next hour.</p>
+  <%- else -%>
+  <%- queues = @upcoming.map { |r| r["queue_name"] }.uniq -%>
+  <%- max = @upcoming.map { |r| r["count"] }.max -%>
+  <div class="timeline" style="--rows: <%= queues.size %>">
+    <%- queues.each do |queue| -%>
+    <div class="timeline-row">
+      <span class="timeline-label"><%= h(queue) %></span>
+      <div class="timeline-cells" role="img" aria-label="Jobs due per minute for <%= h(queue) %>">
+        <%- 60.times do |minute| -%>
+        <%- count = @upcoming.find { |r| r["queue_name"] == queue && r["minute"] == minute }&.fetch("count") || 0 -%>
+        <span class="cell<%= count.positive? ? " has" : "" %>" style="--w: <%= max.zero? ? 0 : (count.to_f / max).round(3) %>" title="<%= h(queue) %>: <%= count %> due <%= minute.zero? ? "now" : "in #{minute} min" %>"></span>
+        <%- end -%>
+      </div>
+    </div>
+    <%- end -%>
+    <div class="timeline-axis"><span>now</span><span>15 min</span><span>30 min</span><span>45 min</span><span>60 min</span></div>
+  </div>
+  <%- end -%>
+</section>
+
+<div class="columns">
+<section class="panel" aria-labelledby="throughput-heading">
+  <h2 id="throughput-heading">Finished in the last 24 hours</h2>
+  <%- if @throughput.empty? -%>
+  <p class="empty">No attempt has finished in the last 24 hours.</p>
+  <%- else -%>
+  <%- max = @throughput.map { |r| r["succeeded"] + r["errored"] }.max -%>
+  <div class="bars" role="img" aria-label="Finished attempts per hour">
+    <%- @throughput.each do |row| -%>
+    <%- total = row["succeeded"] + row["errored"] -%>
+    <div class="bar" title="<%= h(row["hour"].utc.strftime("%H:00")) %>: <%= row["succeeded"] %> succeeded, <%= row["errored"] %> failed" style="--h: <%= max.zero? ? 0 : (total.to_f / max).round(3) %>; --err: <%= total.zero? ? 0 : (row["errored"].to_f / total).round(3) %>"></div>
+    <%- end -%>
+  </div>
+  <p class="muted small">Each column is one hour. The red part is attempts that failed.</p>
+  <%- end -%>
+</section>
+
+<section class="panel" aria-labelledby="discards-heading">
+  <h2 id="discards-heading">Recently discarded</h2>
+  <%- if @discards.empty? -%>
+  <p class="empty">Nothing has been discarded. When a job runs out of retries it shows up here.</p>
+  <%- else -%>
+  <ul class="discard-list">
+    <%- @discards.each do |job| -%>
+    <li>
+      <a href="<%= h(url("/jobs/#{job["id"]}")) %>"><%= h(job["job_class"]) %></a>
+      <span class="error-text"><%= h(error_summary(job["error"])) %></span>
+      <span class="muted"><%= time(job["finished_at"]) %></span>
+    </li>
+    <%- end -%>
+  </ul>
+  <p><a href="<%= h(url("/jobs", "status" => ["discarded"])) %>">See all discarded jobs</a> or <a href="<%= h(url("/cleaner")) %>">group them by error</a>.</p>
+  <%- end -%>
+</section>
+</div>

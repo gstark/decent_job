@@ -2,7 +2,7 @@
 
 This is the implementation checklist for DecentJob's behavioral parity with the local GoodJob checkout at `ad4be5c2`. The final [library audit](library-parity-audit.md) records the reviewed library requirements, translated reference examples, explicit adaptations, and current verification. Checked items mean the library behavior is implemented under those documented adaptations; they do not mean literal API identity or verification on every platform. Unchecked dashboard items remain incomplete.
 
-The user has deferred dashboard implementation. D1–D15 remain requirements for eventual full parity, but are outside the current library implementation sequence and must not be reported as implemented.
+A first dashboard exists as a dependency-free Rack application; see [dashboard](dashboard.md) and `spec/dashboard_spec.rb`. D1–D15 remain the parity checklist. Items are only checked when their DecentJob behavior, failure cases, and specs exist; the first dashboard release covers most of D1, D2, D4–D9, parts of D10, D11, D13, and D14, with the remaining gaps noted per item.
 
 ## Implementation evidence
 

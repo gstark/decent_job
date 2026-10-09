@@ -1,0 +1,24 @@
+<h1 class="page-title">Workers</h1>
+<%- if @processes.empty? -%>
+<p class="empty">No worker has registered. Start one with <code>bundle exec decent_job start</code>.</p>
+<%- else -%>
+<table class="ledger">
+  <thead><tr><th>Process</th><th>Queues</th><th>Threads</th><th class="num">Running jobs</th><th>Heartbeat</th><th>Started</th><th>Last seen</th></tr></thead>
+  <tbody>
+    <%- @processes.each do |process| -%>
+    <%- state = process["state"] -%>
+    <%- schedulers = state.fetch("schedulers", []) -%>
+    <tr class="<%= process["active"] ? "" : "row-disabled" %>">
+      <td><strong><%= h(state["hostname"]) %></strong> <span class="muted">pid <%= h(state["pid"]) %></span><span class="muted small block"><%= h(File.basename(state["proctitle"].to_s)) %>, <%= h(short_id(process["id"])) %></span><%- unless process["active"] -%> <span class="tag">inactive</span><%- end -%></td>
+      <td><%= h(schedulers.map { |s| s["queues"] }.join("; ")) %></td>
+      <td><%= schedulers.sum { |s| s["active_threads"].to_i } %> of <%= schedulers.sum { |s| s["max_threads"].to_i } %> busy</td>
+      <td class="num"><%= @running.fetch(process["id"], 0) %></td>
+      <td><%= h(process["heartbeat_mode"]) %><%- if state["cron_enabled"] -%> <span class="tag">cron</span><%- end -%></td>
+      <td><%= time(process["created_at"]) %></td>
+      <td><%= time(process["updated_at"]) %></td>
+    </tr>
+    <%- end -%>
+  </tbody>
+</table>
+<p class="muted small">Advisory workers are active while they hold their session lock. Heartbeat workers are active for five minutes after their last update.</p>
+<%- end -%>

@@ -1,0 +1,102 @@
+<%- job = @job -%>
+<p class="crumbs"><a href="<%= h(url("/jobs")) %>">Jobs</a> / <a href="<%= h(url("/jobs", "job_class" => job["job_class"])) %>"><%= h(job["job_class"]) %></a></p>
+<h1 class="page-title"><%= h(job["job_class"]) %> <%= status_badge(job["status"]) %></h1>
+<p class="job-id">Job <%= h(job["id"]) %></p>
+
+<section class="actions" aria-label="Actions">
+  <%- case job["status"] -%>
+  <%- when "discarded" -%>
+    <%= action_button("/jobs/#{job["id"]}/retry", "Retry", kind: "primary") %>
+    <%= action_button("/jobs/#{job["id"]}/destroy", "Delete", confirm: "Delete this job and its attempt history?", kind: "danger") %>
+  <%- when "succeeded" -%>
+    <%= action_button("/jobs/#{job["id"]}/destroy", "Delete", confirm: "Delete this job and its attempt history?", kind: "danger") %>
+  <%- when "running" -%>
+    <%= action_button("/jobs/#{job["id"]}/force_discard", "Force discard", confirm: "The running code keeps running, but its result will be ignored. Continue?", kind: "danger") %>
+  <%- else -%>
+    <%= action_button("/jobs/#{job["id"]}/reschedule", "Run now", kind: "primary") %>
+    <form method="post" action="<%= h(url("/jobs/#{job["id"]}/reschedule")) %>" class="inline">
+      <%= csrf_field %>
+      <label class="inline-label">Run at <input type="datetime-local" name="at" step="1" required></label>
+      <button class="button quiet">Reschedule</button>
+    </form>
+    <%= action_button("/jobs/#{job["id"]}/discard", "Discard", confirm: "Discard this job before it runs?", kind: "danger") %>
+  <%- end -%>
+</section>
+
+<div class="columns">
+<section class="panel">
+  <h2>Details</h2>
+  <dl class="facts">
+    <dt>Queue</dt><dd><a href="<%= h(url("/jobs", "queue" => job["queue_name"])) %>"><%= h(job["queue_name"]) %></a></dd>
+    <dt>Priority</dt><dd><%= job["priority"] %></dd>
+    <dt>Attempts</dt><dd><%= job["executions_count"] %></dd>
+    <dt>Scheduled</dt><dd><%= time(job["scheduled_at"], relative: false) %> <span class="muted">(<%= relative_time(job["scheduled_at"]) %>)</span></dd>
+    <dt>Created</dt><dd><%= time(job["created_at"], relative: false) %></dd>
+    <%- if job["performed_at"] -%><dt>Started</dt><dd><%= time(job["performed_at"], relative: false) %></dd><%- end -%>
+    <%- if job["finished_at"] -%><dt>Finished</dt><dd><%= time(job["finished_at"], relative: false) %></dd><%- end -%>
+    <%- latency = Job.from_attributes(job, database: nil) rescue nil -%>
+    <%- if job["performed_at"] -%>
+    <dt>Queue wait</dt><dd><%= duration(job["performed_at"] - (job["scheduled_at"] || job["created_at"])) %></dd>
+    <dt>Run time</dt><dd><%= duration((job["finished_at"] || Time.now) - job["performed_at"]) %></dd>
+    <%- end -%>
+    <%- unless job["labels"].empty? -%><dt>Labels</dt><dd class="labels"><%- job["labels"].each do |label| -%><a class="label" href="<%= h(url("/jobs", "label" => label)) %>"><%= h(label) %></a><%- end -%></dd><%- end -%>
+    <%- if job["cron_key"] -%><dt>Schedule</dt><dd><a href="<%= h(url("/schedules/#{job["cron_key"]}")) %>"><%= h(job["cron_key"]) %></a> <span class="muted">for <%= time(job["cron_at"], relative: false) %></span></dd><%- end -%>
+    <%- if @batch -%><dt>Batch</dt><dd><a href="<%= h(url("/batches/#{@batch["id"]}")) %>"><%= h(@batch["description"] || short_id(@batch["id"])) %></a></dd><%- end -%>
+    <%- if job["locked_by_id"] -%><dt>Owner</dt><dd>process <%= h(short_id(job["locked_by_id"])) %> <span class="muted">since <%= time(job["locked_at"]) %>, <%= h(job["lock_type"] || "advisory") %> lock</span></dd><%- end -%>
+    <dt>Active Job ID</dt><dd><%= h(job["active_job_id"]) %></dd>
+  </dl>
+</section>
+
+<section class="panel">
+  <h2>Arguments</h2>
+  <pre class="code"><%= h(pretty_json(arguments_of(job))) %></pre>
+  <details class="payload">
+    <summary>Full serialized payload</summary>
+    <pre class="code"><%= h(pretty_json(job["payload"])) %></pre>
+  </details>
+  <%- unless @claims.empty? -%>
+  <h2>Concurrency claims</h2>
+  <table class="ledger compact">
+    <thead><tr><th>Scope</th><th>State</th><th>Since</th></tr></thead>
+    <tbody>
+      <%- @claims.each do |claim| -%>
+      <tr><td><%= h(claim["scope"]) %></td><td><span class="claim claim-<%= h(claim["state"]) %>"><%= h(claim["state"].tr("_", " ")) %></span></td><td><%= time(claim["created_at"]) %></td></tr>
+      <%- end -%>
+    </tbody>
+  </table>
+  <%- end -%>
+</section>
+</div>
+
+<section class="panel">
+  <h2>Attempts</h2>
+  <%- if @executions.empty? -%>
+  <p class="empty">This job has not run yet.</p>
+  <%- else -%>
+  <ol class="attempts">
+    <%- @executions.each_with_index do |execution, index| -%>
+    <li class="attempt attempt-<%= h(execution["state"]) %>">
+      <div class="attempt-head">
+        <span class="attempt-number">Attempt <%= @executions.size - index %></span>
+        <span class="status status-<%= h(execution["state"]) %>"><%= h(execution["state"]) %></span>
+        <span class="muted">started <%= time(execution["started_at"]) %><%- if execution["duration"] -%>, ran <%= duration(execution["duration"]) %><%- end -%><%- if execution["error_event"] -%>, <%= h(execution["error_event"].tr("_", " ")) %><%- end -%></span>
+      </div>
+      <%- if execution["error"] -%>
+      <p class="error-text"><%= h(execution["error"]["class"]) %>: <%= h(execution["error"]["message"]) %></p>
+      <%- app_lines = application_backtrace(execution["error"]["backtrace"]) -%>
+      <%- unless Array(execution["error"]["backtrace"]).empty? -%>
+      <div class="backtrace" data-backtrace>
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" aria-selected="true" data-tab="app">Application (<%= app_lines.size %>)</button>
+          <button type="button" role="tab" aria-selected="false" data-tab="full">Full (<%= execution["error"]["backtrace"].size %>)</button>
+        </div>
+        <pre class="code" data-panel="app"><%= h(app_lines.empty? ? "No application frames. See the full backtrace." : app_lines.join("\n")) %></pre>
+        <pre class="code" data-panel="full" hidden><%= h(execution["error"]["backtrace"].join("\n")) %></pre>
+      </div>
+      <%- end -%>
+      <%- end -%>
+    </li>
+    <%- end -%>
+  </ol>
+  <%- end -%>
+</section>

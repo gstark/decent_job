@@ -1,0 +1,21 @@
+<h1 class="page-title">Cleaner</h1>
+<p class="lede">Finished jobs stay until cleanup removes them. <%= number(@counts["succeeded"]) %> succeeded and <%= number(@counts["discarded"]) %> discarded jobs are kept<%- if @counts["oldest"] -%>, the oldest from <%= time(@counts["oldest"]) %><%- end -%>.</p>
+<%- if @groups.empty? -%>
+<p class="empty">No discarded job is waiting. Nothing to clean.</p>
+<%- else -%>
+<table class="ledger">
+  <thead><tr><th>Job class</th><th>Error</th><th class="num">Jobs</th><th>Oldest</th><th>Newest</th><th></th></tr></thead>
+  <tbody>
+    <%- @groups.each do |group| -%>
+    <tr>
+      <td><a href="<%= h(url("/jobs", "status" => ["discarded"], "job_class" => group["job_class"])) %>"><%= h(group["job_class"]) %></a></td>
+      <td><%- if group["error_class"].empty? -%><span class="muted">no error recorded</span><%- else -%><a class="error-text" href="<%= h(url("/jobs", "status" => ["discarded"], "job_class" => group["job_class"], "q" => group["error_class"])) %>"><%= h(group["error_class"]) %></a><%- end -%></td>
+      <td class="num"><%= number(group["count"]) %></td>
+      <td><%= time(group["oldest"]) %></td>
+      <td><%= time(group["newest"]) %></td>
+      <td class="col-actions"><%= action_button("/cleaner", "Delete #{number(group["count"])}", params: {"job_class" => group["job_class"], "error_class" => group["error_class"]}, confirm: "Delete these #{group["count"]} discarded jobs and their attempt history?", kind: "danger") %></td>
+    </tr>
+    <%- end -%>
+  </tbody>
+</table>
+<%- end -%>

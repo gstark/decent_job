@@ -1,0 +1,20 @@
+<%- entry = @entry -%>
+<p class="crumbs"><a href="<%= h(url("/schedules")) %>">Schedules</a></p>
+<h1 class="page-title"><%= h(entry.key) %><%- unless @enabled -%> <span class="status status-discarded">disabled</span><%- end -%></h1>
+<section class="actions">
+  <%= action_button("/schedules/#{entry.key}/run", "Run now", kind: "primary") %>
+  <%= @enabled ? action_button("/schedules/#{entry.key}/disable", "Disable") : action_button("/schedules/#{entry.key}/enable", "Enable") %>
+</section>
+<section class="panel">
+  <h2>Definition</h2>
+  <dl class="facts">
+    <%- @properties.each do |key, value| -%>
+    <dt><%= h(key.to_s.capitalize) %></dt><dd><%= h(value.is_a?(String) ? value : pretty_json(value)) %></dd>
+    <%- end -%>
+    <dt>Next run</dt><dd><%- if @next_at.is_a?(Time) -%><%= time(@next_at, relative: false) %><%- elsif @next_at -%><span class="error-text"><%= h(@next_at.message) %></span><%- else -%>none<%- end -%></dd>
+  </dl>
+</section>
+<section class="panel">
+  <h2>History</h2>
+  <%= render("jobs_table", rows: @jobs, selectable: false, empty: "This schedule has not enqueued a job yet.") %>
+</section>

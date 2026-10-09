@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en"<%= theme ? %( data-theme="#{h(theme)}") : "" %>>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><%= h(@title || "DecentJob") %></title>
+<link rel="stylesheet" href="<%= h(url("/assets/dashboard.css")) %>">
+<script src="<%= h(url("/assets/dashboard.js")) %>" defer></script>
+</head>
+<body data-root="<%= h(root) %>">
+<header class="masthead">
+  <a class="brand" href="<%= h(url("/")) %>">DecentJob</a>
+  <nav class="nav" aria-label="Sections">
+    <a href="<%= h(url("/")) %>"<%= active?("/") ? ' aria-current="page"' : "" %>>Overview</a>
+    <a href="<%= h(url("/jobs")) %>"<%= active?("/jobs") ? ' aria-current="page"' : "" %>>Jobs</a>
+    <a href="<%= h(url("/batches")) %>"<%= active?("/batches") ? ' aria-current="page"' : "" %>>Batches</a>
+    <a href="<%= h(url("/schedules")) %>"<%= active?("/schedules") ? ' aria-current="page"' : "" %>>Schedules</a>
+    <a href="<%= h(url("/processes")) %>"<%= active?("/processes") ? ' aria-current="page"' : "" %>>Workers</a>
+    <a href="<%= h(url("/pauses")) %>"<%= active?("/pauses") ? ' aria-current="page"' : "" %>>Pauses</a>
+    <a href="<%= h(url("/cleaner")) %>"<%= active?("/cleaner") ? ' aria-current="page"' : "" %>>Cleaner</a>
+    <a href="<%= h(url("/performance")) %>"<%= active?("/performance") ? ' aria-current="page"' : "" %>>Performance</a>
+  </nav>
+  <div class="masthead-tools">
+    <label class="live"><input type="checkbox" id="live-poll" checked> Live</label>
+    <form method="post" action="<%= h(url("/theme")) %>" class="inline">
+      <%= csrf_field %>
+      <input type="hidden" name="theme" value="<%= (theme == "dark") ? "light" : "dark" %>">
+      <button class="button quiet" title="Switch theme"><%= (theme == "dark") ? "Light" : "Dark" %></button>
+    </form>
+  </div>
+</header>
+<%- if flash -%>
+<p class="flash" role="status"><%= h(flash) %></p>
+<%- end -%>
+<main class="page page-<%= h(@page_name) %>">
+<%= @content %>
+</main>
+<footer class="colophon">DecentJob <%= h(DecentJob::VERSION) %>. Times are UTC; hover a time for the exact value.</footer>
+</body>
+</html>

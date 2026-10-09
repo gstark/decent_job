@@ -1,0 +1,38 @@
+<%- batch = @batch -%>
+<p class="crumbs"><a href="<%= h(url("/batches")) %>">Batches</a></p>
+<h1 class="page-title"><%= h(batch["description"] || "Batch #{short_id(batch["id"])}") %></h1>
+<p class="job-id">Batch <%= h(batch["id"]) %></p>
+<%- if @jobs.any? { |job| job["status"] == "discarded" } -%>
+<section class="actions"><%= action_button("/batches/#{batch["id"]}/retry", "Retry discarded jobs", kind: "primary") %></section>
+<%- end -%>
+<div class="columns">
+<section class="panel">
+  <h2>Details</h2>
+  <dl class="facts">
+    <dt>State</dt><dd><%= batch["discarded_at"] ? "Discarded" : (batch["finished_at"] ? "Finished" : (batch["enqueued_at"] ? "Running" : "Open")) %></dd>
+    <dt>Created</dt><dd><%= time(batch["created_at"], relative: false) %></dd>
+    <%- if batch["enqueued_at"] -%><dt>Enqueued</dt><dd><%= time(batch["enqueued_at"], relative: false) %></dd><%- end -%>
+    <%- if batch["jobs_finished_at"] -%><dt>Jobs finished</dt><dd><%= time(batch["jobs_finished_at"], relative: false) %></dd><%- end -%>
+    <%- if batch["finished_at"] -%><dt>Finished</dt><dd><%= time(batch["finished_at"], relative: false) %></dd><%- end -%>
+    <%- %w[on_finish on_success on_discard].each do |callback| -%>
+    <%- if batch[callback] -%><dt><%= h(callback.tr("_", " ").capitalize) %></dt><dd><%= h(batch[callback]) %></dd><%- end -%>
+    <%- end -%>
+    <%- if batch["callback_queue_name"] -%><dt>Callback queue</dt><dd><%= h(batch["callback_queue_name"]) %></dd><%- end -%>
+  </dl>
+</section>
+<section class="panel">
+  <h2>Properties</h2>
+  <pre class="code"><%= h(pretty_json(batch["properties"])) %></pre>
+</section>
+</div>
+<section class="panel">
+  <h2>Jobs (<%= @jobs.size %>)</h2>
+  <%= render("jobs_table", rows: @jobs, selectable: false, empty: "This batch has no jobs yet.") %>
+  <%- if @jobs.size >= 500 -%><p><a href="<%= h(url("/jobs", "batch_id" => batch["id"])) %>">See every job in this batch</a></p><%- end -%>
+</section>
+<%- unless @callbacks.empty? -%>
+<section class="panel">
+  <h2>Callback jobs</h2>
+  <%= render("jobs_table", rows: @callbacks, selectable: false) %>
+</section>
+<%- end -%>

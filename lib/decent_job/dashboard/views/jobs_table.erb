@@ -1,0 +1,37 @@
+<%- rows = @rows -%>
+<%- if rows.empty? -%>
+<p class="empty"><%= h(@empty || "No jobs match. Clear a filter, or enqueue a job and refresh.") %></p>
+<%- else -%>
+<table class="ledger jobs-table">
+  <thead>
+    <tr>
+      <%- if @selectable -%><th class="col-check"><input type="checkbox" data-check-all aria-label="Select all on this page"></th><%- end -%>
+      <th>Job</th>
+      <th>Queue</th>
+      <th>State</th>
+      <th>Attempts</th>
+      <th>Scheduled</th>
+      <th>Finished</th>
+      <th class="col-error">Last error</th>
+    </tr>
+  </thead>
+  <tbody>
+    <%- rows.each do |job| -%>
+    <tr class="row-<%= h(job["status"]) %>">
+      <%- if @selectable -%><td class="col-check"><input type="checkbox" name="ids[]" value="<%= h(job["id"]) %>" form="bulk-form" aria-label="Select job <%= h(short_id(job["id"])) %>"></td><%- end -%>
+      <td class="col-job">
+        <a class="job-link" href="<%= h(url("/jobs/#{job["id"]}")) %>"><%= h(job["job_class"]) %></a>
+        <span class="job-args"><%= h(truncate(argument_preview(job), 70)) %></span>
+        <%- unless job["labels"].empty? -%><span class="labels"><%- job["labels"].each do |label| -%><a class="label" href="<%= h(url("/jobs", "label" => label)) %>" title="<%= h(label) %>"><%= h(truncate(label, 24)) %></a><%- end -%></span><%- end -%>
+      </td>
+      <td><a href="<%= h(url("/jobs", "queue" => job["queue_name"])) %>"><%= h(job["queue_name"]) %></a><%- if job["priority"] != 0 -%> <span class="muted">p<%= job["priority"] %></span><%- end -%></td>
+      <td><%= status_badge(job["status"]) %></td>
+      <td class="num"><%= job["executions_count"] %></td>
+      <td><%= time(job["scheduled_at"]) %></td>
+      <td><%= time(job["finished_at"]) %></td>
+      <td class="col-error"><%- if job["error"] -%><span class="error-text" title="<%= h(job["error"]["message"]) %>"><%= h(error_summary(job["error"])) %></span><%- end -%></td>
+    </tr>
+    <%- end -%>
+  </tbody>
+</table>
+<%- end -%>

@@ -1,0 +1,21 @@
+<%- total = @counts.values.sum -%>
+<%- selected = Array(@selected || []) -%>
+<section class="ribbon" aria-label="Jobs by state" data-ribbon>
+  <div class="ribbon-bar" role="img" aria-label="<%= h(@counts.map { |status, count| "#{status_label(status)} #{count}" }.join(", ")) %>">
+    <%- Queries::STATUSES.each do |status| -%>
+    <%- share = total.zero? ? 0 : (@counts[status] * 100.0 / total) -%>
+    <span class="ribbon-seg seg-<%= status %>" style="flex-grow: <%= @counts[status] %>; <%= @counts[status].zero? ? "display:none" : "" %>" data-count="<%= @counts[status] %>" title="<%= h(status_label(status)) %> <%= number(@counts[status]) %> (<%= share.round(1) %>%)"></span>
+    <%- end -%>
+    <%- if total.zero? -%><span class="ribbon-seg seg-empty" style="flex-grow:1"></span><%- end -%>
+  </div>
+  <ol class="ribbon-legend">
+    <%- Queries::STATUSES.each do |status| -%>
+    <li class="legend-<%= status %><%= selected.include?(status) ? " is-selected" : "" %>">
+      <a href="<%= h(url("/jobs", (@filter || {}).merge("status" => (selected.include?(status) ? selected - [status] : selected + [status])))) %>" data-status="<%= status %>">
+        <span class="legend-count" data-count-for="<%= status %>"><%= number(@counts[status]) %></span>
+        <span class="legend-name"><%= h(status_label(status)) %></span>
+      </a>
+    </li>
+    <%- end -%>
+  </ol>
+</section>

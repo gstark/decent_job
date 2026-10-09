@@ -1,0 +1,70 @@
+<h1 class="page-title">Performance</h1>
+<form method="get" action="<%= h(url("/performance")) %>" class="filters">
+  <label>Range
+    <select name="range"><%- {"1h" => "Last hour", "6h" => "Last 6 hours", "24h" => "Last 24 hours", "7d" => "Last 7 days", "30d" => "Last 30 days"}.each do |value, label| -%><option value="<%= value %>"<%= (value == @range) ? " selected" : "" %>><%= label %></option><%- end -%></select>
+  </label>
+  <label>Metric
+    <select name="metric"><%- {"execution" => "Run time", "queue" => "Queue wait", "total" => "Total"}.each do |value, label| -%><option value="<%= value %>"<%= (value == @metric) ? " selected" : "" %>><%= label %></option><%- end -%></select>
+  </label>
+  <label>Class <input type="text" name="job_class" value="<%= h(@job_class) %>" placeholder="Any"></label>
+  <button class="button">Show</button>
+</form>
+<p class="muted small">From <%= time(@from, relative: false) %> to <%= time(@to, relative: false) %>, by scheduled time.</p>
+
+<%- summary = @summary -%>
+<%- if summary.nil? || summary[:executions_count].to_i.zero? -%>
+<p class="empty">No attempt finished in this range. Widen the range or wait for jobs to run.</p>
+<%- else -%>
+<section class="panel">
+  <h2>Summary</h2>
+  <table class="ledger compact summary">
+    <thead><tr><th></th><th class="num">Minimum</th><th class="num">Average</th><th class="num">Maximum</th></tr></thead>
+    <tbody>
+      <tr><th>Queue wait</th><td class="num"><%= duration(summary[:min_queue]) %></td><td class="num"><%= duration(summary[:avg_queue]) %></td><td class="num"><%= duration(summary[:max_queue]) %></td></tr>
+      <tr><th>Run time</th><td class="num"><%= duration(summary[:min_execution]) %></td><td class="num"><%= duration(summary[:avg_execution]) %></td><td class="num"><%= duration(summary[:max_execution]) %></td></tr>
+      <tr><th>Total</th><td class="num"><%= duration(summary[:min_total]) %></td><td class="num"><%= duration(summary[:avg_total]) %></td><td class="num"><%= duration(summary[:max_total]) %></td></tr>
+    </tbody>
+  </table>
+  <p class="muted small"><%= number(summary[:executions_count]) %> attempts across <%= number(summary[:jobs_count]) %> jobs.</p>
+</section>
+
+<section class="panel">
+  <h2><%= {"execution" => "Run time", "queue" => "Queue wait", "total" => "Total latency"}[@metric] %> distribution</h2>
+  <%- if @histogram.empty? -%>
+  <p class="empty">Not enough finished attempts to draw a distribution.</p>
+  <%- else -%>
+  <%- max = @histogram.map { |b| b["count"] }.max -%>
+  <div class="bars histogram" role="img" aria-label="Histogram of <%= @metric %> latency">
+    <%- @histogram.each do |bucket| -%>
+    <div class="bar" title="<%= bucket["count"] %> attempts up to <%= duration(bucket["upper"]) %>" style="--h: <%= (bucket["count"].to_f / max).round(3) %>"></div>
+    <%- end -%>
+  </div>
+  <p class="muted small">Logarithmic buckets from <%= duration(@histogram.first["upper"]) %> to <%= duration(@histogram.last["upper"]) %>. Taller is more attempts.</p>
+  <%- end -%>
+</section>
+
+<div class="columns">
+<section class="panel">
+  <h2>By job class</h2>
+  <table class="ledger compact">
+    <thead><tr><th>Class</th><th class="num">Attempts</th><th class="num">Avg wait</th><th class="num">Avg run</th><th class="num">Max run</th></tr></thead>
+    <tbody>
+      <%- @classes.each do |row| -%>
+      <tr><td><a href="<%= h(url("/performance", "range" => @range, "metric" => @metric, "job_class" => row[:job_class])) %>"><%= h(row[:job_class]) %></a></td><td class="num"><%= number(row[:executions_count]) %></td><td class="num"><%= duration(row[:avg_queue]) %></td><td class="num"><%= duration(row[:avg_execution]) %></td><td class="num"><%= duration(row[:max_execution]) %></td></tr>
+      <%- end -%>
+    </tbody>
+  </table>
+</section>
+<section class="panel">
+  <h2>By queue</h2>
+  <table class="ledger compact">
+    <thead><tr><th>Queue</th><th class="num">Attempts</th><th class="num">Avg wait</th><th class="num">Avg run</th><th class="num">Max run</th></tr></thead>
+    <tbody>
+      <%- @queues.each do |row| -%>
+      <tr><td><%= h(row[:queue_name]) %></td><td class="num"><%= number(row[:executions_count]) %></td><td class="num"><%= duration(row[:avg_queue]) %></td><td class="num"><%= duration(row[:avg_execution]) %></td><td class="num"><%= duration(row[:max_execution]) %></td></tr>
+      <%- end -%>
+    </tbody>
+  </table>
+</section>
+</div>
+<%- end -%>

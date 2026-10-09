@@ -1,0 +1,52 @@
+<%- @selected = @filter["status"] || [] -%>
+<h1 class="page-title">Jobs</h1>
+<%= render("ribbon") %>
+
+<form method="get" action="<%= h(url("/jobs")) %>" class="filters" role="search">
+  <%- Array(@filter["status"]).each do |status| -%><input type="hidden" name="status[]" value="<%= h(status) %>"><%- end -%>
+  <label class="grow">Search <input type="search" name="q" value="<%= h(@filter["q"]) %>" placeholder="ID, class, argument, label, or error text"></label>
+  <label>Class
+    <select name="job_class"><option value="">Any</option><%- @options["job_classes"].each do |name| -%><option<%= (name == @filter["job_class"]) ? " selected" : "" %>><%= h(name) %></option><%- end -%></select>
+  </label>
+  <label>Queue
+    <select name="queue"><option value="">Any</option><%- @options["queues"].each do |name| -%><option<%= (name == @filter["queue"]) ? " selected" : "" %>><%= h(name) %></option><%- end -%></select>
+  </label>
+  <%- unless @options["labels"].empty? -%>
+  <label>Label
+    <select name="label"><option value="">Any</option><%- @options["labels"].each do |name| -%><option<%= (name == @filter["label"]) ? " selected" : "" %>><%= h(name) %></option><%- end -%></select>
+  </label>
+  <%- end -%>
+  <%- unless @options["cron_keys"].empty? -%>
+  <label>Schedule
+    <select name="cron_key"><option value="">Any</option><%- @options["cron_keys"].each do |name| -%><option<%= (name == @filter["cron_key"]) ? " selected" : "" %>><%= h(name) %></option><%- end -%></select>
+  </label>
+  <%- end -%>
+  <%- if @filter["batch_id"] -%><input type="hidden" name="batch_id" value="<%= h(@filter["batch_id"]) %>"><%- end -%>
+  <button class="button">Filter</button>
+  <%- unless @filter.values.all? { |v| v.nil? || v.empty? } -%><a class="button quiet" href="<%= h(url("/jobs")) %>">Clear</a><%- end -%>
+</form>
+
+<p class="result-count"><%= number(@total) %> <%= (@total == 1) ? "job matches" : "jobs match" %><%- if @filter["batch_id"] -%> in <a href="<%= h(url("/batches/#{@filter["batch_id"]}")) %>">batch <%= h(short_id(@filter["batch_id"])) %></a><%- end -%>.</p>
+
+<form method="post" action="<%= h(url("/jobs/bulk")) %>" id="bulk-form" class="bulk" data-bulk>
+  <%= csrf_field %>
+  <%- @filter.each do |key, value| -%>
+    <%- Array(value).each do |item| -%><input type="hidden" name="<%= h(value.is_a?(Array) ? "#{key}[]" : key) %>" value="<%= h(item) %>"><%- end -%>
+  <%- end -%>
+  <span class="bulk-count" data-bulk-count>0 selected</span>
+  <select name="action" aria-label="Action for selected jobs">
+    <option value="retry">Retry</option>
+    <option value="reschedule">Run now</option>
+    <option value="discard">Discard</option>
+    <option value="force_discard">Force discard</option>
+    <option value="destroy">Delete</option>
+  </select>
+  <button class="button" name="all" value="0" data-confirm="Apply this action to the selected jobs?">Apply to selected</button>
+  <button class="button quiet" name="all" value="1" data-confirm="Apply this action to every job that matches the current filter?">Apply to all <%= number(@total) %> matching</button>
+</form>
+
+<%= render("jobs_table", rows: @page.rows, selectable: true) %>
+
+<%- if @page.next_cursor -%>
+<p class="pager"><a class="button quiet" href="<%= h(url("/jobs", @filter.merge("after" => @page.next_cursor.join("|")))) %>">Older jobs</a></p>
+<%- end -%>

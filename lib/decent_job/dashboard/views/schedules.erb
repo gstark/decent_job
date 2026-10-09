@@ -1,0 +1,25 @@
+<h1 class="page-title">Schedules</h1>
+<%- if @schedules.empty? -%>
+<p class="empty">No recurring schedule is configured. Add entries under <code>config.cron</code> and they appear here.</p>
+<%- else -%>
+<table class="ledger">
+  <thead><tr><th>Key</th><th>Job</th><th>Schedule</th><th>Enabled</th><th>Last run</th><th>Next run</th><th></th></tr></thead>
+  <tbody>
+    <%- @schedules.each do |item| -%>
+    <%- entry = item[:entry] -%>
+    <tr class="<%= item[:enabled] ? "" : "row-disabled" %>">
+      <td><a href="<%= h(url("/schedules/#{entry.key}")) %>"><%= h(entry.key) %></a><%- if entry.description -%><span class="muted small block"><%= h(entry.description) %></span><%- end -%></td>
+      <td><%= h(item[:properties][:class]) %></td>
+      <td><%= h(item[:properties][:cron]) %></td>
+      <td><%= item[:enabled] ? "Yes" : "No" %></td>
+      <td><%- if item[:last_job] -%><a href="<%= h(url("/jobs/#{item[:last_job]["id"]}")) %>"><%= time(item[:last_job]["cron_at"] || item[:last_job]["created_at"]) %></a><%- else -%><span class="muted">never</span><%- end -%></td>
+      <td><%- if item[:next_at].is_a?(Time) -%><%= time(item[:next_at]) %><%- elsif item[:next_at] -%><span class="error-text"><%= h(item[:next_at].message) %></span><%- else -%><span class="muted">none</span><%- end -%></td>
+      <td class="col-actions">
+        <%= action_button("/schedules/#{entry.key}/run", "Run now") %>
+        <%= item[:enabled] ? action_button("/schedules/#{entry.key}/disable", "Disable") : action_button("/schedules/#{entry.key}/enable", "Enable") %>
+      </td>
+    </tr>
+    <%- end -%>
+  </tbody>
+</table>
+<%- end -%>

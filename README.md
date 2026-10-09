@@ -4,7 +4,7 @@ A PostgreSQL job runner. It has its own job API, `DecentJob::Base`, and an optio
 
 The current implementation supports persistent jobs, delayed execution, priorities, queue pools, bulk capture, batches, labels, concurrency limits and throttles, persistent pauses, recurring schedules with restart catch-up, retries, discards, execution history, inline and async execution, and external workers. Workers offer advisory, SKIP LOCKED, and hybrid claims, with LISTEN/NOTIFY and polling for wakeups.
 
-This is an early implementation. Full GoodJob parity remains the project goal. Dashboard work is deferred; the current implementation sequence focuses on the library and its operational features. See [the parity checklist](docs/parity.md) and [implementation plan](docs/implementation-plan.md).
+This is an early implementation. Full GoodJob parity remains the project goal. A dependency-free [dashboard](docs/dashboard.md) mounts as a Rack application for jobs, batches, schedules, workers, pauses, cleanup, and latency. See [the parity checklist](docs/parity.md) and [implementation plan](docs/implementation-plan.md).
 
 Numeric and natural-language cron parsing are implemented as a foundation for recurring schedules. Supported expressions, reference comparisons, and timezone corrections are documented in [cron compatibility](docs/cron-compatibility.md).
 
@@ -87,6 +87,17 @@ Add `--probe-port 7001` to expose HTTP liveness and worker readiness checks. The
 Add `--subprocesses 3` to supervise three workers, or use pipe-separated recipes such as `--queues 'critical:2|default:4'`. Each child gets its own connections and threads. See [the supervisor](docs/supervisor.md) for lifecycle hooks, crash replacement, cluster readiness, and shutdown.
 
 Use `--idle-timeout 60` to exit a single worker after an idle period, or `--daemonize --pidfile ./tmp/pids/worker.pid` to detach it. See [daemon mode and idle shutdown](docs/daemon-and-idle.md) for PID ownership, logging, and shutdown behavior.
+
+## Dashboard
+
+Mount the operations dashboard in a Rack host. It has no dependencies beyond `pg`:
+
+```ruby
+# config/routes.rb
+mount DecentJob::Dashboard.new => "/decent_job"
+```
+
+Protect it with the host application's own authentication. For development, `bundle exec decent_job dashboard --require ./jobs.rb` serves it on port 7002 when the optional `webrick` gem is available. See [the dashboard guide](docs/dashboard.md) for pages, security, and production proposals.
 
 ## Configuration
 

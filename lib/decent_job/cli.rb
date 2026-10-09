@@ -35,8 +35,8 @@ module DecentJob
       arguments = argv.dup
       parser.parse!(arguments)
       command = arguments.shift || "start"
-      unless %w[start migrate cleanup_preserved_jobs cleanup help version].include?(command) && arguments.empty?
-        raise OptionParser::InvalidArgument, "expected start, migrate, cleanup_preserved_jobs, help, or version"
+      unless %w[start migrate cleanup_preserved_jobs cleanup dashboard help version].include?(command) && arguments.empty?
+        raise OptionParser::InvalidArgument, "expected start, migrate, cleanup_preserved_jobs, dashboard, help, or version"
       end
       command = options.delete(:command) || command
       case command
@@ -49,6 +49,7 @@ module DecentJob
       end
 
       cleanup_options = options.delete(:cleanup) || {}
+      dashboard_options = {port: options.delete(:dashboard_port) || 7002, host: options.delete(:dashboard_host) || "127.0.0.1"}
       prepare_for_rails_applications unless applications.empty?
       applications.each { |file| require File.expand_path(file) }
       begin
@@ -65,6 +66,8 @@ module DecentJob
         DecentJob.install
         @stdout.puts "DecentJob schema installed."
         0
+      elsif command == "dashboard"
+        serve_dashboard(**dashboard_options)
       else
         start
       end
@@ -100,7 +103,7 @@ module DecentJob
 
     def option_parser(options, applications)
       OptionParser.new do |parser|
-        parser.banner = "Usage: decent_job [start|migrate|cleanup_preserved_jobs|help|version] [options]"
+        parser.banner = "Usage: decent_job [start|migrate|cleanup_preserved_jobs|dashboard|help|version] [options]"
         parser.separator "Database: DECENT_JOB_DATABASE_URL or DATABASE_URL"
         parser.on("-r", "--require FILE", "Load application jobs and configuration") { |file| applications << file }
         parser.on("--older-than SECONDS", "--before-seconds-ago SECONDS", Float, "Delete preserved records at least this old") { |value| options[:cleanup_preserved_jobs_before_seconds_ago] = value }
@@ -111,6 +114,8 @@ module DecentJob
         parser.on("--[no-]include-discarded", "Include discarded preserved jobs and batches") { |value| options[:cleanup_discarded_jobs] = value }
         parser.on("--probe-port PORT", Integer, "Serve health probes on this port (0 chooses an available port)") { |value| options[:probe_port] = value }
         parser.on("--probe-handler HANDLER", "Probe server: simple or optional webrick") { |value| options[:probe_handler] = value }
+        parser.on("--port PORT", Integer, "Dashboard port (default: 7002)") { |value| options[:dashboard_port] = value }
+        parser.on("--host HOST", "Dashboard bind address (default: 127.0.0.1)") { |value| options[:dashboard_host] = value }
         parser.on("--[no-]daemonize", "Detach and run in the background") { |value| options[:daemonize] = value }
         parser.on("--pidfile PATH", "PID file for daemon mode") { |value| options[:pidfile] = value }
         parser.on("--idle-timeout SECONDS", Float, "Exit after this many idle seconds (single process)") { |value| options[:idle_timeout] = value }
@@ -145,6 +150,20 @@ module DecentJob
       rescue Exception # standard:disable Lint/RescueException
         raise unless original_failure
       end
+    end
+
+    def serve_dashboard(port:, host:)
+      require "decent_job/dashboard/server"
+      server = Dashboard::Server.new(Dashboard.new, port: port, host: host).start
+      @stdout.puts "DecentJob dashboard listening on http://#{host}:#{server.port}/"
+      stopper = Queue.new
+      %w[INT TERM].each { |signal| trap(signal) { stopper << signal } }
+      stopper.pop
+      server.stop
+      0
+    rescue Dashboard::Server::Unavailable => error
+      @stderr.puts error.message
+      1
     end
 
     def start_workers

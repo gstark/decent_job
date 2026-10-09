@@ -1,0 +1,25 @@
+<h1 class="page-title">Batches</h1>
+<%- if @page.rows.empty? -%>
+<p class="empty">No batch has been created. Group jobs with <code>DecentJob::Batch.enqueue</code> to track them together.</p>
+<%- else -%>
+<table class="ledger">
+  <thead><tr><th>Batch</th><th>Progress</th><th class="num">Jobs</th><th class="num">Succeeded</th><th class="num">Discarded</th><th class="num">Pending</th><th>Created</th><th>Finished</th></tr></thead>
+  <tbody>
+    <%- @page.rows.each do |batch| -%>
+    <tr>
+      <td><a href="<%= h(url("/batches/#{batch["id"]}")) %>"><%= h(batch["description"] || short_id(batch["id"])) %></a><%- if batch["discarded_at"] -%>&nbsp;<span class="status status-discarded">discarded</span><%- elsif batch["finished_at"] -%>&nbsp;<span class="status status-succeeded">finished</span><%- end -%></td>
+      <td class="col-progress"><div class="progress" title="<%= batch["succeeded"] %> succeeded, <%= batch["discarded"] %> discarded, <%= batch["pending"] %> pending"><span class="p-ok" style="width:<%= batch["total"].zero? ? 0 : (batch["succeeded"] * 100.0 / batch["total"]).round(1) %>%"></span><span class="p-bad" style="width:<%= batch["total"].zero? ? 0 : (batch["discarded"] * 100.0 / batch["total"]).round(1) %>%"></span></div></td>
+      <td class="num"><%= number(batch["total"]) %></td>
+      <td class="num"><%= number(batch["succeeded"]) %></td>
+      <td class="num"><%= number(batch["discarded"]) %></td>
+      <td class="num"><%= number(batch["pending"]) %></td>
+      <td><%= time(batch["created_at"]) %></td>
+      <td><%= time(batch["finished_at"]) %></td>
+    </tr>
+    <%- end -%>
+  </tbody>
+</table>
+<%- if @page.next_cursor -%>
+<p class="pager"><a class="button quiet" href="<%= h(url("/batches", "after" => @page.next_cursor.join("|"))) %>">Older batches</a></p>
+<%- end -%>
+<%- end -%>

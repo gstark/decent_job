@@ -1,0 +1,32 @@
+<h1 class="page-title">Pauses</h1>
+<p class="lede">A paused queue, class, or label stays in the database and keeps accepting jobs. Workers skip it until you resume it.</p>
+<form method="post" action="<%= h(url("/pauses")) %>" class="filters">
+  <%= csrf_field %>
+  <input type="hidden" name="action" value="pause">
+  <label>Pause a
+    <select name="kind"><option value="queue">queue</option><option value="job_class">job class</option><option value="label">label</option></select>
+  </label>
+  <label>named <input type="text" name="key" required list="pause-names" placeholder="mailers"></label>
+  <datalist id="pause-names">
+    <%- (@options["queues"] + @options["job_classes"] + @options["labels"]).uniq.each do |name| -%><option value="<%= h(name) %>"><%- end -%>
+  </datalist>
+  <button class="button">Pause</button>
+</form>
+<%- if @paused.values.all?(&:empty?) -%>
+<p class="empty">Nothing is paused.</p>
+<%- else -%>
+<table class="ledger">
+  <thead><tr><th>Kind</th><th>Name</th><th></th></tr></thead>
+  <tbody>
+    <%- {"queue" => @paused[:queues], "job_class" => @paused[:job_classes], "label" => @paused[:labels]}.each do |kind, keys| -%>
+    <%- keys.each do |key| -%>
+    <tr>
+      <td><%= h(kind.tr("_", " ")) %></td>
+      <td><a href="<%= h(url("/jobs", {"queue" => "queue", "job_class" => "job_class", "label" => "label"}[kind] => key)) %>"><%= h(key) %></a></td>
+      <td class="col-actions"><%= action_button("/pauses", "Resume", params: {"action" => "unpause", "kind" => kind, "key" => key}) %></td>
+    </tr>
+    <%- end -%>
+    <%- end -%>
+  </tbody>
+</table>
+<%- end -%>
