@@ -14,12 +14,14 @@ module DecentJob
     end
 
     def enqueue(job)
+      return if Bulk.capture(job, queue_adapter: self, callbacks_run: true)
+
       context = Current.execution
       if context && context[:database].equal?(database) && context[:job_id] == job.job_id
         store.reschedule(job, context)
         return job.provider_job_id
       end
-      enqueue_all([job])
+      ConcurrencyControls.new(database).enqueue(job) { persist([job]) }
       job.provider_job_id
     end
 
@@ -28,7 +30,49 @@ module DecentJob
       enqueue(job)
     end
 
-    def enqueue_all(jobs)
+    def enqueue_all(jobs, callbacks: true)
+      if Bulk.capture(jobs, queue_adapter: self)
+        jobs.each { |job| job.successfully_enqueued = true }
+        return jobs.size
+      end
+
+      controlled, plain = jobs.partition { |job| job.respond_to?(:decent_job_resolved_concurrency_rules) }
+      count = persist(plain)
+      controlled.each do |job|
+        if callbacks
+          job.enqueue
+        else
+          enqueue_without_callbacks(job)
+        end
+        count += 1 if job.successfully_enqueued?
+      end
+      count
+    end
+
+    def enqueue_after_transaction_commit?
+      true
+    end
+
+    def shutdown(timeout: nil)
+      worker = @worker_mutex.synchronize { @worker }
+      !worker || worker.shutdown(timeout: timeout)
+    end
+
+    private
+
+    def enqueue_without_callbacks(job)
+      job.successfully_enqueued = false
+      job.enqueue_error = nil
+      enqueue(job)
+    rescue ConcurrencyControls::AdmissionRejected => error
+      job.enqueue_error = ActiveJob::EnqueueError.new(error.message)
+    rescue ActiveJob::EnqueueError => error
+      job.enqueue_error = error
+    end
+
+    def persist(jobs)
+      return 0 if jobs.empty?
+
       ids = begin
         store.enqueue_all(jobs)
       rescue PG::Error => error
@@ -45,17 +89,6 @@ module DecentJob
       end
       ids.size
     end
-
-    def enqueue_after_transaction_commit?
-      true
-    end
-
-    def shutdown(timeout: nil)
-      worker = @worker_mutex.synchronize { @worker }
-      !worker || worker.shutdown(timeout: timeout)
-    end
-
-    private
 
     def store
       @store ||= Store.new(database)

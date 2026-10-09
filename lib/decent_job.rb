@@ -1,12 +1,18 @@
 # frozen_string_literal: true
 
 require "active_job"
+require "decent_job/active_job_extensions/concurrency"
+require "decent_job/active_job_extensions/labels"
 require "decent_job/adapter"
+require "decent_job/bulk"
 require "decent_job/claim"
+require "decent_job/concurrency_controls"
+require "decent_job/concurrency_rule"
 require "decent_job/configuration"
 require "decent_job/current"
 require "decent_job/database"
 require "decent_job/inline_buffer"
+require "decent_job/pauses"
 require "decent_job/performer"
 require "decent_job/queue_selection"
 require "decent_job/schema"
@@ -43,6 +49,22 @@ module DecentJob
 
     def install
       Schema.new(database).migrate
+    end
+
+    def pause(**target)
+      Pauses.new(database).pause(**target)
+    end
+
+    def unpause(**target)
+      Pauses.new(database).unpause(**target)
+    end
+
+    def paused
+      Pauses.new(database).paused
+    end
+
+    def paused?(**target)
+      Pauses.new(database).paused?(**target)
     end
 
     def start

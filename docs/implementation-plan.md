@@ -18,10 +18,23 @@ First-slice verification: 88 specs, 284 assertions; Standard passed; gem build a
 
 ## Subsequent slices
 
-1. Job controls: labels, concurrency limits and throttles, bulk capture, pauses.
-2. Workflows: batches and transactionally deduplicated callbacks, recurring schedules and catch-up.
-3. Operations: retention, process heartbeats, supervisor, systemd, Rails integration.
-4. Dashboard: authenticated job actions, histories, batches, schedules, processes and metrics.
-5. Compatibility: additional lock strategies, PgBouncer, full scheduling grammar, benchmark and parity audit.
+### Job controls slice
+
+- [x] Add normalized, serializable class/instance labels and dynamic defaults with the Active Job extension API.
+- [x] Add a versioned controls migration for labels, concurrency keys, pause settings, and durable claims.
+- [x] Add persistent queue/class/label pauses and dequeue filtering, with explicit enable/disable behavior.
+- [x] Add enqueue/total limits and rolling enqueue throttles under transaction-scoped locks. Test concurrent enqueuers and bulk paths.
+- [x] Add perform limits/throttles, durable grants/waiters, prompt promotion, and stale-grant recovery. Test simultaneous performers, later-rule rejection, retries and crash cleanup.
+- [x] Add bulk block capture with rollback on block failure, nested/thread isolation, and checked jobs going through their callbacks.
+- [x] Review, document and verify the complete slice against real PostgreSQL before committing.
+
+Job-controls verification: 213 specs, 766 assertions; Standard and gem build passed. The built package includes both new migrations and the controls/bulk implementation. Real PostgreSQL specs cover competing enqueuers, simultaneous claims, promotion before retry persistence, multiple releases, changed rules between attempts, and SIGKILL recovery. Independent spec-compliance and code-quality reviews passed. This slice includes documented adaptations for captured callback timing, stricter invalid-option validation, and a consistent top-level label pause API.
+
+### Remaining slices
+
+1. Workflows: batches and transactionally deduplicated callbacks, recurring schedules and catch-up.
+2. Operations: retention, process heartbeats, supervisor, systemd, Rails integration.
+3. Dashboard: authenticated job actions, histories, batches, schedules, processes and metrics.
+4. Compatibility: additional lock strategies, PgBouncer, full scheduling grammar, benchmark and parity audit.
 
 Each slice requires behavior specs before implementation, real PostgreSQL verification, and independent review. Completion of one slice does not imply completion of the full rebuild.

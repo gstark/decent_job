@@ -4,13 +4,14 @@ module DecentJob
   class Performer
     Result = Data.define(:job_id, :state, :error)
 
-    def initialize(database: DecentJob.database)
+    def initialize(database: DecentJob.database, enable_pauses: DecentJob.configuration.enable_pauses)
       @database = database
       @store = Store.new(database)
-      @claim = Claim.new(database)
+      @claim = Claim.new(database, enable_pauses: enable_pauses)
     end
 
     def perform_one(queues: "*", job_id: nil, raise_errors: false, stopping: -> { false })
+      ConcurrencyClaims.new(@database).recover
       @claim.with_next(queues: queues, job_id: job_id, stopping: stopping) do |row|
         execute(row, raise_errors: raise_errors)
       end
@@ -57,7 +58,7 @@ module DecentJob
 
     def finish(row, state, error)
       details = error && JSON.generate("class" => error.class.name, "message" => error.message, "backtrace" => error.backtrace || [])
-      @database.transaction do |connection|
+      ConcurrencyClaims.new(@database).finish(id: row.fetch("id"), execution_id: row.fetch("execution_id")) do |connection|
         current = connection.exec_params("SELECT state, execution_id FROM decent_jobs WHERE id = $1 FOR UPDATE", [row.fetch("id")]).first
         raise "Execution ownership lost" unless current && current["execution_id"] == row.fetch("execution_id")
 

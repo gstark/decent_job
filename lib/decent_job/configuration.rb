@@ -5,7 +5,7 @@ require "logger"
 module DecentJob
   class Configuration
     attr_accessor :database_url, :execution_mode, :queues, :max_threads,
-      :poll_interval, :enable_listen_notify, :shutdown_timeout, :logger, :on_thread_error
+      :poll_interval, :enable_listen_notify, :shutdown_timeout, :logger, :on_thread_error, :enable_pauses
 
     def initialize
       @database_url = ENV["DECENT_JOB_DATABASE_URL"] || ENV["DATABASE_URL"]
@@ -14,6 +14,7 @@ module DecentJob
       @max_threads = Integer(ENV.fetch("DECENT_JOB_MAX_THREADS", "5"))
       @poll_interval = Float(ENV.fetch("DECENT_JOB_POLL_INTERVAL", "1"))
       @enable_listen_notify = ENV.fetch("DECENT_JOB_ENABLE_LISTEN_NOTIFY", "true") != "false"
+      @enable_pauses = ENV.fetch("DECENT_JOB_ENABLE_PAUSES", "false") == "true"
       @shutdown_timeout = Float(ENV.fetch("DECENT_JOB_SHUTDOWN_TIMEOUT", "30"))
       @logger = Logger.new($stdout)
       @on_thread_error = ->(error) { @logger.error("#{error.class}: #{error.message}") }

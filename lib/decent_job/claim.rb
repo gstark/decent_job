@@ -5,9 +5,10 @@ require "securerandom"
 
 module DecentJob
   class Claim
-    def initialize(database)
+    def initialize(database, enable_pauses: false)
       @database = database
       @store = Store.new(database)
+      @enable_pauses = enable_pauses
     end
 
     def with_next(queues: "*", job_id: nil, stopping: -> { false })
@@ -47,6 +48,7 @@ module DecentJob
         WHERE state IN ('ready', 'running') AND scheduled_at <= clock_timestamp()
           AND #{filter} AND ($2::uuid IS NULL OR id = $2::uuid)
           AND $1::text[] IS NOT NULL
+          AND #{@enable_pauses ? Pauses::EXCLUDED_SQL : "TRUE"}
         ORDER BY #{order}priority, scheduled_at, id
         LIMIT 1000
       SQL
@@ -57,6 +59,7 @@ module DecentJob
         row = connection.exec_params(<<~SQL, [id]).first
           SELECT * FROM decent_jobs WHERE id = $1
             AND state IN ('ready', 'running') AND scheduled_at <= clock_timestamp()
+            AND #{@enable_pauses ? Pauses::EXCLUDED_SQL : "TRUE"}
           FOR UPDATE
         SQL
         if row

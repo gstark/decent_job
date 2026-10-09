@@ -22,11 +22,13 @@ module DecentJob
             offset = params.size
             payload = job.serialize.merge("provider_job_id" => id)
             params.concat([id, job.job_id, job.queue_name, job.class.name, job.priority || 0,
-              JSON.generate(payload), (job.scheduled_at || Time.now).utc.iso8601(6)])
-            "(#{(1..7).map { |index| "$#{offset + index}" }.join(", ")})"
+              JSON.generate(payload), (job.scheduled_at || Time.now).utc.iso8601(6),
+              PG::TextEncoder::Array.new.encode(payload.fetch("decent_job_labels", [])),
+              PG::TextEncoder::Array.new.encode(payload.fetch("decent_job_concurrency_keys", []))])
+            "(#{(1..9).map { |index| "$#{offset + index}" }.join(", ")})"
           end
           connection.exec_params(<<~SQL, params)
-            INSERT INTO decent_jobs (id, active_job_id, queue_name, job_class, priority, payload, scheduled_at)
+            INSERT INTO decent_jobs (id, active_job_id, queue_name, job_class, priority, payload, scheduled_at, labels, concurrency_keys)
             VALUES #{values.join(", ")}
           SQL
         end
@@ -44,11 +46,15 @@ module DecentJob
 
     def reschedule(job, context)
       @database.transaction do |connection|
-        params = [context.fetch(:id), context.fetch(:execution_id), JSON.generate(job.serialize),
-          (job.scheduled_at || Time.now).utc.iso8601(6), job.queue_name, job.priority || 0]
+        payload = job.serialize
+        params = [context.fetch(:id), context.fetch(:execution_id), JSON.generate(payload),
+          (job.scheduled_at || Time.now).utc.iso8601(6), job.queue_name, job.priority || 0,
+          PG::TextEncoder::Array.new.encode(payload.fetch("decent_job_labels", [])),
+          PG::TextEncoder::Array.new.encode(payload.fetch("decent_job_concurrency_keys", []))]
         result = connection.exec_params(<<~SQL, params)
           UPDATE decent_jobs SET state = 'ready', payload = $3, scheduled_at = $4,
-            queue_name = $5, priority = $6, updated_at = clock_timestamp(), finished_at = NULL, error = NULL
+            queue_name = $5, priority = $6, labels = $7, concurrency_keys = $8,
+            updated_at = clock_timestamp(), finished_at = NULL, error = NULL
           WHERE id = $1 AND execution_id = $2
         SQL
         raise ActiveJob::EnqueueError, "execution ownership lost" unless result.cmd_tuples == 1
@@ -73,6 +79,8 @@ module DecentJob
           nil
         elsif %w[payload error].include?(key)
           JSON.parse(value)
+        elsif %w[labels concurrency_keys].include?(key)
+          PG::TextDecoder::Array.new.decode(value)
         elsif key.end_with?("_at")
           Time.parse(value)
         elsif %w[priority executions_count process_id].include?(key)

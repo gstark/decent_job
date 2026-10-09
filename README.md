@@ -2,9 +2,9 @@
 
 A PostgreSQL backend for Active Job with two direct runtime dependencies: `activejob` and `pg`.
 
-The first working slice supports persistent jobs, delayed execution, priorities, queue pools, bulk enqueue, retries, discards, execution history, inline and async execution, and external workers. It uses session advisory locks, LISTEN/NOTIFY, and polling.
+The current implementation supports persistent jobs, delayed execution, priorities, queue pools, bulk capture, labels, concurrency limits and throttles, persistent pauses, retries, discards, execution history, inline and async execution, and external workers. It uses session advisory locks, LISTEN/NOTIFY, and polling.
 
-This is an early implementation. Full GoodJob parity remains the project goal. Batches, recurring schedules, concurrency limits, throttling, the dashboard, and several operational features are still planned. See [the parity checklist](docs/parity.md) and [implementation plan](docs/implementation-plan.md).
+This is an early implementation. Full GoodJob parity remains the project goal. Batches, recurring schedules, the dashboard, and several operational features are still planned. See [the parity checklist](docs/parity.md) and [implementation plan](docs/implementation-plan.md).
 
 ## Install and run
 
@@ -69,12 +69,13 @@ DecentJob.configure do |config|
   config.max_threads = 5
   config.poll_interval = 1
   config.enable_listen_notify = true
+  config.enable_pauses = true
   config.shutdown_timeout = 30
   config.on_thread_error = ->(error) { warn "#{error.class}: #{error.message}" }
 end
 ```
 
-`DECENT_JOB_DATABASE_URL` falls back to `DATABASE_URL`. The other settings support `DECENT_JOB_EXECUTION_MODE`, `DECENT_JOB_QUEUES`, `DECENT_JOB_MAX_THREADS`, `DECENT_JOB_POLL_INTERVAL`, `DECENT_JOB_ENABLE_LISTEN_NOTIFY`, and `DECENT_JOB_SHUTDOWN_TIMEOUT`. Set notification configuration to `false` to disable it. CLI options override configuration in the required application file.
+`DECENT_JOB_DATABASE_URL` falls back to `DATABASE_URL`. The other settings support `DECENT_JOB_EXECUTION_MODE`, `DECENT_JOB_QUEUES`, `DECENT_JOB_MAX_THREADS`, `DECENT_JOB_POLL_INTERVAL`, `DECENT_JOB_ENABLE_LISTEN_NOTIFY`, `DECENT_JOB_ENABLE_PAUSES`, and `DECENT_JOB_SHUTDOWN_TIMEOUT`. Set notification configuration to `false` to disable it. CLI options override configuration in the required application file.
 
 Queue expressions:
 
@@ -112,6 +113,75 @@ database.close
 ```
 
 Directly constructed workers belong to their caller. Shut them down before closing their database.
+
+## Labels, concurrency, and pauses
+
+Include the labels extension for searchable job metadata:
+
+```ruby
+class AccountJob < ActiveJob::Base
+  include DecentJob::ActiveJobExtensions::Labels
+  self.decent_job_labels = ["accounts", -> { "account:#{arguments.first}" }]
+end
+
+AccountJob.set(decent_job_labels: ["manual"]).perform_later(42)
+```
+
+Labels are trimmed, converted to strings, and deduplicated. Instance labels replace the class defaults. Retries persist changed labels in both the payload and indexed columns.
+
+The concurrency extension includes labels. Use a class key for one job type, or label rules to share a limit across classes:
+
+```ruby
+class AccountSyncJob < ActiveJob::Base
+  include DecentJob::ActiveJobExtensions::Concurrency
+  decent_job_control_concurrency_with(enqueue_limit: 100, perform_limit: 5)
+  decent_job_concurrency_rule(
+    label: -> { "account:#{arguments.first}" },
+    apply_label: true,
+    perform_limit: 1
+  )
+end
+```
+
+`total_limit` supplies the default for both enqueue and perform limits. An explicit `enqueue_limit` or `perform_limit` overrides that default for its phase. Legacy configuration uses the job class as its default key; `key: nil` disables it. New rules can match a key, a label, or all jobs when neither is supplied. A label takes precedence over a key. Label rules only apply to jobs carrying that label; `apply_label: true` adds it even when instance labels were explicitly supplied.
+
+Enqueue limits count unfinished jobs, excluding executing jobs for an enqueue-only limit. Admission and insertion share a PostgreSQL transaction and scope lock. Rejected `perform_later` calls return `false`. Limits run after application enqueue callbacks. The named callback `:_decent_job_concurrency_before_enqueue` supports Active Job's `skip_callback` API.
+
+Perform-limit rejections retry with Active Job's polynomial delay. Durable waiting claims let completion or crash recovery move a waiter forward immediately. Promotion does not reserve capacity; the job must pass its rules again. Controls are bypassed for direct `perform_now` and other queue adapters.
+
+Both phases accept a rolling throttle, for example `enqueue_throttle: [20, 60]` or `perform_throttle: [10, 60]`. Limits, keys, and throttle arrays may be callables. Perform throttling follows the reference's execution-history semantics: it considers the earliest executions in the window and tests job identity, excluding throttle-rejected attempts. A retry of an already admitted job can remain eligible within that window.
+
+Limits and throttle counts must be nonnegative integers; throttle periods must be positive, finite numbers of seconds. Invalid values raise configuration errors. This validation is stricter than the reference's permissive handling of malformed limits.
+
+Pauses persist until explicitly removed. Enable dequeue filtering with `config.enable_pauses = true` or `DECENT_JOB_ENABLE_PAUSES=true`; it is disabled by default.
+
+```ruby
+DecentJob.pause(queue: "mailers")
+DecentJob.pause(job_class: AccountSyncJob)
+DecentJob.pause(label: "account:42")
+DecentJob.paused # {queues: [...], job_classes: [...], labels: [...]}
+DecentJob.paused?(queue: "mailers")
+DecentJob.unpause(queue: "mailers")
+```
+
+Provide exactly one target per mutation. DecentJob deliberately accepts labels on both `pause` and `unpause`, resolving the reference's inconsistent top-level API. Pausing prevents new execution claims; it does not interrupt running jobs. Unpausing notifies sleeping workers.
+
+## Bulk capture
+
+```ruby
+jobs = DecentJob::Bulk.enqueue do
+  GreetingJob.perform_later("Ada")
+  GreetingJob.set(wait: 60).perform_later("Grace")
+end
+
+DecentJob::Bulk.enqueue([GreetingJob.new("Linus"), GreetingJob.new("Matz")])
+```
+
+A block captures enqueues until it returns. An exception in the block abandons its captured jobs. Nested enqueue blocks join the outer capture; separate threads have independent buffers. The returned array contains accepted jobs after persistence, and captured enqueue callbacks run once. Concurrency-controlled jobs receive individual checks; ordinary jobs use SQL bulk insertion. Inline execution begins after capture ends.
+
+Captured callbacks observe provisional enqueue success. Admission happens after the block, so a later rejection updates the job's status but cannot undo callback side effects. Ordinary `perform_later` and explicit controlled bulk jobs suppress `after_enqueue` when admission rejects them.
+
+`DecentJob::Bulk.capture { ... }` captures jobs without flushing them and restores an enclosing capture afterward. Pass either explicit jobs or a block to these APIs. To make writes across multiple flush groups atomic on one database, wrap bulk enqueue in `DecentJob.database.transaction`.
 
 ## Transactions and reliability
 
