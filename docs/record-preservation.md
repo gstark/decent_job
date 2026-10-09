@@ -1,4 +1,4 @@
-# Record preservation
+# Record preservation and cleanup
 
 Completed jobs and execution attempts are retained by default. Configure their preservation before starting workers:
 
@@ -45,4 +45,54 @@ Cron occurrence records remain preserved under every execution policy because th
 
 Operator actions do not apply the execution preservation policy. In particular, force-discard remains authoritative when running code returns, and the returning worker retains the operator's record. Use `job.destroy_job` after its execution releases the lock to delete it explicitly.
 
-Age-based cleanup and automatic cleanup scheduling are the next implementation checkpoint. Preservation policies control what remains immediately after execution; they do not currently expire old records.
+## Age-based cleanup
+
+Clean old records explicitly with:
+
+```ruby
+DecentJob.cleanup_preserved_jobs(
+  older_than: 14 * 24 * 60 * 60,
+  in_batches_of: 1000,
+  include_discarded: true
+)
+```
+
+`older_than` is an age in seconds, measured against `finished_at`. The cutoff is fixed when the sweep begins. Jobs finished at or before it are eligible; unfinished jobs and recently finished jobs remain. A batch is eligible only after all its work and callbacks finish, using the batch's `finished_at`. Pass `database:` for an explicit DecentJob pool.
+
+The return value counts deleted jobs, execution attempts, and batches. Associated delivery and bookkeeping records are removed as needed but do not contribute to that count. Set `include_discarded: false` to retain discarded jobs and batches. Each job's entire attempt history is deleted with its job, including attempts newer than the cutoff.
+
+Sweeps use bounded pages and skip busy records. A locked record can be collected by a later sweep. Eligibility is rechecked under locks so concurrent retries and batch reopening retain their active records. Foreign-key updates and concurrency-waiter promotion can briefly wait for related locks; these waits are bounded. Shutdown can stop a sweep between units of work; already committed deletions remain committed.
+
+Explicit and automatic age-based cleanup include eligible cron records. Their deletion removes occurrence deduplication and catch-up history. Choose a retention age that covers the restart catch-up period you need. Cleanup also removes history used by rolling throttles; keep the retention age longer than their windows.
+
+An ActiveSupport notification named `cleanup_preserved_jobs.decent_job` reports `older_than`, `timestamp`, and `destroyed_jobs_count`, `destroyed_executions_count`, `destroyed_batches_count`, and `destroyed_records_count`.
+
+## Automatic cleanup
+
+Workers apply these defaults:
+
+| Configuration | Default |
+| --- | --- |
+| `cleanup_preserved_jobs_before_seconds_ago` | `1209600` (14 days) |
+| `cleanup_discarded_jobs` | `true` |
+| `cleanup_interval_jobs` | `1000` |
+| `cleanup_interval_seconds` | `600` |
+
+Their environment equivalents use the `DECENT_JOB_` prefix and uppercase names, such as `DECENT_JOB_CLEANUP_INTERVAL_JOBS`. Application configuration overrides the environment.
+
+Cleanup is checked after a completed execution attempt, including an attempt that retries. One tracker is shared by all queue pools within a worker. It runs when the count or elapsed-time threshold is exceeded. The comparison is strict: a threshold of `1000` triggers after attempt `1001`. The elapsed-time threshold is checked on job completion; an idle worker does not periodically sweep on its own.
+
+Set either interval to `false` or `0` to disable that threshold, or `-1` to request cleanup after every completed attempt. The string values `"false"` and `"0"` also disable it. `nil`, `true`, or an empty string restores that interval's default. Disable both intervals to turn off automatic cleanup.
+
+These conversions apply to configuration settings. Explicit interval keywords passed directly to `DecentJob::Worker.new` use `false`, `-1`, or positive numbers; the job-count interval must be an integer.
+
+Cleanup runs on an owned worker thread and shares the worker's shutdown lifecycle. It does not add background threads. Cleanup failures go to the worker's error handler; the worker can continue processing jobs. Inline execution applies preservation policies without starting an automatic cleanup worker.
+
+## Command line
+
+```sh
+bundle exec decent_job cleanup_preserved_jobs --require ./jobs.rb
+bundle exec decent_job cleanup --require ./jobs.rb --older-than 604800 --in-batches-of 500 --no-include-discarded
+```
+
+`cleanup` is an alias. `--before-seconds-ago` is an alias for `--older-than`. CLI age and discarded-job options override settings loaded by `--require`. The command prints the number of deleted records and exits unsuccessfully for invalid options, application load failures, or database errors.

@@ -20,8 +20,8 @@ module DecentJob
       arguments = argv.dup
       parser.parse!(arguments)
       command = arguments.shift || "start"
-      unless %w[start migrate help version].include?(command) && arguments.empty?
-        raise OptionParser::InvalidArgument, "expected start, migrate, help, or version"
+      unless %w[start migrate cleanup_preserved_jobs cleanup help version].include?(command) && arguments.empty?
+        raise OptionParser::InvalidArgument, "expected start, migrate, cleanup_preserved_jobs, help, or version"
       end
       command = options.delete(:command) || command
       case command
@@ -33,18 +33,27 @@ module DecentJob
         return 0
       end
 
+      cleanup_options = options.delete(:cleanup) || {}
       applications.each { |file| require File.expand_path(file) }
-      DecentJob.configure do |configuration|
-        options.each { |name, value| configuration.public_send("#{name}=", value) }
+      begin
+        DecentJob.configure do |configuration|
+          options.each { |name, value| configuration.public_send("#{name}=", value) }
+        end
+      rescue ArgumentError => error
+        raise OptionParser::InvalidArgument, error.message
       end
-      if command == "migrate"
+      if %w[cleanup_preserved_jobs cleanup].include?(command)
+        total = DecentJob.cleanup_preserved_jobs(**cleanup_options)
+        @stdout.puts "Deleted #{total} preserved records (jobs, executions, and batches)."
+        0
+      elsif command == "migrate"
         DecentJob.install
         @stdout.puts "DecentJob schema installed."
         0
       else
         start
       end
-    rescue OptionParser::ParseError, ArgumentError => error
+    rescue OptionParser::ParseError => error
       @stderr.puts "Error: #{error.message}"
       2
     rescue LoadError, StandardError => error
@@ -56,9 +65,15 @@ module DecentJob
 
     def option_parser(options, applications)
       OptionParser.new do |parser|
-        parser.banner = "Usage: decent_job [start|migrate|help|version] [options]"
+        parser.banner = "Usage: decent_job [start|migrate|cleanup_preserved_jobs|help|version] [options]"
         parser.separator "Database: DECENT_JOB_DATABASE_URL or DATABASE_URL"
         parser.on("-r", "--require FILE", "Load application jobs and configuration") { |file| applications << file }
+        parser.on("--older-than SECONDS", "--before-seconds-ago SECONDS", Float, "Delete preserved records at least this old") { |value| options[:cleanup_preserved_jobs_before_seconds_ago] = value }
+        parser.on("--in-batches-of N", Integer, "Cleanup page size") do |value|
+          raise OptionParser::InvalidArgument, "in-batches-of must be positive" unless value.positive?
+          (options[:cleanup] ||= {})[:in_batches_of] = value
+        end
+        parser.on("--[no-]include-discarded", "Include discarded preserved jobs and batches") { |value| options[:cleanup_discarded_jobs] = value }
         parser.on("--queues EXPRESSION", "Queue selection and optional thread pools") { |value| options[:queues] = value }
         parser.on("--max-threads N", Integer, "Default threads per queue pool") { |value| options[:max_threads] = value }
         parser.on("--poll-interval N", Float, "Polling interval in seconds") { |value| options[:poll_interval] = value }

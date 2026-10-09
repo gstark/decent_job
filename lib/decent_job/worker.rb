@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "decent_job/cleaner"
+require "decent_job/cleanup_tracker"
 require "decent_job/performer"
 require "decent_job/queue_selection"
 
@@ -7,11 +9,19 @@ module DecentJob
   # Each execution thread owns its database checkout for the entire job. The
   # notification listener uses its own connection and only hints workers to poll.
   class Worker
-    def initialize(database:, queues: "*", max_threads: 5, poll_interval: 1, enable_listen_notify: true, on_thread_error: nil)
+    def initialize(database:, queues: "*", max_threads: 5, poll_interval: 1, enable_listen_notify: true, on_thread_error: DecentJob.configuration.on_thread_error,
+      cleanup_interval_jobs: DecentJob.configuration.cleanup_interval_jobs,
+      cleanup_interval_seconds: DecentJob.configuration.cleanup_interval_seconds,
+      cleanup_preserved_jobs_before_seconds_ago: DecentJob.configuration.cleanup_preserved_jobs_before_seconds_ago,
+      cleanup_discarded_jobs: DecentJob.configuration.cleanup_discarded_jobs?)
       unless poll_interval.is_a?(Numeric) && poll_interval.finite? && poll_interval.positive?
         raise ArgumentError, "poll_interval must be a finite positive number"
       end
 
+      @cleanup_tracker = CleanupTracker.new(cleanup_interval_jobs: cleanup_interval_jobs, cleanup_interval_seconds: cleanup_interval_seconds)
+      @cleanup_options = {older_than: cleanup_preserved_jobs_before_seconds_ago, include_discarded: cleanup_discarded_jobs}
+      Cleaner.validate_options!(**@cleanup_options)
+      @cleanup_running = false
       @database = database
       @pools = QueueSelection.pools(queues, default_threads: max_threads)
       @poll_interval = poll_interval
@@ -85,11 +95,35 @@ module DecentJob
 
         begin
           result = performer.perform_one(queues: selection, stopping: method(:stopping?))
-          wait(@poll_interval, generation) unless result
+          if result
+            cleanup_after_attempt
+          else
+            wait(@poll_interval, generation)
+          end
         rescue => error
           report_error(error)
           wait(retry_interval)
         end
+      end
+    end
+
+    def cleanup_after_attempt
+      acquired = @mutex.synchronize do
+        @cleanup_tracker.increment
+        next false if @stopping || @cleanup_running || !@cleanup_tracker.cleanup?
+
+        @cleanup_running = true
+        @cleanup_tracker.reset
+        true
+      end
+      return unless acquired
+
+      begin
+        Cleaner.new(database: @database).cleanup(**@cleanup_options, stopping: method(:stopping?))
+      rescue => error
+        report_error(error)
+      ensure
+        @mutex.synchronize { @cleanup_running = false }
       end
     end
 

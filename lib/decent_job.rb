@@ -10,6 +10,8 @@ require "decent_job/batch"
 require "decent_job/batch_store"
 require "decent_job/bulk"
 require "decent_job/claim"
+require "decent_job/cleaner"
+require "decent_job/cleanup_tracker"
 require "decent_job/concurrency_controls"
 require "decent_job/concurrency_rule"
 require "decent_job/configuration"
@@ -183,6 +185,14 @@ module DecentJob
         @database = nil
         @configuration = Configuration.new
       end
+    end
+
+    def cleanup_preserved_jobs(older_than: nil, in_batches_of: 1000, include_discarded: configuration.cleanup_discarded_jobs?, database: nil, stopping: nil)
+      stopping = Current.execution&.fetch(:stopping, nil) if stopping.nil?
+      Cleaner.new(database: database || self.database).cleanup(
+        older_than: older_than.nil? ? configuration.cleanup_preserved_jobs_before_seconds_ago : older_than,
+        in_batches_of: in_batches_of, include_discarded: include_discarded, stopping: stopping
+      )
     end
 
     def perform_inline(queues: "*", limit: 1000)

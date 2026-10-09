@@ -235,7 +235,7 @@ DecentJob::Batch.enqueue_all([
 
 This uses bulk inserts for batch records and ordinary members, with individual admission checks for controlled jobs. Empty batches also run their callbacks. All batches, members, and callback jobs must use DecentJob adapters sharing the same database object; pass `database:` to batch constructors when using an isolated database. A job can belong to only one member batch. Batch operations flush independently of an enclosing bulk capture, and captured enqueue callbacks observe the provisional success described above.
 
-Callback enqueue is deduplicated per batch generation. Completion requests commit with job results, allowing idle worker polls to recover callbacks after a crash. Admission-rejected callbacks remain pending until a later poll admits them. Callback execution has the same at-least-once guarantee as other jobs. Batch records and callback delivery history are currently retained indefinitely.
+Callback enqueue is deduplicated per batch generation. Completion requests commit with job results, allowing idle worker polls to recover callbacks after a crash. Admission-rejected callbacks remain pending until a later poll admits them. Callback execution has the same at-least-once guarantee as other jobs. Age-based cleanup removes eligible finished batches and their delivery history after callbacks finish.
 
 ## Transactions and reliability
 
@@ -273,7 +273,7 @@ record.retry_job # Only discarded jobs are eligible.
 
 Ordinary actions reject worker lock conflicts. Explicit force-discard remains authoritative when running code returns or attempts to retry; it does not terminate that code. The job's adapter exposes cooperative shutdown, force-discard, and pause reasons through `stopping?`.
 
-Use `config.preserve_job_records` to retain all completed jobs (the default), delete them after execution, preserve only unhandled failures, or apply a custom predicate. Unfinished retries and cron occurrence records remain preserved. See [record preservation](docs/record-preservation.md) for batch behavior, error events, and operator actions. Age-based cleanup remains planned.
+Use `config.preserve_job_records` to retain all completed jobs (the default), delete them after execution, preserve only unhandled failures, or apply a custom predicate. Unfinished retries and cron occurrence records remain preserved after execution. Workers clean preserved records older than 14 days by default, checking cleanup thresholds after completed attempts. Run `bundle exec decent_job cleanup --require ./jobs.rb` to clean explicitly. See [record preservation and cleanup](docs/record-preservation.md) for age settings, disabling automatic cleanup, batch behavior, and cron-history tradeoffs.
 
 ## Development
 

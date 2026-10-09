@@ -25,7 +25,7 @@ module DecentJob
       @database.transaction do |connection|
         existing = connection.exec_params("SELECT scope FROM decent_job_concurrency_claims WHERE job_id = $1", [job_id]).column_values(0)
         locked_scopes = (scopes + existing).uniq.sort
-        locked_scopes.each { |scope| lock(connection, scope) }
+        locked_scopes.each { |scope| lock(connection, scope, wait: wait) }
         connection.exec_params("SELECT id FROM decent_jobs WHERE id = $1 FOR UPDATE #{"NOWAIT" unless wait}", [job_id])
         current_scopes = connection.exec_params("SELECT scope FROM decent_job_concurrency_claims WHERE job_id = $1", [job_id]).column_values(0)
         # A claim may have committed while we waited for the job row. Release
@@ -121,8 +121,10 @@ module DecentJob
 
     private
 
-    def lock(connection, scope)
-      connection.exec_params("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || '.decent_job.concurrency.' || $1, 0))", [scope])
+    def lock(connection, scope, wait: true)
+      function = wait ? "pg_advisory_xact_lock" : "pg_try_advisory_xact_lock"
+      result = connection.exec_params("SELECT #{function}(hashtextextended(current_schema() || '.decent_job.concurrency.' || $1, 0))", [scope])
+      raise PG::LockNotAvailable, "Concurrency scope is locked" if !wait && result.getvalue(0, 0) != "t"
     end
 
     def upsert(connection, scope, context, state)

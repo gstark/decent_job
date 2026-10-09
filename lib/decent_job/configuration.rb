@@ -8,7 +8,16 @@ module DecentJob
     attr_accessor :database_url, :execution_mode, :queues, :max_threads,
       :poll_interval, :enable_listen_notify, :shutdown_timeout, :logger, :on_thread_error, :enable_pauses, :preserve_job_records, :cron, :enable_cron, :cron_graceful_restart_period
 
+    attr_reader :cleanup_discarded_jobs, :cleanup_preserved_jobs_before_seconds_ago,
+      :cleanup_interval_jobs, :cleanup_interval_seconds
+
+    alias_method :cleanup_discarded_jobs?, :cleanup_discarded_jobs
+
     def initialize
+      self.cleanup_discarded_jobs = ENV.fetch("DECENT_JOB_CLEANUP_DISCARDED_JOBS", "true")
+      self.cleanup_preserved_jobs_before_seconds_ago = Float(ENV.fetch("DECENT_JOB_CLEANUP_PRESERVED_JOBS_BEFORE_SECONDS_AGO", "1209600"))
+      self.cleanup_interval_jobs = ENV["DECENT_JOB_CLEANUP_INTERVAL_JOBS"]
+      self.cleanup_interval_seconds = ENV["DECENT_JOB_CLEANUP_INTERVAL_SECONDS"]
       @preserve_job_records = true
       @enable_cron = ENV.fetch("DECENT_JOB_ENABLE_CRON", "false") == "true"
       @cron_graceful_restart_period = Float(ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]) if ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]
@@ -23,6 +32,28 @@ module DecentJob
       @shutdown_timeout = Float(ENV.fetch("DECENT_JOB_SHUTDOWN_TIMEOUT", "30"))
       @logger = Logger.new($stdout)
       @on_thread_error = ->(error) { @logger.error("#{error.class}: #{error.message}") }
+    end
+
+    def cleanup_discarded_jobs=(value)
+      value = true if value == "true"
+      value = false if value == "false"
+      raise ArgumentError, "cleanup_discarded_jobs must be true or false" unless [true, false].include?(value)
+      @cleanup_discarded_jobs = value
+    end
+
+    def cleanup_preserved_jobs_before_seconds_ago=(value)
+      unless value.is_a?(Numeric) && value.real? && value.finite? && value >= 0
+        raise ArgumentError, "cleanup_preserved_jobs_before_seconds_ago must be a finite nonnegative number"
+      end
+      @cleanup_preserved_jobs_before_seconds_ago = value
+    end
+
+    def cleanup_interval_jobs=(value)
+      @cleanup_interval_jobs = cleanup_interval(value, default: 1000, integer: true)
+    end
+
+    def cleanup_interval_seconds=(value)
+      @cleanup_interval_seconds = cleanup_interval(value, default: 600)
     end
 
     def validate!
@@ -69,7 +100,21 @@ module DecentJob
 
     def worker_options
       {queues: @queues, max_threads: @max_threads, poll_interval: @poll_interval,
-       enable_listen_notify: @enable_listen_notify, on_thread_error: @on_thread_error}
+       enable_listen_notify: @enable_listen_notify, on_thread_error: @on_thread_error,
+       cleanup_interval_jobs: @cleanup_interval_jobs, cleanup_interval_seconds: @cleanup_interval_seconds,
+       cleanup_preserved_jobs_before_seconds_ago: @cleanup_preserved_jobs_before_seconds_ago,
+       cleanup_discarded_jobs: @cleanup_discarded_jobs}
+    end
+
+    private
+
+    def cleanup_interval(value, default:, integer: false)
+      return default if value.nil? || value == "" || value == true
+      return false if [false, "false", 0, "0"].include?(value)
+      value = integer ? Integer(value, 10) : Float(value) if value.is_a?(String)
+      name = integer ? :cleanup_interval_jobs : :cleanup_interval_seconds
+      CleanupTracker.new(**{name => value})
+      value
     end
   end
 end
