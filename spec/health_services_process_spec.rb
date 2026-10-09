@@ -4,12 +4,14 @@ require "net/http"
 require "open3"
 require "socket"
 require "spec_helper"
+require "support/cli_startup"
 require "support/health_services_cli_app"
 require "timeout"
 require "tmpdir"
 
 describe "CLI health probes and systemd lifecycle" do
   include DatabaseSpec
+  include CliStartupSpec
 
   before do
     DecentJob::Schema.new(database).migrate
@@ -83,20 +85,6 @@ describe "CLI health probes and systemd lifecycle" do
       end
       process.join
     end
-  end
-
-  def await_started(output, error)
-    lines = []
-    Timeout.timeout(8) do
-      while (line = output.gets)
-        lines << line
-        return lines.join if line.include?("DecentJob started. Send SIGINT or SIGTERM to stop.")
-      end
-      flunk "CLI failed to boot. stdout: #{lines.join.inspect}; stderr: #{error.read}"
-    end
-  rescue Timeout::Error
-    stderr = error.read_nonblock(4096, exception: false)
-    flunk "CLI did not boot within 8 seconds. stdout: #{lines.join.inspect}; stderr: #{stderr.inspect}"
   end
 
   def await_boot(output, error)

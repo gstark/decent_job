@@ -2,12 +2,14 @@
 
 require "open3"
 require "spec_helper"
+require "support/cli_startup"
 require "support/cleanup_cli_app"
 require "timeout"
 require "tmpdir"
 
 describe "cleanup through the executable" do
   include DatabaseSpec
+  include CliStartupSpec
 
   before do
     DecentJob::Schema.new(database).migrate
@@ -120,7 +122,7 @@ describe "cleanup through the executable" do
     @environment["DECENT_JOB_CLEANUP_INTERVAL_JOBS"] = "-1"
     @input, @output, @stderr, @process = Open3.popen3(@environment, *@command, "start", "--shutdown-timeout", "2")
     @input.close
-    _(Timeout.timeout(8) { @output.gets }.to_s).must_include "DecentJob started"
+    await_started(@output, @stderr)
     Timeout.timeout(8) { sleep 0.01 until File.exist?(@event) }
     event = JSON.parse(File.read(@event))
     _(event.fetch("destroyed_records_count")).must_equal 2

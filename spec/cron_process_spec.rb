@@ -2,12 +2,14 @@
 
 require "open3"
 require "spec_helper"
+require "support/cli_startup"
 require "support/cron_cli_app"
 require "timeout"
 require "tmpdir"
 
 describe "cron manager processes" do
   include DatabaseSpec
+  include CliStartupSpec
 
   before do
     DecentJob::Schema.new(database).migrate
@@ -43,8 +45,7 @@ describe "cron manager processes" do
     @processes << handles
     input, output, error, _process = handles
     input.close
-    line = Timeout.timeout(8) { output.gets }
-    _(line.to_s).must_include "DecentJob started", (error.read if line.nil?)
+    await_started(output, error)
     handles
   end
 

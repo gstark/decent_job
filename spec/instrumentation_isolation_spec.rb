@@ -20,6 +20,16 @@ describe "notification payload isolation" do
     @subscriptions << ActiveSupport::Notifications.subscribe("isolation.decent_job", observer)
   end
 
+  it "uses an explicit reporter and allows reporting to be disabled" do
+    reported = []
+    subscribe(->(*) { raise "observer failed" })
+    reporter = ->(error) { reported << error }
+    _(DecentJob::Instrumentation.instrument("isolation.decent_job", {}, database: @database, on_error: reporter) { 42 }).must_equal 42
+    _(reported.map(&:message)).must_equal ["observer failed"]
+    _(DecentJob::Instrumentation.instrument("isolation.decent_job", {}, database: @database, on_error: nil) { 43 }).must_equal 43
+    _(reported.size).must_equal 1
+  end
+
   [false, true].each do |raises|
     it "preserves application #{raises ? "exceptions" : "returns"} when start freezes its payload and fails" do
       observer = Object.new

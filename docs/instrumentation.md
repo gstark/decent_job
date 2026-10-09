@@ -64,6 +64,11 @@ These events are currently emitted by the runtime:
 | `perform_job` | `job` and `execution` snapshots, OS `process_id`, `thread_name`, and outcome fields described below | info |
 | `enqueue_concurrency_limit_exceeded` | Original Active Job as `job`, resolved `key`, `kind`, `scope`, numeric `limit`, observed `count` | info |
 | `enqueue_concurrency_throttle_exceeded` | Same admission fields, plus `window` in seconds | info |
+| `finished_job_task` | Worker/pool metadata, returned `result` (possibly nil), task `error`, completion `time` | error when `error` is present |
+| `finished_timer_task` | Worker/pool metadata, wake `result`, `error`, completion `time` | error when `error` is present |
+| `notifier_listen`, `notifier_unlisten` | OS `process_id`, `thread_name`, standard exception metadata on SQL failure | info |
+| `notifier_notified` | Raw `payload`, OS `process_id`, `thread_name` | debug |
+| `notifier_notify_error` | Listener-task `error`, OS `process_id`, `thread_name` | error |
 | `cleanup_preserved_jobs` | `older_than`, cutoff `timestamp`, `destroyed_jobs_count`, `destroyed_executions_count`, `destroyed_batches_count`, total `destroyed_records_count` | info |
 | `scheduler_shutdown_kill` | Interrupted `active_job_ids` | warn |
 | `cluster_start` | `subprocesses` | info |
@@ -103,8 +108,22 @@ For these job and admission events, failing start/finish observers are reported 
 
 Notification hashes are separate from the application's outcome state. If an observer freezes its notification hash, later outcome fields cannot be added to that hash; this is reported without changing the application result. An interruption during a finish observer updates the retained mutable notification hash to mark interruption and remove successful-return fields. Observers that already ran cannot observe an interruption that occurs later.
 
+## Worker tasks, polling, and listening
+
+`finished_job_task` describes a completed call to the worker's performer, including a queue check that found no executable job. Its `result` is a `Performer::Result` or nil. Its `error` is an exception that escaped that call. An ordinary returned result can have `unhandled_error` while the event's `error` remains nil. The worker reports the task exception or returned unhandled error through its error callback before emitting the event. Activity counters are already updated; retry wakeup, cache refill, and cleanup happen afterward. Failures in that later maintenance do not create another task-completion event. Killed, unfinished calls do not emit a completed task event.
+
+Task and polling events include `scheduler` (the `Worker`), normalized queue selector `queues`, its alias `performer_name`, zero-based `pool_index`, OS `process_id`, and `thread_name`. Their `time` is a completion `Time`, captured before any error reporter or event observer can delay delivery.
+
+Polling remains integrated into execution threads. `finished_timer_task` is emitted when a positive polling deadline expires, with `result` equal to the number of new permits accepted by that wakeup (zero or one). A failed wake has a nil result and the actual error, reported through the worker callback before the event. It is separate from the subsequent queue check. Startup permits, notifications, cached schedule deadlines, and immediate retry work do not emit timer events. Nonpositive poll intervals disable these timer events. Unlike the reference's accidentally unnamespaced event, DecentJob consistently uses `finished_timer_task.decent_job`.
+
+Listener events run on the listener's dedicated connection owner. `notifier_listen` surrounds the actual LISTEN statement. `notifier_notified` publishes a detached copy of the raw payload before JSON parsing and validation, including malformed messages. PostgreSQL can supply nil for an empty maintenance notification; that raw value is preserved in the event and treated as a broad wakeup afterward. Changing the event's raw string cannot change queue routing. Malformed messages are reported without reconnecting the listener or emitting a listener-task failure event.
+
+`notifier_unlisten` surrounds UNLISTEN on a healthy session whose LISTEN completed, before the connection is closed. Unusable or never-subscribed sessions close without an UNLISTEN event. `notifier_notify_error` describes listener connection/task failures, including cleanup failure, before invoking the error callback; it does not describe outgoing NOTIFY SQL. The original task error takes precedence if cleanup also fails. Expected loop errors during shutdown remain suppressed, while fatal exceptions and cleanup failures remain visible. Existing bounded reconnect waits and immediate connection-error reporting remain, instead of the reference's delayed reporting threshold. Raised observer and reporter errors cannot prevent connection cleanup.
+
+Worker runtime event observer errors use that worker's configured `on_thread_error`, including an explicit nil callback. Job events continue to use the global callback. All these callbacks are synchronous and run outside worker/runtime mutexes. The error callback and log subscriber are independent; if both log a failure, both messages may appear.
+
 ## Remaining instrumentation work
 
-The subscriber also implements the corresponding GoodJob handlers for scheduler creation/shutdown/restart, cron startup, task errors, polling errors, and listener lifecycle/messages/errors. Their runtime event producers are the next checkpoint; these handlers alone do not establish event parity.
+The subscriber also implements the corresponding GoodJob handlers for scheduler creation/shutdown/restart and cron startup. Their runtime event producers are the next checkpoint; these handlers alone do not establish event parity.
 
-That checkpoint will distinguish timer polling from job attempts. The pinned reference at `ad4be5c2` emits `finished_timer_task` without its namespace; DecentJob's corresponding event will use `.decent_job`. See the [implementation plan](implementation-plan.md) and [parity audit](parity.md) for the remaining I3 requirements.
+That checkpoint must place lifecycle observers outside the outer registry and resource locks while preserving captured-run shutdown and restart behavior. See the [implementation plan](implementation-plan.md) and [parity audit](parity.md) for the remaining I3 requirements.

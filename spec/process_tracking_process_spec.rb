@@ -2,12 +2,14 @@
 
 require "open3"
 require "spec_helper"
+require "support/cli_startup"
 require "support/process_tracking_cli_app"
 require "timeout"
 require "tmpdir"
 
 describe "process tracking across workers" do
   include DatabaseSpec
+  include CliStartupSpec
 
   before do
     DecentJob::Schema.new(database).migrate
@@ -46,9 +48,7 @@ describe "process tracking across workers" do
     @input, @output, @stderr, @process = Open3.popen3(environment, RbConfig.ruby, "-Ilib", "exe/decent_job", "start",
       "--require", File.expand_path("support/process_tracking_cli_app.rb", __dir__), "--shutdown-timeout", "2")
     @input.close
-    line = Timeout.timeout(8) { @output.gets }
-    diagnostic = @stderr.read if line.nil? && @process.join(2)
-    _(line.to_s).must_include "DecentJob started", diagnostic
+    await_started(@output, @stderr)
     await { File.exist?(@started) } if mode
     job && DecentJob::Job.find(job.provider_job_id, database: database)
   end

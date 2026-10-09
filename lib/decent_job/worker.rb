@@ -2,6 +2,7 @@
 
 require "decent_job/cleaner"
 require "decent_job/cleanup_tracker"
+require "decent_job/instrumentation"
 require "decent_job/performer"
 require "decent_job/queue_selection"
 require "decent_job/resource_shutdown"
@@ -362,49 +363,72 @@ module DecentJob
           end
         }, on_unhandled_exception: ->(error) { execution_error = error })
       loop do
-        revision = nil
+        revision = poll = task_error = nil
         begin
-          Thread.handle_interrupt(Object => :on_blocking) { revision = await_work(index) }
+          reported_error = nil
+          result = retry_job_id = nil
+          retry_attempt = false
+          Thread.handle_interrupt(Object => :on_blocking) { revision, poll = await_work(index) }
+          if poll
+            reported_error = poll[:error]
+            report_error(reported_error) if reported_error
+            instrument_pool("finished_timer_task", index, **poll)
+            raise reported_error if reported_error
+          end
           break unless revision
 
           execution_error = nil
-          result = nil
-          retry_attempt = false
           execution_finished = false
           lowered_priority = apply_thread_priority(original_priority, lowered_priority)
           cleanup_processes
           @mutex.synchronize { @scheduler_stats.fetch(index)[:check_queue_at] = Time.now.iso8601(6) }
-          result = performer.perform_one(queues: selection, stopping: method(:stopping?))
+          task_error = nil
+          begin
+            result = performer.perform_one(queues: selection, stopping: method(:stopping?))
+          rescue Exception => error # standard:disable Lint/RescueException
+            task_error = error
+          end
           break if Thread.current.status == "aborting"
 
+          completed_at = Time.now
           if result
             record_attempt(index, error: result.error)
             execution_finished = true
-            if result.state == "retried"
-              Store.new(@database).scheduling_hints([result.job_id]).each { |state| wake(state) }
+          elsif task_error
+            if task_error.equal?(execution_error)
+              record_attempt(index, error: task_error)
+              execution_finished = true
+            elsif executing
+              @mutex.synchronize do
+                @idle_since = monotonic_time
+                @scheduler_stats.fetch(index)[:execution_at] = Time.now.iso8601(6)
+              end
+              execution_finished = true
             end
-            report_error(result.unhandled_error) if result.unhandled_error
-            cleanup_after_attempt
           else
             @mutex.synchronize do
               counters = @scheduler_stats.fetch(index)
               counters[:empty_executions_count] += 1
               counters[:last_empty_at] = Time.now.iso8601(6)
             end
+          end
+          retry_job_id = result.job_id.dup if result&.state == "retried"
+          reported_error = task_error || result&.unhandled_error
+          report_error(reported_error) if reported_error
+          instrument_pool("finished_job_task", index, result: result, error: task_error, time: completed_at)
+          raise task_error if task_error
+          reported_error = nil
+
+          if result
+            if retry_job_id
+              Store.new(@database).scheduling_hints([retry_job_id]).each { |state| wake(state) }
+            end
+            cleanup_after_attempt
+          else
             refresh_cache(pool, index)
           end
         rescue Exception => error # standard:disable Lint/RescueException
-          if error.equal?(execution_error)
-            record_attempt(index, error: error)
-            execution_finished = true
-          elsif executing && !execution_finished
-            @mutex.synchronize do
-              @idle_since = monotonic_time
-              @scheduler_stats.fetch(index)[:execution_at] = Time.now.iso8601(6)
-            end
-            execution_finished = true
-          end
-          report_error(error)
+          report_error(error) unless error.equal?(reported_error)
           raise if error.equal?(execution_error) || !error.is_a?(StandardError)
           wait(retry_interval)
           retry_attempt = true
@@ -435,6 +459,18 @@ module DecentJob
       end
     end
 
+    def instrument_pool(name, index, **payload)
+      queues = @mutex.synchronize { @scheduler_stats.fetch(index).fetch(:queues).dup }
+      instrument(name, payload.merge(scheduler: self, queues: queues, performer_name: queues.dup, pool_index: index))
+    end
+
+    def instrument(name, payload = {}, &block)
+      payload = payload.merge(process_id: Process.pid, thread_name: (Thread.current.name || Thread.current.object_id).to_s)
+      Instrumentation.instrument("#{name}.decent_job", payload, database: @database, on_error: @on_thread_error) do
+        block&.call
+      end
+    end
+
     def apply_thread_priority(original_priority, previously_lowered)
       enabled = lower_thread_priority
       Thread.current.priority = enabled ? -3 : original_priority if enabled || previously_lowered
@@ -455,11 +491,17 @@ module DecentJob
             cache.expire(now)
             cache.request(@pools.fetch(index).fetch(:threads))
           end
-          cache.wake(1) if poll_at && monotonic_time >= poll_at
+          if poll_at && monotonic_time >= poll_at
+            begin
+              poll = {result: cache.wake(1), error: nil, time: Time.now}
+            rescue Exception => error # standard:disable Lint/RescueException
+              return [nil, {result: nil, error: error, time: Time.now}]
+            end
+          end
           if cache.permits.positive?
             cache.permits -= 1
             cache.busy += 1
-            return cache.revision
+            return [cache.revision, poll]
           end
           waits = [0.5]
           waits << poll_at - monotonic_time if poll_at
@@ -535,9 +577,16 @@ module DecentJob
     def listen
       until stopping?
         connection = nil
+        listening = false
+        task_error = nil
         begin
-          connection = @database.connect
-          connection.exec("LISTEN decent_job")
+          Thread.handle_interrupt(Object => :on_blocking) { connection = @database.connect }
+          instrument("notifier_listen") do
+            Thread.handle_interrupt(Object => :on_blocking) do
+              connection.exec("LISTEN decent_job")
+              listening = true
+            end
+          end
           @mutex.synchronize { @listener_connected = true }
           wake
           keepalive_at = monotonic_time + 10
@@ -561,12 +610,31 @@ module DecentJob
             readable = IO.select([connection.socket_io, @listener_reader], nil, nil, 1)
             break if readable&.first&.include?(@listener_reader)
           end
-        rescue => error
-          @mutex.synchronize { @listener_connected = false }
-          report_error(error) unless stopping?
+        rescue Exception => error # standard:disable Lint/RescueException
+          task_error = error unless stopping? && error.is_a?(StandardError)
         ensure
-          @mutex.synchronize { @listener_connected = false }
-          connection&.finish unless connection&.finished?
+          Thread.handle_interrupt(Object => :never) do
+            @mutex.synchronize { @listener_connected = false }
+            begin
+              # A disconnected or unfinished LISTEN session cannot UNLISTEN.
+              if listening && !connection.finished? && connection.status == PG::CONNECTION_OK
+                instrument("notifier_unlisten") { connection.exec("UNLISTEN decent_job") }
+              end
+            rescue Exception => error # standard:disable Lint/RescueException
+              task_error ||= error
+            ensure
+              begin
+                connection.finish if connection && !connection.finished?
+              rescue Exception => error # standard:disable Lint/RescueException
+                task_error ||= error
+              end
+            end
+          end
+        end
+        if task_error
+          instrument("notifier_notify_error", error: task_error)
+          report_error(task_error)
+          raise task_error unless task_error.is_a?(StandardError)
         end
         wait(retry_interval) unless stopping?
       end
@@ -579,6 +647,7 @@ module DecentJob
     end
 
     def receive_notification(payload)
+      instrument("notifier_notified", payload: payload&.dup)
       # pg represents a PostgreSQL NOTIFY with no payload as nil.
       payload = "" if payload.nil?
       raise ArgumentError, "notification payload is too large" if payload.bytesize > Notifier::MAX_PAYLOAD_BYTES

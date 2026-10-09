@@ -2,12 +2,14 @@
 
 require "open3"
 require "spec_helper"
+require "support/cli_startup"
 require "support/recovery_cli_app"
 require "timeout"
 require "tmpdir"
 
 describe "execution recovery across processes" do
   include DatabaseSpec
+  include CliStartupSpec
 
   before do
     DecentJob::Schema.new(database).migrate
@@ -38,7 +40,7 @@ describe "execution recovery across processes" do
   def start_worker
     @input, @output, @stderr, @process = Open3.popen3(@environment, *@command)
     @input.close
-    _(Timeout.timeout(8) { @output.gets }.to_s).must_include "DecentJob started"
+    await_started(@output, @stderr)
   end
 
   def interrupted_job(klass)
