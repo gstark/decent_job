@@ -1,0 +1,28 @@
+# frozen_string_literal: true
+
+module DecentJob
+  class Schema
+    MIGRATIONS_PATH = File.expand_path("../../db/migrations", __dir__)
+
+    def initialize(database)
+      @database = database
+    end
+
+    def migrate
+      @database.transaction do |connection|
+        # Serialize installation before even creating the migrations table.
+        connection.exec("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || '.decent_job_schema', 0))")
+        connection.exec("CREATE TABLE IF NOT EXISTS decent_job_schema_migrations (version integer PRIMARY KEY)")
+        versions = connection.exec("SELECT version FROM decent_job_schema_migrations").column_values(0).map(&:to_i)
+        Dir[File.join(MIGRATIONS_PATH, "*.sql")].sort.each do |path|
+          version = File.basename(path).split("_").first.to_i
+          next if versions.include?(version)
+
+          connection.exec(File.read(path))
+          connection.exec_params("INSERT INTO decent_job_schema_migrations VALUES ($1)", [version])
+        end
+      end
+      self
+    end
+  end
+end

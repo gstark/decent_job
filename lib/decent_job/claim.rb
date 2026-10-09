@@ -1,0 +1,81 @@
+# frozen_string_literal: true
+
+require "json"
+require "securerandom"
+
+module DecentJob
+  class Claim
+    def initialize(database)
+      @database = database
+      @store = Store.new(database)
+    end
+
+    def with_next(queues: "*", job_id: nil, stopping: -> { false })
+      selection = queues.is_a?(QueueSelection) ? queues : QueueSelection.new(queues)
+      @database.with_connection do |connection|
+        candidates(connection, selection, job_id).each do |candidate|
+          return nil if stopping.call
+          key = candidate.fetch("lock_key")
+          next unless connection.exec_params("SELECT pg_try_advisory_lock($1::bigint)", [key]).getvalue(0, 0) == "t"
+
+          begin
+            row = start(candidate.fetch("id"))
+            return yield(row) if row
+          ensure
+            connection.exec_params("SELECT pg_advisory_unlock($1::bigint)", [key]) unless connection.finished? || connection.status != PG::CONNECTION_OK
+          end
+        end
+      end
+      nil
+    end
+
+    private
+
+    def candidates(connection, selection, job_id)
+      filter = if selection.queues.empty?
+        "TRUE"
+      elsif selection.exclude?
+        "NOT (queue_name = ANY($1::text[]))"
+      else
+        "queue_name = ANY($1::text[])"
+      end
+      order = selection.ordered? ? "array_position($1::text[], queue_name), " : ""
+      encoded = PG::TextEncoder::Array.new.encode(selection.queues)
+      connection.exec_params(<<~SQL, [encoded, job_id])
+        SELECT id, hashtextextended(current_schema() || '.decent_jobs.' || id::text, 0) AS lock_key
+        FROM decent_jobs
+        WHERE state IN ('ready', 'running') AND scheduled_at <= clock_timestamp()
+          AND #{filter} AND ($2::uuid IS NULL OR id = $2::uuid)
+          AND $1::text[] IS NOT NULL
+        ORDER BY #{order}priority, scheduled_at, id
+        LIMIT 1000
+      SQL
+    end
+
+    def start(id)
+      @database.transaction do |connection|
+        row = connection.exec_params(<<~SQL, [id]).first
+          SELECT * FROM decent_jobs WHERE id = $1
+            AND state IN ('ready', 'running') AND scheduled_at <= clock_timestamp()
+          FOR UPDATE
+        SQL
+        if row
+          if row["execution_id"]
+            error = JSON.generate("class" => "DecentJob::InterruptedError", "message" => "Previous execution lost ownership", "backtrace" => [])
+            connection.exec_params(<<~SQL, [row["execution_id"], error])
+              UPDATE decent_job_executions SET state = 'interrupted', finished_at = clock_timestamp(), error = $2
+              WHERE id = $1 AND state = 'running'
+            SQL
+          end
+          execution_id = SecureRandom.uuid
+          connection.exec_params("INSERT INTO decent_job_executions (id, job_id, process_id) VALUES ($1, $2, $3)", [execution_id, id, Process.pid])
+          @store.decode(connection.exec_params(<<~SQL, [id, execution_id]).first)
+            UPDATE decent_jobs SET state = 'running', execution_id = $2,
+              executions_count = executions_count + 1, updated_at = clock_timestamp()
+            WHERE id = $1 RETURNING *
+          SQL
+        end
+      end
+    end
+  end
+end
