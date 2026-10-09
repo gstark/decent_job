@@ -86,15 +86,18 @@ module DecentJob
       end
       order = selection.ordered? ? "array_position($1::text[], queue_name), " : ""
       encoded = PG::TextEncoder::Array.new.encode(selection.queues)
-      connection.exec_params(<<~SQL, [encoded, job_id])
+      configuration = DecentJob.configuration
+      timestamp = {created_at: "created_at", scheduled_at: "scheduled_at"}.fetch(configuration.dequeue_query_sort)
+      limit = job_id ? 1 : configuration.queue_select_limit
+      connection.exec_params(<<~SQL, [encoded, job_id, limit])
         SELECT id, hashtextextended(current_schema() || '.decent_jobs.' || id::text, 0) AS lock_key
         FROM decent_jobs
         WHERE state IN ('ready', 'running') AND scheduled_at <= clock_timestamp()
           AND #{filter} AND ($2::uuid IS NULL OR id = $2::uuid)
           AND $1::text[] IS NOT NULL
           AND #{@enable_pauses ? Pauses::EXCLUDED_SQL : "TRUE"}
-        ORDER BY #{order}priority, scheduled_at, id
-        LIMIT 1000
+        ORDER BY #{order}priority, #{timestamp}, id
+        LIMIT $3
       SQL
     end
 

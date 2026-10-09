@@ -82,6 +82,8 @@ DecentJob.configure do |config|
   config.lower_thread_priority = false
   config.poll_interval = 10
   config.max_cache = 10_000
+  config.dequeue_query_sort = :created_at
+  config.queue_select_limit = 1000
   config.enable_listen_notify = true
   config.enable_pauses = true
   config.shutdown_timeout = 30
@@ -101,7 +103,7 @@ Queue expressions:
 | `-mailers,slow` | Exclude both queues |
 | `urgent:2;default:3` | Separate pools of two and three threads |
 
-Smaller priority numbers run first. Equal priorities use scheduled time and job ID. Running jobs are not preempted.
+Smaller priority numbers run first. Equal priorities use creation time and job ID by default. Set `dequeue_query_sort = :scheduled_at` to order them by scheduled time instead. Both modes require jobs to be due. `queue_select_limit` bounds each candidate scan before advisory-lock attempts. See [dequeue ordering and limits](docs/scheduling.md#dequeue-ordering-and-limits) for retry behavior and configuration. Running jobs are not preempted.
 
 The default database pool reserves one connection per execution thread plus two for application operations. Automatic cron adds three per configured entry, or four when restart catch-up is enabled. Each worker's heartbeat monitor and optional listener have additional dedicated connections. Account separately for connections used by application code, especially Active Record. See [recurring jobs](docs/recurring-jobs.md) for scheduler costs and [process tracking](docs/process-tracking.md) for heartbeat lifecycle, worker statistics, and connection sizing.
 

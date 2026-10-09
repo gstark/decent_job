@@ -32,6 +32,8 @@ module DecentJob
     alias_method :daemonize?, :daemonize
 
     def initialize
+      @environment_dequeue_query_sort = normalize_dequeue_query_sort(ENV["DECENT_JOB_DEQUEUE_QUERY_SORT"])
+      @environment_queue_select_limit = normalize_queue_select_limit(ENV["DECENT_JOB_QUEUE_SELECT_LIMIT"])
       self.lower_thread_priority = ENV.fetch("DECENT_JOB_LOWER_THREAD_PRIORITY", "false") == "true"
       self.daemonize = ENV.fetch("DECENT_JOB_DAEMONIZE", "false")
       self.pidfile = ENV.fetch("DECENT_JOB_PIDFILE", File.expand_path("tmp/pids/decent_job.pid", Dir.pwd))
@@ -82,16 +84,34 @@ module DecentJob
     def apply_rails_config(options, environment:, logger:)
       @rails_environment = environment
       @rails_poll_interval = options[:poll_interval]
+      @rails_dequeue_query_sort = normalize_dequeue_query_sort(options[:dequeue_query_sort])
+      @rails_queue_select_limit = normalize_queue_select_limit(options[:queue_select_limit])
       @rails_default_execution_mode = {"development" => :async, "test" => :inline}.fetch(environment, :external)
       @rails_execution_mode = options[:execution_mode]&.to_sym
       @rails_logger = options[:logger] || logger
       previous = @rails_options || {}
       options.each do |name, value|
-        next if %i[execution_mode logger poll_interval].include?(name.to_sym) || (previous.key?(name) && previous[name] == value)
+        next if %i[execution_mode logger poll_interval dequeue_query_sort queue_select_limit].include?(name.to_sym) || (previous.key?(name) && previous[name] == value)
         public_send("#{name}=", value)
       end
       @rails_options = options.to_h.dup
       self
+    end
+
+    def dequeue_query_sort
+      @dequeue_query_sort || @rails_dequeue_query_sort || @environment_dequeue_query_sort || :created_at
+    end
+
+    def dequeue_query_sort=(value)
+      @dequeue_query_sort = normalize_dequeue_query_sort(value)
+    end
+
+    def queue_select_limit
+      @queue_select_limit || @rails_queue_select_limit || @environment_queue_select_limit || 1000
+    end
+
+    def queue_select_limit=(value)
+      @queue_select_limit = normalize_queue_select_limit(value)
     end
 
     def poll_interval
@@ -301,6 +321,24 @@ module DecentJob
     end
 
     private
+
+    def normalize_dequeue_query_sort(value)
+      return if value.nil?
+      value = value.to_sym if value.is_a?(String)
+      unless %i[created_at scheduled_at].include?(value)
+        raise ArgumentError, "dequeue_query_sort must be created_at or scheduled_at"
+      end
+      value
+    end
+
+    def normalize_queue_select_limit(value)
+      return if value.nil?
+      value = Integer(value, 10) if value.is_a?(String) && value.match?(/\A[0-9]+\z/)
+      unless value.is_a?(Integer) && value >= 0
+        raise ArgumentError, "queue_select_limit must be a nonnegative integer"
+      end
+      value
+    end
 
     def queue_groups
       raise ArgumentError, "queues must be a nonempty string" unless @queues.is_a?(String) && !@queues.strip.empty?

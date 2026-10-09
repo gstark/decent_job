@@ -15,6 +15,35 @@ The corresponding environment variables are `DECENT_JOB_POLL_INTERVAL` and `DECE
 bundle exec decent_job start --require ./jobs.rb --poll-interval -1 --max-cache 1000
 ```
 
+## Dequeue ordering and limits
+
+`dequeue_query_sort` defaults to `:created_at`, matching the pinned GoodJob version. This changes DecentJob's earlier scheduled-time-only ordering. Use `:scheduled_at` to retain that ordering:
+
+```ruby
+DecentJob.configure do |config|
+  config.dequeue_query_sort = :scheduled_at
+  config.queue_select_limit = 1000
+end
+```
+
+An explicitly ordered queue list such as `+urgent,default` takes precedence over job priority. Within a queue, or across an unordered selection, smaller priority numbers come first, followed by the chosen timestamp and job ID. Job ID supplies stable ties in both modes. Creation order never makes a future-scheduled job eligible early.
+
+An Active Job retry, direct self-reenqueue, or operator retry refreshes `created_at` in created-time mode, placing it after peers already waiting at the same priority. Scheduled-time mode preserves the original creation time. Attempt snapshots retain their original scheduling metadata. A backend retry after an unhandled error is not an Active Job reenqueue and preserves its timestamps. Management rescheduling changes the deadline without refreshing creation time; durable concurrency waiters also keep their own queue position.
+
+`queue_select_limit` defaults to 1,000. It bounds the eligible, queue-filtered, unpaused candidate set before advisory locks are attempted. Locked candidates count against this bound. If all candidates within it are locked, the attempt returns no job even when an unlocked job exists beyond the bound. Set the limit above the number of concurrently running jobs across workers to reduce this contention. Each attempt still executes at most one job.
+
+A limit of zero prevents ordinary dequeue attempts from selecting work. Explicitly targeted execution, including inline enqueue, still checks the requested job. This setting is separate from polling and the future-deadline cache; it does not disable their activity or stop existing jobs.
+
+Both controls are read when claiming work, so changes apply to an existing performer. Sort values accept the two named symbols or strings; limits accept nonnegative integers or decimal integer strings. Invalid values raise `ArgumentError` rather than silently becoming a different policy. Nil clears an explicit override.
+
+Precedence is explicit configuration or CLI, Rails configuration, environment, then defaults. Environment variables are `DECENT_JOB_DEQUEUE_QUERY_SORT` and `DECENT_JOB_QUEUE_SELECT_LIMIT`. Rails hosts can use `config.decent_job.dequeue_query_sort` and `config.decent_job.queue_select_limit`. CLI flags override configuration loaded with `--require`:
+
+```sh
+bundle exec decent_job start --require ./jobs.rb --dequeue-query-sort scheduled_at --queue-select-limit 2000
+```
+
+Migration 010 adds global and queue-scoped creation-order indexes. Existing scheduled-order indexes remain available. The new policy can execute against schema version 9 because it uses existing columns; run `decent_job migrate` to add the indexes.
+
 ## Polling and deadlines
 
 A positive polling interval enables periodic database checks. Fractional intervals are supported. Zero or a negative value disables polling. Values must be finite real numbers.

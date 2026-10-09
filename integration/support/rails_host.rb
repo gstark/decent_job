@@ -18,6 +18,11 @@ HOST_ROOT = ENV.fetch("HOST_ROOT")
 HOST_LOG = StringIO.new
 HOST_EXPLICIT_LOG = StringIO.new
 
+if HOST_SCENARIO == "dequeue_explicit"
+  DecentJob.configuration.dequeue_query_sort = :created_at
+  DecentJob.configuration.queue_select_limit = 3
+end
+
 if HOST_SCENARIO == "logging"
   DecentJob::LogSubscriber.logger
 elsif HOST_SCENARIO == "logging_explicit"
@@ -57,6 +62,10 @@ class DecentJobHostApplication < Rails::Application
   config.decent_job.poll_interval = 0.02
   config.decent_job.execution_mode = ENV.fetch("HOST_MODE").to_sym if ENV["HOST_MODE"]
   config.decent_job.logger = Logger.new(StringIO.new) if HOST_SCENARIO == "custom_logger"
+  if HOST_SCENARIO.start_with?("dequeue")
+    config.decent_job.dequeue_query_sort = "scheduled_at"
+    config.decent_job.queue_select_limit = "0"
+  end
   if HOST_SCENARIO == "cron_boot"
     config.decent_job.enable_cron = true
     config.decent_job.cron = {tick: {cron: "* * * * * *", class: "ScheduledHostJob"}}
@@ -108,6 +117,20 @@ result = {events: HOST_EVENTS, mode: RailsHostJob.queue_adapter.execution_mode,
           active_record_loaded: defined?(ActiveRecord::Base) ? true : false}
 
 case HOST_SCENARIO
+when "dequeue", "dequeue_explicit"
+  result[:dequeue_sort] = DecentJob.configuration.dequeue_query_sort
+  result[:candidate_limit] = DecentJob.configuration.queue_select_limit
+  first = RailsHostJob.perform_later("created first")
+  second = RailsHostJob.perform_later("scheduled first")
+  DecentJob.database.with_connection do |connection|
+    connection.exec_params("UPDATE decent_jobs SET created_at = clock_timestamp() - interval '2 hours', scheduled_at = clock_timestamp() - interval '1 hour' WHERE id = $1", [first.provider_job_id])
+    connection.exec_params("UPDATE decent_jobs SET created_at = clock_timestamp() - interval '1 hour', scheduled_at = clock_timestamp() - interval '2 hours' WHERE id = $1", [second.provider_job_id])
+  end
+  performer = DecentJob::Performer.new
+  result[:initially_performed] = !!performer.perform_one
+  DecentJob.configuration.queue_select_limit = 2
+  nil while performer.perform_one
+  result[:performed_order] = HOST_EVENTS.select { |event| event.first == "perform" }.map { |event| event[1] }
 when "logging", "logging_explicit"
   DecentJob.cleanup_preserved_jobs(older_than: 0)
   result[:host_messages] = HOST_LOG.string.scan("destroyed 0 preserved").size

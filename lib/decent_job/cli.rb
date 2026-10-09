@@ -110,6 +110,8 @@ module DecentJob
         parser.on("--[no-]daemonize", "Detach and run in the background") { |value| options[:daemonize] = value }
         parser.on("--pidfile PATH", "PID file for daemon mode") { |value| options[:pidfile] = value }
         parser.on("--idle-timeout SECONDS", Float, "Exit after this many idle seconds (single process)") { |value| options[:idle_timeout] = value }
+        parser.on("--dequeue-query-sort COLUMN", "Order candidates by created_at (default) or scheduled_at") { |value| options[:dequeue_query_sort] = value }
+        parser.on("--queue-select-limit N", "Maximum candidates per dequeue (default: 1000)") { |value| options[:queue_select_limit] = value }
         parser.on("--queues EXPRESSION", "Queue selection and optional thread pools") { |value| options[:queues] = value }
         parser.on("--subprocesses N", Integer, "Fork and supervise N worker processes") { |value| options[:subprocesses] = value }
         parser.on("--max-threads N", Integer, "Default threads per queue pool") { |value| options[:max_threads] = value }

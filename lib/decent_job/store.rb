@@ -95,6 +95,7 @@ module DecentJob
         result = connection.exec_params(<<~SQL, params)
           UPDATE decent_jobs SET state = 'ready', payload = $3, scheduled_at = $4,
             queue_name = $5, priority = $6, labels = $7, concurrency_keys = $8,
+            created_at = #{(DecentJob.configuration.dequeue_query_sort == :created_at) ? "clock_timestamp()" : "created_at"},
             updated_at = clock_timestamp(), finished_at = NULL, performed_at = NULL,
             error = #{context[:manual_retry] ? "error" : "NULL"}, error_event = 'retried'
           WHERE id = $1 AND execution_id IS NOT DISTINCT FROM $2::uuid

@@ -51,4 +51,20 @@ describe "scheduled job discovery" do
       connection.exec("SELECT pg_advisory_unlock_all()")
     end
   end
+  it "omits due jobs by default and accepts independent zero limits" do
+    RecordingJob.perform_later("due")
+    RecordingJob.set(wait: 60).perform_later("future")
+    _(@claim.next_scheduled_at.size).must_equal 1
+    _(@claim.next_scheduled_at(limit: 0, now_limit: 0)).must_equal []
+    times = @claim.next_scheduled_at(limit: 0, now_limit: 1)
+    _(times.size).must_equal 1
+    _(times.first).must_be :<=, Time.now
+  end
+
+  it "rejects invalid future and due discovery limits" do
+    [nil, false, -1, 1.5, "1"].each do |value|
+      _ { @claim.next_scheduled_at(limit: value) }.must_raise ArgumentError
+      _ { @claim.next_scheduled_at(now_limit: value) }.must_raise ArgumentError
+    end
+  end
 end

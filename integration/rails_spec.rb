@@ -25,6 +25,8 @@ describe "Rails 8.1 host integration" do
     environment = {"HOST_CONNECTION" => JSON.generate(@connection_options), "HOST_ROOT" => @directory,
                    "HOST_LOAD_EARLY" => early_load.to_s, "HOST_SCENARIO" => scenario, "HOST_MODE" => mode, "HOST_ACTIVE_RECORD" => active_record.to_s,
                    "HOST_SERVER" => server.to_s, "HOST_RESULT" => result_path, "RAILS_ENV" => environment, "HOST_ISOLATION" => isolation,
+                   "DECENT_JOB_DEQUEUE_QUERY_SORT" => scenario.start_with?("dequeue") ? "created_at" : nil,
+                   "DECENT_JOB_QUEUE_SELECT_LIMIT" => scenario.start_with?("dequeue") ? "5" : nil,
                    "DECENT_JOB_EXECUTION_MODE" => nil, "DECENT_JOB_ENABLE_CRON" => "false"}
     Open3.popen3(environment, RbConfig.ruby, "-Ilib", "integration/support/rails_host.rb", pgroup: true) do |input, output, error, process|
       input.close
@@ -67,6 +69,20 @@ describe "Rails 8.1 host integration" do
     result = run_host("custom_logger")
     _(result.fetch("logger")).must_equal false
     _(result.fetch("custom_logger")).must_equal true
+  end
+
+  it "uses host dequeue settings ahead of environment and applies a changed limit to the existing performer" do
+    result = run_host("dequeue")
+    _(result.values_at("dequeue_sort", "candidate_limit", "initially_performed")).must_equal ["scheduled_at", 0, false]
+    _(result.fetch("performed_order")).must_equal ["scheduled first", "created first"]
+    _(result.fetch("active_record_loaded")).must_equal false
+  end
+
+  it "keeps explicit dequeue settings ahead of host settings through Rails initialization" do
+    result = run_host("dequeue_explicit", early_load: true)
+    _(result.values_at("dequeue_sort", "candidate_limit", "initially_performed")).must_equal ["created_at", 3, true]
+    _(result.fetch("performed_order")).must_equal ["created first", "scheduled first"]
+    _(result.fetch("active_record_loaded")).must_equal false
   end
 
   it "updates an already-used default subscriber to the Rails logger and later replacements" do
