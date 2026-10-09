@@ -98,11 +98,21 @@ Cleanup verification: 936 specs, 3,037 assertions across the full PostgreSQL sui
 
 Execution-recovery verification: 981 specs, 3,381 assertions across the full PostgreSQL suite; Standard, gem build, and whitespace checks passed. Independent spec and quality reviews approved J2–J4. Real SIGKILL tests verify replacement retry/discard handlers, ordinary recovery, and exactly one replacement history entry. An unpacked gem passed configured exception handling, backend-retry payload/schedule preservation, and interruption-handler/history checks. Regressions cover atomic batch/concurrency/retention behavior, authoritative force-discard, nested callback isolation, reporter failures, and excluded exceptions. Worker, cron, adapter, and global shutdown drain remaining resources before re-raising fatal thread errors; reset keeps the database open until callbacks finish. No migrations or dependencies were added. J1 remains open for durations, latency, and per-attempt payload/schedule snapshots.
 
+### Execution history and metrics
+
+- [x] Add migration 008 for nullable execution payload, scheduled time, job class, queue, and duration snapshots, plus the job's current `performed_at`. Preserve old attempt records with unknown snapshot/duration fields; backfill only current start times that existing execution records prove.
+- [x] Snapshot before invoking Active Job, retain snapshots across retry mutations, and persist monotonic duration in seconds for completed attempts atomically with their outcome. Clear job `performed_at` when it reenqueues. Interrupted and operator-discarded attempts retain unknown monotonic durations rather than substitute recovery time.
+- [x] Add a read-only `Execution` API for lookup/history and job/attempt queue, runtime, and total latency. Keep raw `Store#executions` and `Job#executions` data available. Future jobs and missing historical data must yield unknown metrics where appropriate.
+- [x] Test successful, handled/unhandled retries, changed payload/schedule, callback time, clock jumps, interrupted/force-discarded attempts, migration upgrades, and retained batch/cron behavior. Independently review, run the full PostgreSQL suite, and exercise the unpacked gem.
+
+Timing contract: attempt duration uses the monotonic clock around Active Job execution and its callbacks, excluding outcome persistence and batch reconciliation. Attempt queue latency uses its immutable scheduled/start timestamps; total latency is queue plus monotonic runtime when both are known. Job queue/runtime latency follows the current lifecycle's scheduled/performed/finished timestamps, with no runtime for a pending retry. `Execution#interrupted_duration` reports wall time through recovery and includes downtime. DecentJob intentionally does not copy the reference's near-zero recovery measurement into the abandoned attempt's runtime.
+
+Execution-history verification: 1,010 specs, 3,690 assertions across the full PostgreSQL suite; Standard, gem build, and whitespace checks passed. Independent spec and quality reviews approved J1. An unpacked gem installed migration 008 and passed snapshot, retry numbering, duration, lookup, and interrupted-history checks. Real CLI tests verify live snapshots, SIGKILL replacement timing, and force-discard protection against the original owner returning. Upgrade tests from schema versions 1 and 7 preserve unknown data and reject stale starts from cancelled pending retries. Callback/executor tests verify monotonic timing across wall-clock jumps, while atomic rollback tests leave duration unfinished on persistence failure. No runtime dependencies were added. Aggregate metrics and process/scheduler activity remain open under I4.
+
 ### Remaining slices
 
-1. Execution history and metrics: snapshot each attempt's payload and scheduled time, persist monotonic duration, and expose job/attempt queue and runtime latency. Preserve unknown values for unfinished or historical attempts instead of inventing zero durations (remaining J1 and part of I4).
-2. Operations: process heartbeats, supervisor, systemd, Rails integration.
-3. Dashboard: authenticated job actions, histories, batches, schedules, processes and metrics.
-4. Compatibility: additional lock strategies, PgBouncer, benchmark and final parity audit.
+1. Operations: process heartbeats, supervisor, systemd, Rails integration.
+2. Dashboard: authenticated job actions, histories, batches, schedules, processes and metrics.
+3. Compatibility: additional lock strategies, PgBouncer, benchmark and final parity audit.
 
 Each slice requires behavior specs before implementation, real PostgreSQL verification, and independent review. Completion of one slice does not imply completion of the full rebuild.

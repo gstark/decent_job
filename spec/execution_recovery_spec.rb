@@ -285,6 +285,7 @@ describe "execution recovery" do
     _(row.fetch("state")).must_equal "running"
     _(row.fetch("finished_at")).must_be_nil
     _(@store.executions(job.provider_job_id).first.fetch("finished_at")).must_be_nil
+    _(@store.executions(job.provider_job_id).first.fetch("duration")).must_be_nil
     _(batch.reload.finished?).must_equal false
     database.with_connection do |connection|
       _(connection.exec("SELECT count(*) FROM decent_job_concurrency_claims WHERE state = 'granted'").getvalue(0, 0)).must_equal "1"

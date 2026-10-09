@@ -40,6 +40,7 @@ module DecentJob
       end
       context = {database: @database, job_id: row.fetch("active_job_id"), id: row.fetch("id"), execution_id: row.fetch("execution_id"),
                  execution_interrupted: row["execution_interrupted"], batch_id: row["batch_id"], batch_callback_id: row["batch_callback_id"], stopping: stopping}
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       begin
         Current.with(context) do
           ActiveSupport::Notifications.subscribed(subscriber, /\A(?:perform|enqueue_retry|discard|retry_stopped)\.active_job\z/) do
@@ -68,8 +69,9 @@ module DecentJob
         @on_unhandled_exception&.call(exception)
         raise
       end
+      duration = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
       unhandled_error = error if unhandled
-      state, error, error_event, forced = finish(row, state, error, error_event, active_job, unhandled)
+      state, error, error_event, forced = finish(row, state, error, error_event, active_job, unhandled, duration)
       raise error if raise_errors && unhandled && !forced
 
       Result.new(job_id: row.fetch("id"), state: state, error: error, unhandled_error: unhandled_error, error_event: error_event)
@@ -100,7 +102,7 @@ module DecentJob
       true
     end
 
-    def finish(row, state, error, error_event, active_job, unhandled)
+    def finish(row, state, error, error_event, active_job, unhandled, duration)
       details = error && JSON.generate("class" => error.class.name, "message" => error.message, "backtrace" => error.backtrace || [])
       batch_ids = []
       forced = false
@@ -130,7 +132,7 @@ module DecentJob
         state = "retried" if current["state"] == "ready" || (unhandled && DecentJob.configuration.retry_on_unhandled_error)
         if state == "retried"
           connection.exec_params(<<~SQL, [row.fetch("id"), details, error_event])
-            UPDATE decent_jobs SET state = 'ready', error = $2, error_event = $3,
+            UPDATE decent_jobs SET state = 'ready', error = $2, error_event = $3, performed_at = NULL,
               updated_at = clock_timestamp() WHERE id = $1
           SQL
         else
@@ -139,8 +141,9 @@ module DecentJob
               updated_at = clock_timestamp(), error = $3, error_event = $4 WHERE id = $1
           SQL
         end
-        connection.exec_params(<<~SQL, [row.fetch("execution_id"), state, details, current["batch_id"], error_event])
-          UPDATE decent_job_executions SET state = $2, finished_at = clock_timestamp(), error = $3, batch_id = $4, error_event = $5 WHERE id = $1
+        connection.exec_params(<<~SQL, [row.fetch("execution_id"), state, details, current["batch_id"], error_event, duration])
+          UPDATE decent_job_executions SET state = $2, finished_at = clock_timestamp(), error = $3,
+            batch_id = $4, error_event = $5, duration = $6 WHERE id = $1
         SQL
         batch_ids = current.values_at("batch_id", "batch_callback_id").compact.uniq
         BatchStore.new(@database).request(connection, batch_ids, job_id: row.fetch("id"), discarded: state == "discarded")

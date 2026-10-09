@@ -11,7 +11,7 @@ module DecentJob
     class AdapterMismatchError < StandardError; end
     class DiscardJobError < StandardError; end
 
-    ATTRIBUTES = %w[id active_job_id queue_name job_class priority payload scheduled_at labels concurrency_keys batch_id batch_callback_id cron_key cron_at state execution_id executions_count created_at updated_at finished_at error error_event].freeze
+    ATTRIBUTES = %w[id active_job_id queue_name job_class priority payload scheduled_at labels concurrency_keys batch_id batch_callback_id cron_key cron_at state execution_id executions_count created_at updated_at performed_at finished_at error error_event].freeze
     attr_reader :database, :id
     (ATTRIBUTES - ["id"]).each { |name| define_method(name) { @attributes.fetch(name) } }
 
@@ -50,6 +50,23 @@ module DecentJob
     rescue NameError
       raise unless ignore_deserialization_errors
       nil
+    end
+
+    def queue_latency
+      expected = scheduled_at || created_at
+      now = Time.now
+      return if expected >= now
+      (performed_at || finished_at || now) - expected
+    end
+
+    def runtime_latency
+      (finished_at || Time.now) - performed_at if performed_at
+    end
+
+    def total_latency
+      queue = queue_latency
+      runtime = runtime_latency
+      queue + runtime if queue && runtime
     end
 
     def status
