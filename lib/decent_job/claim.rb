@@ -18,21 +18,57 @@ module DecentJob
         candidates(connection, selection, job_id).each do |candidate|
           return nil if stopping.call
           key = candidate.fetch("lock_key")
-          locked = false
-          begin
-            locked = connection.exec_params("SELECT pg_try_advisory_lock($1::bigint)", [key]).getvalue(0, 0) == "t"
-            next unless locked
-            acquired = false
-            result = @process_tracker.register(stopping: stopping) do |process_id|
-              row = start(candidate.fetch("id"), process_id)
-              if row
-                acquired = true
-                yield(row)
+          # A session lock is reentrant. Skip keys already owned by this
+          # checkout so nested performers cannot interrupt an active attempt.
+          Thread.handle_interrupt(Object => :on_blocking) do
+            locked = false
+            ownership_known = false
+            original_error = nil
+            begin
+              locked = connection.exec_params(<<~SQL, [key]).getvalue(0, 0) == "t"
+                SELECT CASE WHEN EXISTS (
+                  SELECT 1 FROM pg_locks
+                  WHERE locktype = 'advisory' AND granted AND objsubid = 1
+                    AND pid = pg_backend_pid()
+                    AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+                    AND ((classid::bigint << 32) | objid::bigint) = $1::bigint
+                ) THEN false ELSE pg_try_advisory_lock($1::bigint) END
+              SQL
+              ownership_known = true
+              next unless locked
+
+              acquired = false
+              result = Thread.handle_interrupt(Object => :immediate) do
+                @process_tracker.register(stopping: stopping) do |process_id|
+                  row = start(candidate.fetch("id"), process_id)
+                  if row
+                    acquired = true
+                    yield(row)
+                  end
+                end
+              end
+              return result if acquired
+            rescue Exception => original_error # standard:disable Lint/RescueException
+              raise
+            ensure
+              unless Thread.current.status == "aborting" || connection.finished?
+                if !ownership_known
+                  # An interrupted query may have acquired the lock without
+                  # returning its result. Never return that session to the pool.
+                  connection.finish
+                elsif locked && connection.status == PG::CONNECTION_OK
+                  released = false
+                  begin
+                    connection.exec_params("SELECT pg_advisory_unlock($1::bigint)", [key])
+                    released = true
+                  rescue PG::Error
+                    raise unless original_error
+                  ensure
+                    connection.finish unless released || connection.finished?
+                  end
+                end
               end
             end
-            return result if acquired
-          ensure
-            connection.exec_params("SELECT pg_advisory_unlock($1::bigint)", [key]) if locked && Thread.current.status != "aborting" && !connection.finished? && connection.status == PG::CONNECTION_OK
           end
         end
       end
@@ -92,7 +128,7 @@ module DecentJob
       connection.exec_params(<<~SQL, [encoded, job_id, limit])
         SELECT id, hashtextextended(current_schema() || '.decent_jobs.' || id::text, 0) AS lock_key
         FROM decent_jobs
-        WHERE state IN ('ready', 'running') AND scheduled_at <= clock_timestamp()
+        WHERE state IN ('ready', 'running') AND finished_at IS NULL AND scheduled_at <= clock_timestamp()
           AND #{filter} AND ($2::uuid IS NULL OR id = $2::uuid)
           AND $1::text[] IS NOT NULL
           AND #{@enable_pauses ? Pauses::EXCLUDED_SQL : "TRUE"}
@@ -105,7 +141,7 @@ module DecentJob
       @database.transaction do |connection|
         row = connection.exec_params(<<~SQL, [id]).first
           SELECT * FROM decent_jobs WHERE id = $1
-            AND state IN ('ready', 'running') AND scheduled_at <= clock_timestamp()
+            AND state IN ('ready', 'running') AND finished_at IS NULL AND scheduled_at <= clock_timestamp()
             AND #{@enable_pauses ? Pauses::EXCLUDED_SQL : "TRUE"}
           FOR UPDATE
         SQL

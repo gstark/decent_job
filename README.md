@@ -274,7 +274,7 @@ A separate Active Record connection does not share this transaction. In Rails, s
 
 Execution is **at least once**. A process can die after an external side effect and before recording success, so jobs must tolerate retries. PostgreSQL releases session locks when it detects a disconnected worker. A replacement records the abandoned attempt as interrupted. During network partitions, an old job can continue external work even after losing its database session; database ownership checks cannot fence those external effects.
 
-Session locks require direct PostgreSQL connections or session pooling. PgBouncer transaction pooling is not supported by the current locking mode. Stop workers before forking and construct fresh database instances in child processes.
+Session locks require direct PostgreSQL connections or session pooling. PgBouncer transaction pooling is not supported by the current locking mode. Nested claims skip jobs already locked by their own session; see [advisory ownership](docs/scheduling.md#advisory-ownership). Stop workers before forking and construct fresh database instances in child processes.
 
 Unhandled job errors are retained as discarded jobs by default. Configure `handled_exceptions` and `retry_on_unhandled_error` to control backend error handling. The opt-in `ActiveJobExtensions::InterruptErrors` module exposes interrupted attempts to Active Job retry/discard handlers; see [execution errors and recovery](docs/execution-recovery.md). [Execution history and timing](docs/execution-history.md) describes attempt snapshots, durations, and latency. Inspect records and attempt histories with:
 

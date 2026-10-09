@@ -332,6 +332,25 @@ Dequeue verification: `bundle exec rake` passed 1,605 specs and 6,803 assertions
 
 Four real CLI cases verify the default creation order, scheduled-order override, future-job exclusion, candidate limits before competing session locks, and recovery after unlock. Two Rails-host cases verify environment/host/explicit precedence and changed limits on an existing performer. Focused specs cover stable ties, queue selectors, pauses, retry timestamp preservation and rollback, unchanged attempt snapshots and concurrency-waiter age, and execution before an additive version-9 index upgrade. P2 and P3 are implemented; broader configuration, additional lock strategies, aggregate statistics, and final parity verification remain open. Dashboard work stays deferred.
 
+### Lock compatibility sequence
+
+- [x] Audit and harden advisory claims against same-session reentry, ambiguous acquisition failures, missing or finished candidates, and connection loss. Verify nested public execution in a separate process.
+- [ ] Add SKIP LOCKED and hybrid ownership, with configuration and persisted mode metadata. Update execution, recovery, management, cleanup, batches, and concurrency claims together so each recognizes live owners from every supported mode.
+- [ ] Verify mixed-mode workers in separate processes, including crash recovery, retries, force-discard, and rolling configuration changes.
+- [ ] Verify PgBouncer transaction pooling with session-dependent features configured appropriately, and document the supported connection topology.
+
+Advisory hardening is the first checkpoint. Additional modes remain unsupported until their ownership and recovery paths pass review and real PostgreSQL verification.
+
+### Advisory ownership checkpoint
+
+Claims skip a session's existing job locks before trying to acquire another lock, preserving caller lock depth and the bounded candidate scan. A nested performer cannot interrupt its own active attempt; it can still execute another eligible job. Selection and the locked start recheck both reject finished records.
+
+Acquisition remains interruptible during database waits. If its result is unknown after interruption, the connection is retired instead of returning a possibly locked session to the pool. Known acquisitions release only their own key. Unlock failures preserve exceptions escaping this claim, while new unlock failures still propagate when the caller is handling an unrelated earlier exception. This distinction was identified and corrected during independent quality review.
+
+New PostgreSQL regressions cover caller lock depth, nested execution, candidate bounds, targeted zero-limit behavior, ambiguous acquisition, failed registration and attempt creation, nonlocal exit, deleted/finished candidates, and backend termination. A separate Ruby process verifies nested calls through `Performer`, one successful attempt per job, and released process ownership. Existing interruption and recovery suites cover killed checkouts and replacement attempts. No migrations or runtime dependencies were added.
+
+Advisory verification: `bundle exec rake` passed 1,617 specs and 6,869 assertions, seed 63832. Rails integration passed 20 cases and 126 assertions, seed 28862. The four optional WEBrick cases skipped under Bundler passed separately with 17 assertions, seed 48527. Independent spec and quality reviews, Standard, whitespace checks, gem build, and unpacked-gem execution passed. The package verified bounded same-session selection, preserved caller lock depth, nested targeted and ordinary execution, attempt histories, released process ownership, and the two runtime dependencies without Rails or Active Record. P4 is implemented. P5–P8, PgBouncer transaction pooling, aggregate statistics, and the remaining parity audit stay open. Dashboard work remains deferred.
+
 ### Remaining slices
 
 1. Operations: aggregate statistics and remaining configuration audit.

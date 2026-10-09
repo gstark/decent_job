@@ -44,6 +44,14 @@ bundle exec decent_job start --require ./jobs.rb --dequeue-query-sort scheduled_
 
 Migration 010 adds global and queue-scoped creation-order indexes. Existing scheduled-order indexes remain available. The new policy can execute against schema version 9 because it uses existing columns; run `decent_job migrate` to add the indexes.
 
+## Advisory ownership
+
+Each execution holds a PostgreSQL session advisory lock until its claim unwinds. A nested claim using that same session skips an already-held job lock without acquiring it again or changing its depth. It can select another eligible job within the candidate limit. Targeting the currently executing job returns no result.
+
+Claims release their own lock when execution returns or raises, or when registration or attempt creation fails. An interrupted acquisition whose result is unknown retires the connection, preventing an uncertain lock from returning to the pool. A connection failure during unlock preserves an already-propagating application exception. Recovery records an unfinished attempt as interrupted when a replacement claims it; see [execution recovery](execution-recovery.md).
+
+Eligibility is checked again under the job row lock. A candidate deleted or finished after selection cannot start another attempt. SKIP LOCKED and hybrid execution modes remain planned. The current mode requires direct PostgreSQL connections or session pooling.
+
 ## Polling and deadlines
 
 A positive polling interval enables periodic database checks. Fractional intervals are supported. Zero or a negative value disables polling. Values must be finite real numbers.
