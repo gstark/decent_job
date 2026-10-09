@@ -8,12 +8,14 @@ module DecentJob
     attr_accessor :database_url, :execution_mode, :queues, :max_threads,
       :handled_exceptions, :retry_on_unhandled_error, :poll_interval, :enable_listen_notify, :shutdown_timeout, :logger, :on_thread_error, :enable_pauses, :preserve_job_records, :cron, :enable_cron, :cron_graceful_restart_period
 
-    attr_reader :cleanup_discarded_jobs, :cleanup_preserved_jobs_before_seconds_ago,
+    attr_reader :advisory_lock_heartbeat, :process_heartbeat_interval, :cleanup_discarded_jobs, :cleanup_preserved_jobs_before_seconds_ago,
       :cleanup_interval_jobs, :cleanup_interval_seconds
 
     alias_method :cleanup_discarded_jobs?, :cleanup_discarded_jobs
 
     def initialize
+      self.advisory_lock_heartbeat = ENV.fetch("DECENT_JOB_ADVISORY_LOCK_HEARTBEAT", "false")
+      self.process_heartbeat_interval = Float(ENV.fetch("DECENT_JOB_PROCESS_HEARTBEAT_INTERVAL", "30"))
       self.cleanup_discarded_jobs = ENV.fetch("DECENT_JOB_CLEANUP_DISCARDED_JOBS", "true")
       self.cleanup_preserved_jobs_before_seconds_ago = Float(ENV.fetch("DECENT_JOB_CLEANUP_PRESERVED_JOBS_BEFORE_SECONDS_AGO", "1209600"))
       self.cleanup_interval_jobs = ENV["DECENT_JOB_CLEANUP_INTERVAL_JOBS"]
@@ -34,6 +36,25 @@ module DecentJob
       @shutdown_timeout = Float(ENV.fetch("DECENT_JOB_SHUTDOWN_TIMEOUT", "30"))
       @logger = Logger.new($stdout)
       @on_thread_error = ->(error) { @logger.error("#{error.class}: #{error.message}") }
+    end
+
+    def self.validate_process_options!(advisory, interval)
+      raise ArgumentError, "advisory_lock_heartbeat must be true or false" unless [true, false].include?(advisory)
+      unless interval.is_a?(Numeric) && interval.real? && interval.finite? && interval.positive? && interval < 300
+        raise ArgumentError, "process_heartbeat_interval must be finite, positive, and less than 300"
+      end
+    end
+
+    def advisory_lock_heartbeat=(value)
+      value = true if value == "true"
+      value = false if value == "false"
+      self.class.validate_process_options!(value, @process_heartbeat_interval || 30)
+      @advisory_lock_heartbeat = value
+    end
+
+    def process_heartbeat_interval=(value)
+      self.class.validate_process_options!(@advisory_lock_heartbeat, value)
+      @process_heartbeat_interval = value
     end
 
     def cleanup_discarded_jobs=(value)
@@ -115,7 +136,8 @@ module DecentJob
     end
 
     def worker_options
-      {queues: @queues, max_threads: @max_threads, poll_interval: @poll_interval,
+      {advisory_lock_heartbeat: @advisory_lock_heartbeat, process_heartbeat_interval: @process_heartbeat_interval,
+       queues: @queues, max_threads: @max_threads, poll_interval: @poll_interval,
        enable_listen_notify: @enable_listen_notify, on_thread_error: @on_thread_error,
        cleanup_interval_jobs: @cleanup_interval_jobs, cleanup_interval_seconds: @cleanup_interval_seconds,
        cleanup_preserved_jobs_before_seconds_ago: @cleanup_preserved_jobs_before_seconds_ago,

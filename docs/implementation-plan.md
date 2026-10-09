@@ -109,9 +109,21 @@ Timing contract: attempt duration uses the monotonic clock around Active Job exe
 
 Execution-history verification: 1,010 specs, 3,690 assertions across the full PostgreSQL suite; Standard, gem build, and whitespace checks passed. Independent spec and quality reviews approved J1. An unpacked gem installed migration 008 and passed snapshot, retry numbering, duration, lookup, and interrupted-history checks. Real CLI tests verify live snapshots, SIGKILL replacement timing, and force-discard protection against the original owner returning. Upgrade tests from schema versions 1 and 7 preserve unknown data and reject stale starts from cancelled pending retries. Callback/executor tests verify monotonic timing across wall-clock jumps, while atomic rollback tests leave duration unfinished on persistence failure. No runtime dependencies were added. Aggregate metrics and process/scheduler activity remain open under I4.
 
+### Process tracking and worker state
+
+- [x] Add process records with UUID identities, heartbeat timestamps, advisory/heartbeat liveness, and process/worker state. Preserve the execution's OS PID and add a process UUID; persist current job ownership independently of attempt history.
+- [x] Add an owned heartbeat tracker using a dedicated connection and reference-counted registrations. Track idle workers and active standalone/inline execution, survive pool exhaustion and reconnects, and retain registration while shutdown drains work.
+- [x] Integrate process ownership with claims, outcome persistence, and crash recovery. Cleanup must recheck liveness and job locks, clear only abandoned ownership, release granted concurrency claims in scope order, and preserve history and live work.
+- [x] Expose process inspection, worker capacity/activity and outcome counters, configuration/env controls, and database pool statistics. Keep PostgreSQL connections confined to their owner threads and reject inherited database handles after fork.
+- [x] Verify real process registration, SIGKILL recovery, heartbeat renewal under a saturated pool, bounded shutdown, and connection loss. Review independently, run the full PostgreSQL suite, and verify the packaged gem.
+
+Standalone defaults use timestamp heartbeats; optional advisory heartbeat ownership provides immediate process-liveness detection. A dedicated monitor connection keeps process registration independent of LISTEN/NOTIFY configuration and pool checkout availability. A process record may remain stale while a job still holds its own lock; cleanup must not release that live job's ownership or claims.
+
+Process-tracking verification: 1,044 specs, 3,909 assertions across the full PostgreSQL suite; Standard, gem build, and whitespace checks passed. Independent spec and quality reviews approved P9. An unpacked gem installed migration 009 and passed worker and standalone registration, process UUID history, heartbeats with a saturated pool, bounded shutdown, worker counters, and inactive cleanup. Real CLI specs cover idle registration without LISTEN, SIGTERM drain, SIGKILL recovery and waiter promotion, and heartbeat connection loss without releasing live ownership. Regression specs cover nested leases, row recreation, lock contention and timeout restoration, paged cleanup and cancellation, one active sweep, dead-thread capacity and restart, and inherited-database rejection after fork. Listener tests identify actual LISTEN sessions independently of heartbeat connection opening order. No runtime dependencies were added. The broader W7 statistics audit and other lock strategies remain open.
+
 ### Remaining slices
 
-1. Operations: process heartbeats, supervisor, systemd, Rails integration.
+1. Operations: supervisor, health probes, systemd, Rails integration, and remaining worker lifecycle refinements.
 2. Dashboard: authenticated job actions, histories, batches, schedules, processes and metrics.
 3. Compatibility: additional lock strategies, PgBouncer, benchmark and final parity audit.
 

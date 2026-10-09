@@ -4,11 +4,12 @@ module DecentJob
   class Performer
     Result = Data.define(:job_id, :state, :error, :unhandled_error, :error_event)
 
-    def initialize(database: DecentJob.database, enable_pauses: DecentJob.configuration.enable_pauses, on_unhandled_exception: nil)
+    def initialize(database: DecentJob.database, enable_pauses: DecentJob.configuration.enable_pauses, on_unhandled_exception: nil, process_tracker: nil, on_execution_start: nil)
+      @on_execution_start = on_execution_start
       @database = database
       @on_unhandled_exception = on_unhandled_exception
       @store = Store.new(database)
-      @claim = Claim.new(database, enable_pauses: enable_pauses)
+      @claim = Claim.new(database, enable_pauses: enable_pauses, process_tracker: process_tracker)
     end
 
     def perform_one(queues: "*", job_id: nil, raise_errors: false, stopping: -> { false })
@@ -22,6 +23,7 @@ module DecentJob
     private
 
     def execute(row, raise_errors:, stopping:)
+      @on_execution_start&.call
       active_job = nil
       error = nil
       error_event = nil
@@ -126,18 +128,19 @@ module DecentJob
           stored_error = JSON.parse(current["error"] || "{}")
           error = Job::DiscardJobError.new(stored_error["message"]) if stored_error["class"] == "DecentJob::Job::DiscardJobError"
           forced = true
+          connection.exec_params("UPDATE decent_jobs SET locked_by_id = NULL, locked_at = NULL WHERE id = $1 AND execution_id = $2 AND locked_by_id = $3", [row.fetch("id"), row.fetch("execution_id"), row["locked_by_id"]])
           next
         end
 
         state = "retried" if current["state"] == "ready" || (unhandled && DecentJob.configuration.retry_on_unhandled_error)
         if state == "retried"
           connection.exec_params(<<~SQL, [row.fetch("id"), details, error_event])
-            UPDATE decent_jobs SET state = 'ready', error = $2, error_event = $3, performed_at = NULL,
+            UPDATE decent_jobs SET state = 'ready', error = $2, error_event = $3, performed_at = NULL, locked_by_id = NULL, locked_at = NULL,
               updated_at = clock_timestamp() WHERE id = $1
           SQL
         else
           connection.exec_params(<<~SQL, [row.fetch("id"), state, details, error_event])
-            UPDATE decent_jobs SET state = $2, finished_at = clock_timestamp(),
+            UPDATE decent_jobs SET state = $2, finished_at = clock_timestamp(), locked_by_id = NULL, locked_at = NULL,
               updated_at = clock_timestamp(), error = $3, error_event = $4 WHERE id = $1
           SQL
         end

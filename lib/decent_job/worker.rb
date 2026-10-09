@@ -10,6 +10,8 @@ module DecentJob
   # notification listener uses its own connection and only hints workers to poll.
   class Worker
     def initialize(database:, queues: "*", max_threads: 5, poll_interval: 1, enable_listen_notify: true, on_thread_error: DecentJob.configuration.on_thread_error,
+      advisory_lock_heartbeat: DecentJob.configuration.advisory_lock_heartbeat,
+      process_heartbeat_interval: DecentJob.configuration.process_heartbeat_interval,
       cleanup_interval_jobs: DecentJob.configuration.cleanup_interval_jobs,
       cleanup_interval_seconds: DecentJob.configuration.cleanup_interval_seconds,
       cleanup_preserved_jobs_before_seconds_ago: DecentJob.configuration.cleanup_preserved_jobs_before_seconds_ago,
@@ -18,6 +20,8 @@ module DecentJob
         raise ArgumentError, "poll_interval must be a finite positive number"
       end
 
+      Configuration.validate_process_options!(advisory_lock_heartbeat, process_heartbeat_interval)
+      @process_options = {advisory_lock_heartbeat: advisory_lock_heartbeat, process_heartbeat_interval: process_heartbeat_interval}
       @cleanup_tracker = CleanupTracker.new(cleanup_interval_jobs: cleanup_interval_jobs, cleanup_interval_seconds: cleanup_interval_seconds)
       @cleanup_options = {older_than: cleanup_preserved_jobs_before_seconds_ago, include_discarded: cleanup_discarded_jobs}
       Cleaner.validate_options!(**@cleanup_options)
@@ -32,6 +36,8 @@ module DecentJob
       @generation = 0
       @stopping = true
       @threads = []
+      @execution_threads = []
+      reset_stats
     end
 
     def start
@@ -39,11 +45,17 @@ module DecentJob
         return self if @threads.any?(&:alive?)
 
         @stopping = false
-        @threads = @pools.flat_map do |pool|
+        reset_stats(running: true)
+        @failure = nil
+        @process_cleanup_at = 0
+        @process_cleanup_running = false
+        @process_tracker = ProcessTracker.new(database: @database, **@process_options, state: method(:stats), on_thread_error: @on_thread_error)
+        @execution_threads = @pools.each_with_index.flat_map do |pool, index|
           Array.new(pool.fetch(:threads)) do
-            Thread.new { run(pool.fetch(:selection)) }
+            Thread.new { run(pool, index) }
           end
         end
+        @threads = @execution_threads.dup
         if @enable_listen_notify
           @listener_reader, @listener_writer = IO.pipe
           @threads << Thread.new { listen }
@@ -53,7 +65,7 @@ module DecentJob
     end
 
     def running?
-      @mutex.synchronize { !@stopping && @threads.any?(&:alive?) }
+      @mutex.synchronize { !@stopping && @execution_threads.any?(&:alive?) }
     end
 
     def wake
@@ -76,8 +88,9 @@ module DecentJob
         @listener_writer&.write_nonblock(".", exception: false)
         @threads.dup
       end
+      @process_tracker&.stop
       # A fatal task can make join raise; finish draining every owned thread.
-      failure = nil
+      failure = @mutex.synchronize { @failure }
       threads.each do |thread|
         next if thread == Thread.current
 
@@ -88,33 +101,152 @@ module DecentJob
           failure ||= error
         end
       end
+      remaining = deadline && [deadline - monotonic_time, 0].max
+      begin
+        monitor_stopped = @process_tracker.nil? || @process_tracker.join(remaining)
+      rescue Exception => error # standard:disable Lint/RescueException
+        failure ||= error
+      end
+      failure = @mutex.synchronize { @failure } || failure
       raise failure if failure
-      threads.none?(&:alive?)
+      threads.none?(&:alive?) && monitor_stopped
+    end
+
+    def process_id
+      @process_tracker&.process_id
+    end
+
+    def stats
+      @mutex.synchronize do
+        schedulers = @scheduler_stats.map(&:dup)
+        {schedulers: schedulers,
+         total_executions_count: schedulers.sum { |pool| pool.fetch(:total_executions_count) },
+         total_succeeded_executions_count: schedulers.sum { |pool| pool.fetch(:succeeded_executions_count) },
+         total_errored_executions_count: schedulers.sum { |pool| pool.fetch(:errored_executions_count) }}
+      end
+    end
+
+    def idle?
+      stats.fetch(:schedulers).all? { |pool| pool.fetch(:active_threads).zero? }
     end
 
     private
 
-    def run(selection)
+    def reset_stats(running: false)
+      @scheduler_stats = @pools.map do |pool|
+        selection = pool.fetch(:selection)
+        prefix = if selection.exclude?
+          "-"
+        elsif selection.ordered?
+          "+"
+        else
+          ""
+        end
+        queues = selection.queues.empty? ? "*" : prefix + selection.queues.join(",")
+        live_threads = running ? pool.fetch(:threads) : 0
+        {queues: queues, live_threads: live_threads, max_threads: pool.fetch(:threads), active_threads: 0,
+         available_threads: live_threads, total_executions_count: 0, succeeded_executions_count: 0,
+         errored_executions_count: 0, empty_executions_count: 0, started_at: Time.now.iso8601(6),
+         last_execution_at: nil, last_success_at: nil, last_error_at: nil, last_empty_at: nil}
+      end
+    end
+
+    def record_attempt(index, error:)
+      @mutex.synchronize do
+        counters = @scheduler_stats.fetch(index)
+        counters[:total_executions_count] += 1
+        counters[error ? :errored_executions_count : :succeeded_executions_count] += 1
+        now = Time.now.iso8601(6)
+        counters[:last_execution_at] = now
+        counters[error ? :last_error_at : :last_success_at] = now
+      end
+    end
+
+    def run(pool, index)
+      @process_tracker.register(stopping: method(:stopping?)) { run_registered(pool, index) }
+    rescue Exception => error # standard:disable Lint/RescueException
+      @mutex.synchronize { @failure ||= error }
+      raise
+    ensure
+      last = @mutex.synchronize do
+        counters = @scheduler_stats.fetch(index)
+        counters[:live_threads] -= 1
+        counters[:available_threads] -= 1
+        if @scheduler_stats.all? { |pool_stats| pool_stats.fetch(:live_threads).zero? }
+          @stopping = true
+          @condition.broadcast
+          @listener_writer&.write_nonblock(".", exception: false)
+          true
+        end
+      end
+      @process_tracker.stop if last
+    end
+
+    def run_registered(pool, index)
+      selection = pool.fetch(:selection)
       execution_error = nil
-      performer = Performer.new(database: @database, on_unhandled_exception: ->(error) { execution_error = error })
+      executing = false
+      performer = Performer.new(database: @database, process_tracker: @process_tracker,
+        on_execution_start: lambda {
+          executing = true
+          @mutex.synchronize do
+            counters = @scheduler_stats.fetch(index)
+            counters[:active_threads] += 1
+            counters[:available_threads] -= 1
+          end
+        }, on_unhandled_exception: ->(error) { execution_error = error })
       loop do
         generation = @mutex.synchronize { @stopping ? nil : @generation }
         break unless generation
 
         begin
           execution_error = nil
+          cleanup_processes
           result = performer.perform_one(queues: selection, stopping: method(:stopping?))
           if result
+            record_attempt(index, error: result.error)
             report_error(result.unhandled_error) if result.unhandled_error
             cleanup_after_attempt
           else
+            @mutex.synchronize do
+              counters = @scheduler_stats.fetch(index)
+              counters[:empty_executions_count] += 1
+              counters[:last_empty_at] = Time.now.iso8601(6)
+            end
             wait(@poll_interval, generation)
           end
         rescue Exception => error # standard:disable Lint/RescueException
+          record_attempt(index, error: error) if error.equal?(execution_error)
           report_error(error)
           raise if error.equal?(execution_error) || !error.is_a?(StandardError)
           wait(retry_interval)
+        ensure
+          if executing
+            @mutex.synchronize do
+              counters = @scheduler_stats.fetch(index)
+              counters[:active_threads] -= 1
+              counters[:available_threads] += 1
+            end
+            executing = false
+          end
         end
+      end
+    end
+
+    def cleanup_processes
+      due = @mutex.synchronize do
+        now = monotonic_time
+        next false if @stopping || @process_cleanup_running || now < @process_cleanup_at
+        @process_cleanup_running = true
+        @process_cleanup_at = now + ProcessRecord::STALE_INTERVAL
+        true
+      end
+      return unless due
+
+      begin
+        ProcessRecord.cleanup(database: @database, stopping: method(:stopping?))
+      ensure
+        @mutex.synchronize { @process_cleanup_running = false }
       end
     end
 

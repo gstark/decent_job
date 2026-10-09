@@ -100,7 +100,12 @@ module DecentJob
     # An independently owned connection for LISTEN and other session state.
     # The caller must close it. It does not consume a pool checkout.
     def connect
+      raise ForkedDatabase, "create a new Database after forking" if @pid != Process.pid
       PG.connect(@url)
+    end
+
+    def stats
+      @mutex.synchronize { {size: @pool_size, connections: @size, active: @borrowed.size, idle: @idle.size} }
     end
 
     # Busy connections close when their current owner returns them.

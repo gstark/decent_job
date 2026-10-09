@@ -11,7 +11,7 @@ module DecentJob
     class AdapterMismatchError < StandardError; end
     class DiscardJobError < StandardError; end
 
-    ATTRIBUTES = %w[id active_job_id queue_name job_class priority payload scheduled_at labels concurrency_keys batch_id batch_callback_id cron_key cron_at state execution_id executions_count created_at updated_at performed_at finished_at error error_event].freeze
+    ATTRIBUTES = %w[id active_job_id queue_name job_class priority payload scheduled_at labels concurrency_keys batch_id batch_callback_id cron_key cron_at state execution_id locked_by_id locked_at executions_count created_at updated_at performed_at finished_at error error_event].freeze
     attr_reader :database, :id
     (ATTRIBUTES - ["id"]).each { |name| define_method(name) { @attributes.fetch(name) } }
 

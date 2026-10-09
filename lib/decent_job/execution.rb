@@ -5,7 +5,7 @@ require "active_support/core_ext/object/deep_dup"
 module DecentJob
   # Read-only attempt snapshots. Latencies and measured durations are seconds.
   class Execution
-    ATTRIBUTES = %w[id job_id started_at finished_at state error process_id batch_id error_event payload scheduled_at job_class queue_name duration].freeze
+    ATTRIBUTES = %w[id job_id started_at finished_at state error process_id process_uuid batch_id error_event payload scheduled_at job_class queue_name duration].freeze
     attr_reader :database, :id
     (ATTRIBUTES - ["id"]).each { |name| define_method(name) { @attributes.fetch(name) } }
     alias_method :performed_at, :started_at

@@ -93,7 +93,7 @@ Queue expressions:
 
 Smaller priority numbers run first. Equal priorities use scheduled time and job ID. Running jobs are not preempted.
 
-The default database pool reserves one connection per execution thread plus two for application operations. Automatic cron adds three per configured entry, or four when restart catch-up is enabled. The listener has an additional dedicated connection. Account separately for connections used by application code, especially Active Record. See [recurring jobs](docs/recurring-jobs.md) for scheduler thread costs and explicit pool sizing.
+The default database pool reserves one connection per execution thread plus two for application operations. Automatic cron adds three per configured entry, or four when restart catch-up is enabled. Each worker's heartbeat monitor and optional listener have additional dedicated connections. Account separately for connections used by application code, especially Active Record. See [recurring jobs](docs/recurring-jobs.md) for scheduler costs and [process tracking](docs/process-tracking.md) for heartbeat lifecycle, worker statistics, and connection sizing.
 
 ## Embedded execution and tests
 

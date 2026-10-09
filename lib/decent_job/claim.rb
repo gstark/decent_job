@@ -5,7 +5,8 @@ require "securerandom"
 
 module DecentJob
   class Claim
-    def initialize(database, enable_pauses: false)
+    def initialize(database, enable_pauses: false, process_tracker: nil)
+      @process_tracker = process_tracker || ProcessTracker.new(database: database)
       @database = database
       @store = Store.new(database)
       @enable_pauses = enable_pauses
@@ -20,8 +21,15 @@ module DecentJob
           next unless connection.exec_params("SELECT pg_try_advisory_lock($1::bigint)", [key]).getvalue(0, 0) == "t"
 
           begin
-            row = start(candidate.fetch("id"))
-            return yield(row) if row
+            acquired = false
+            result = @process_tracker.register(stopping: stopping) do |process_id|
+              row = start(candidate.fetch("id"), process_id)
+              if row
+                acquired = true
+                yield(row)
+              end
+            end
+            return result if acquired
           ensure
             connection.exec_params("SELECT pg_advisory_unlock($1::bigint)", [key]) unless connection.finished? || connection.status != PG::CONNECTION_OK
           end
@@ -54,7 +62,7 @@ module DecentJob
       SQL
     end
 
-    def start(id)
+    def start(id, process_id)
       @database.transaction do |connection|
         row = connection.exec_params(<<~SQL, [id]).first
           SELECT * FROM decent_jobs WHERE id = $1
@@ -65,13 +73,14 @@ module DecentJob
         if row
           interrupted_at = interrupt_previous(connection, row)
           execution_id = SecureRandom.uuid
-          execution = connection.exec_params(<<~SQL, [execution_id, id, Process.pid]).first
-            INSERT INTO decent_job_executions (id, job_id, process_id, payload, scheduled_at, job_class, queue_name)
-            SELECT $1, id, $3, payload, scheduled_at, job_class, queue_name FROM decent_jobs WHERE id = $2
+          execution = connection.exec_params(<<~SQL, [execution_id, id, Process.pid, process_id]).first
+            INSERT INTO decent_job_executions (id, job_id, process_id, process_uuid, payload, scheduled_at, job_class, queue_name)
+            SELECT $1, id, $3, $4, payload, scheduled_at, job_class, queue_name FROM decent_jobs WHERE id = $2
             RETURNING started_at
           SQL
-          started = @store.decode(connection.exec_params(<<~SQL, [id, execution_id, execution.fetch("started_at")]).first)
+          started = @store.decode(connection.exec_params(<<~SQL, [id, execution_id, execution.fetch("started_at"), process_id]).first)
             UPDATE decent_jobs SET state = 'running', execution_id = $2, performed_at = $3,
+              locked_by_id = $4, locked_at = clock_timestamp(),
               executions_count = executions_count + 1, updated_at = clock_timestamp()
             WHERE id = $1 RETURNING *
           SQL

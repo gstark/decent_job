@@ -39,6 +39,20 @@ describe DecentJob::Worker do
     Timeout.timeout(5) { queue.pop }
   end
 
+  def wait_for_listener(connections, excluding: nil)
+    @connection_pids ||= []
+    listener = nil
+    wait_until do
+      @connection_pids << connections.pop(true) until connections.empty?
+      encoded = PG::TextEncoder::Array.new.encode(@connection_pids)
+      listener = @admin.exec_params(<<~SQL, [encoded, excluding]).first
+        SELECT pid FROM pg_stat_activity WHERE pid = ANY($1::integer[])
+          AND query = 'LISTEN decent_job' AND ($2::integer IS NULL OR pid <> $2)
+      SQL
+    end
+    listener.fetch("pid").to_i
+  end
+
   it "starts idempotently, polls for work, and leaves the database open on shutdown" do
     worker = start_worker(max_threads: 1, poll_interval: 0.02, enable_listen_notify: false)
     _(worker.start).must_equal worker
@@ -114,10 +128,7 @@ describe DecentJob::Worker do
       end
     end
     worker = start_worker(max_threads: 1, poll_interval: 60, on_thread_error: ->(error) { errors << error })
-    listener_pid = pop(connections)
-    wait_until do
-      @admin.exec_params("SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND query = 'LISTEN decent_job'", [listener_pid]).ntuples.positive?
-    end
+    wait_for_listener(connections)
     sleep 0.08
     RecordingJob.perform_later("notified")
     _(pop(RecordingJob.events)).must_equal "notified"
@@ -135,17 +146,11 @@ describe DecentJob::Worker do
       end
     end
     worker = start_worker(max_threads: 1, poll_interval: 60, on_thread_error: ->(error) { errors << error })
-    listener_pid = pop(connections)
-    wait_until do
-      @admin.exec_params("SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND query = 'LISTEN decent_job'", [listener_pid]).ntuples.positive?
-    end
+    listener_pid = wait_for_listener(connections)
     @admin.exec_params("SELECT pg_terminate_backend($1)", [listener_pid])
     _(pop(errors)).must_be_kind_of PG::Error
-    new_listener_pid = pop(connections)
+    new_listener_pid = wait_for_listener(connections, excluding: listener_pid)
     _(new_listener_pid).wont_equal listener_pid
-    wait_until do
-      @admin.exec_params("SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND query = 'LISTEN decent_job'", [new_listener_pid]).ntuples.positive?
-    end
     RecordingJob.perform_later("reconnected")
     _(pop(RecordingJob.events)).must_equal "reconnected"
     _(worker.shutdown(timeout: 1)).must_equal true
