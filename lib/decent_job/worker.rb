@@ -76,32 +76,43 @@ module DecentJob
         @listener_writer&.write_nonblock(".", exception: false)
         @threads.dup
       end
+      # A fatal task can make join raise; finish draining every owned thread.
+      failure = nil
       threads.each do |thread|
         next if thread == Thread.current
 
         remaining = deadline && [deadline - monotonic_time, 0].max
-        thread.join(remaining)
+        begin
+          thread.join(remaining)
+        rescue Exception => error # standard:disable Lint/RescueException
+          failure ||= error
+        end
       end
+      raise failure if failure
       threads.none?(&:alive?)
     end
 
     private
 
     def run(selection)
-      performer = Performer.new(database: @database)
+      execution_error = nil
+      performer = Performer.new(database: @database, on_unhandled_exception: ->(error) { execution_error = error })
       loop do
         generation = @mutex.synchronize { @stopping ? nil : @generation }
         break unless generation
 
         begin
+          execution_error = nil
           result = performer.perform_one(queues: selection, stopping: method(:stopping?))
           if result
+            report_error(result.unhandled_error) if result.unhandled_error
             cleanup_after_attempt
           else
             wait(@poll_interval, generation)
           end
-        rescue => error
+        rescue Exception => error # standard:disable Lint/RescueException
           report_error(error)
+          raise if error.equal?(execution_error) || !error.is_a?(StandardError)
           wait(retry_interval)
         end
       end
@@ -180,7 +191,7 @@ module DecentJob
 
     def report_error(error)
       @on_thread_error&.call(error)
-    rescue
+    rescue Exception # standard:disable Lint/RescueException
       # Error reporting is external code and must not terminate a worker.
       nil
     end

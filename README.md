@@ -256,7 +256,7 @@ Execution is **at least once**. A process can die after an external side effect 
 
 Session locks require direct PostgreSQL connections or session pooling. PgBouncer transaction pooling is not supported by the current locking mode. Stop workers before forking and construct fresh database instances in child processes.
 
-Unhandled job errors are retained as discarded jobs by default. Inspect records and attempt histories with:
+Unhandled job errors are retained as discarded jobs by default. Configure `handled_exceptions` and `retry_on_unhandled_error` to control backend error handling. The opt-in `ActiveJobExtensions::InterruptErrors` module exposes interrupted attempts to Active Job retry/discard handlers; see [execution errors and recovery](docs/execution-recovery.md). Inspect records and attempt histories with:
 
 ```ruby
 store = DecentJob::Store.new(DecentJob.database)

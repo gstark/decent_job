@@ -86,10 +86,20 @@ module DecentJob
         @stopping = true
         @worker
       end
-      DecentJob.stop_cron(database: @database, timeout: 0) if @database
-      worker&.shutdown(timeout: 0)
-      cron_stopped = !@database || DecentJob.stop_cron(database: @database, timeout: remaining_time(deadline))
-      worker_stopped = !worker || worker.shutdown(timeout: remaining_time(deadline))
+      # Signal both resources, then drain both within the same deadline, even
+      # when an owned thread's fatal exception makes shutdown raise.
+      failure = nil
+      attempt_shutdown = lambda do |&operation|
+        operation.call
+      rescue Exception => error # standard:disable Lint/RescueException
+        failure ||= error
+        false
+      end
+      attempt_shutdown.call { DecentJob.stop_cron(database: @database, timeout: 0) } if @database
+      attempt_shutdown.call { worker.shutdown(timeout: 0) } if worker
+      cron_stopped = !@database || attempt_shutdown.call { DecentJob.stop_cron(database: @database, timeout: remaining_time(deadline)) }
+      worker_stopped = !worker || attempt_shutdown.call { worker.shutdown(timeout: remaining_time(deadline)) }
+      raise failure if failure
       cron_stopped && worker_stopped
     end
 

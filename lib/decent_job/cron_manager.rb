@@ -59,10 +59,17 @@ module DecentJob
         @condition.broadcast
         @threads.dup
       end
+      # Fatal callbacks must not prevent sibling deliveries from draining.
+      failure = nil
       threads.each do |thread|
         next if thread == Thread.current
-        thread.join(deadline && [deadline - monotonic_time, 0].max)
+        begin
+          thread.join(deadline && [deadline - monotonic_time, 0].max)
+        rescue Exception => error # standard:disable Lint/RescueException
+          failure ||= error
+        end
       end
+      raise failure if failure
       threads.none?(&:alive?)
     end
 

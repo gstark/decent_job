@@ -4,6 +4,7 @@ require "active_job"
 require "decent_job/active_job_extensions/batches"
 require "decent_job/active_job_extensions/concurrency"
 require "decent_job/active_job_extensions/cron"
+require "decent_job/active_job_extensions/interrupt_errors"
 require "decent_job/active_job_extensions/labels"
 require "decent_job/adapter"
 require "decent_job/batch"
@@ -21,6 +22,8 @@ require "decent_job/cron_store"
 require "decent_job/current"
 require "decent_job/database"
 require "decent_job/inline_buffer"
+require "decent_job/interrupt_error"
+require "decent_job/interrupted_error"
 require "decent_job/job"
 require "decent_job/job_retry"
 require "decent_job/pauses"
@@ -173,7 +176,13 @@ module DecentJob
     end
 
     def reset!
-      shutdown
+      # Fatal task errors remain visible after all owned resources are drained.
+      failure = nil
+      begin
+        shutdown
+      rescue Exception => error # standard:disable Lint/RescueException
+        failure = error
+      end
       MUTEX.synchronize do
         @worker = nil
         @workers = []
@@ -185,6 +194,7 @@ module DecentJob
         @database = nil
         @configuration = Configuration.new
       end
+      raise failure if failure
     end
 
     def cleanup_preserved_jobs(older_than: nil, in_batches_of: 1000, include_discarded: configuration.cleanup_discarded_jobs?, database: nil, stopping: nil)
@@ -213,11 +223,22 @@ module DecentJob
 
     def stop_resources(resources, timeout:)
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout if timeout
-      resources.each { |resource| resource.shutdown(timeout: 0) }
-      resources.map do |resource|
+      # A failed thread join must not prevent other resources receiving stop.
+      failure = nil
+      resources.each do |resource|
+        resource.shutdown(timeout: 0)
+      rescue Exception => error # standard:disable Lint/RescueException
+        failure ||= error
+      end
+      stopped = resources.map do |resource|
         remaining = deadline && [deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC), 0].max
         resource.shutdown(timeout: remaining)
+      rescue Exception => error # standard:disable Lint/RescueException
+        failure ||= error
+        false
       end.all?
+      raise failure if failure
+      stopped
     end
 
     def register_exit_hook

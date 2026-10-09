@@ -6,7 +6,7 @@ require "logger"
 module DecentJob
   class Configuration
     attr_accessor :database_url, :execution_mode, :queues, :max_threads,
-      :poll_interval, :enable_listen_notify, :shutdown_timeout, :logger, :on_thread_error, :enable_pauses, :preserve_job_records, :cron, :enable_cron, :cron_graceful_restart_period
+      :handled_exceptions, :retry_on_unhandled_error, :poll_interval, :enable_listen_notify, :shutdown_timeout, :logger, :on_thread_error, :enable_pauses, :preserve_job_records, :cron, :enable_cron, :cron_graceful_restart_period
 
     attr_reader :cleanup_discarded_jobs, :cleanup_preserved_jobs_before_seconds_ago,
       :cleanup_interval_jobs, :cleanup_interval_seconds
@@ -18,6 +18,8 @@ module DecentJob
       self.cleanup_preserved_jobs_before_seconds_ago = Float(ENV.fetch("DECENT_JOB_CLEANUP_PRESERVED_JOBS_BEFORE_SECONDS_AGO", "1209600"))
       self.cleanup_interval_jobs = ENV["DECENT_JOB_CLEANUP_INTERVAL_JOBS"]
       self.cleanup_interval_seconds = ENV["DECENT_JOB_CLEANUP_INTERVAL_SECONDS"]
+      @handled_exceptions = [StandardError, NotImplementedError]
+      @retry_on_unhandled_error = false
       @preserve_job_records = true
       @enable_cron = ENV.fetch("DECENT_JOB_ENABLE_CRON", "false") == "true"
       @cron_graceful_restart_period = Float(ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]) if ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]
@@ -56,7 +58,21 @@ module DecentJob
       @cleanup_interval_seconds = cleanup_interval(value, default: 600)
     end
 
+    def handled_exception_classes
+      validate_handled_exceptions!
+
+      @handled_exceptions.map do |value|
+        klass = value.is_a?(String) ? value.constantize : value
+        raise ArgumentError, "handled_exceptions must contain exception classes or class names" unless klass.is_a?(Class) && klass <= Exception
+        klass
+      rescue NameError
+        raise ArgumentError, "handled_exceptions contains an unknown exception class: #{value.inspect}"
+      end
+    end
+
     def validate!
+      validate_handled_exceptions!
+      raise ArgumentError, "retry_on_unhandled_error must be true or false" unless [true, false].include?(@retry_on_unhandled_error)
       raise ArgumentError, "execution_mode must be external, inline, or async" unless %i[external inline async].include?(@execution_mode)
       QueueSelection.pools(@queues, default_threads: @max_threads)
       raise ArgumentError, "poll_interval must be positive" unless @poll_interval.is_a?(Numeric) && @poll_interval.positive? && @poll_interval.finite?
@@ -107,6 +123,13 @@ module DecentJob
     end
 
     private
+
+    def validate_handled_exceptions!
+      valid = @handled_exceptions.is_a?(Array) && @handled_exceptions.all? do |value|
+        (value.is_a?(Class) && value <= Exception) || (value.is_a?(String) && !value.empty?)
+      end
+      raise ArgumentError, "handled_exceptions must be an Array of exception classes or class names" unless valid
+    end
 
     def cleanup_interval(value, default:, integer: false)
       return default if value.nil? || value == "" || value == true

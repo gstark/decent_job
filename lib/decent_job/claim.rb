@@ -63,22 +63,37 @@ module DecentJob
           FOR UPDATE
         SQL
         if row
-          if row["execution_id"]
-            error = JSON.generate("class" => "DecentJob::InterruptedError", "message" => "Previous execution lost ownership", "backtrace" => [])
-            connection.exec_params(<<~SQL, [row["execution_id"], error])
-              UPDATE decent_job_executions SET state = 'interrupted', error_event = 'interrupted', finished_at = clock_timestamp(), error = $2
-              WHERE id = $1 AND state = 'running'
-            SQL
-          end
+          interrupted_at = interrupt_previous(connection, row)
           execution_id = SecureRandom.uuid
           connection.exec_params("INSERT INTO decent_job_executions (id, job_id, process_id) VALUES ($1, $2, $3)", [execution_id, id, Process.pid])
-          @store.decode(connection.exec_params(<<~SQL, [id, execution_id]).first)
+          started = @store.decode(connection.exec_params(<<~SQL, [id, execution_id]).first)
             UPDATE decent_jobs SET state = 'running', execution_id = $2,
               executions_count = executions_count + 1, updated_at = clock_timestamp()
             WHERE id = $1 RETURNING *
           SQL
+          started.merge("execution_interrupted" => interrupted_at)
         end
       end
+    end
+
+    def interrupt_previous(connection, row)
+      return unless row["execution_id"]
+
+      previous = connection.exec_params(<<~SQL, [row.fetch("execution_id"), row.fetch("id")]).first
+        SELECT started_at FROM decent_job_executions
+        WHERE id = $1 AND job_id = $2 AND state = 'running' AND finished_at IS NULL
+        FOR UPDATE
+      SQL
+      return unless previous
+
+      started_at = Time.parse(previous.fetch("started_at"))
+      error = JSON.generate("class" => InterruptedError.name, "message" => "Interrupted after starting perform at '#{started_at}'", "backtrace" => [])
+      connection.exec_params(<<~SQL, [row.fetch("execution_id"), error])
+        UPDATE decent_job_executions SET state = 'interrupted', error_event = 'interrupted',
+          finished_at = clock_timestamp(), error = $2 WHERE id = $1
+      SQL
+      connection.exec_params("UPDATE decent_jobs SET error = $2, error_event = 'interrupted' WHERE id = $1", [row.fetch("id"), error])
+      started_at
     end
   end
 end

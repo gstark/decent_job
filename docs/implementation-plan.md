@@ -88,9 +88,19 @@ Preservation verification: 891 specs, 2,790 assertions across the full PostgreSQ
 
 Cleanup verification: 936 specs, 3,037 assertions across the full PostgreSQL suite; Standard, gem build, and whitespace checks passed. Independent spec and quality reviews approved J8/J9. An unpacked gem passed bounded age cleanup, discarded retention, count instrumentation, batch deletion, and pending-job safety checks. Process specs exercise CLI precedence, failures, and automatic cleanup past a locked record followed by SIGTERM. Regressions cover inclusive cutoff equality, oldest-first progress, competing sweepers, retry/reopen races, same-session ownership, foreign-key and waiter-promotion contention, timeout restoration, historical batch snapshots, orphan updates, and partial-error counts. Migration 007 indexes cleanup cursors. Automatic cleanup uses existing worker threads and adds no runtime dependency.
 
+### Execution recovery and error handling
+
+- [x] Add validated `handled_exceptions` (default `StandardError` and `NotImplementedError`, accepting class names) and `retry_on_unhandled_error` (default false).
+- [x] Persist handled backend exceptions as terminal failures or immediate retries according to configuration, preserving identity, scheduling metadata, attempt history, concurrency release, batch state, and retention behavior. Propagate exceptions outside the configured classes.
+- [x] Report escaped Active Job exceptions through worker error handlers once, distinguishing them from Active Job-handled retries and discards. Preserve inline propagation; worker, cron, adapter, and global shutdown must drain their owned resources before propagating thread failures.
+- [x] Expose `InterruptError` and `InterruptedError`, and an opt-in `ActiveJobExtensions::InterruptErrors` hook. Mark abandoned attempts once, carry the prior start time only into their replacement execution, and let Active Job retry/discard handlers decide its outcome.
+- [x] Verify crash recovery with real SIGKILL processes, callback isolation, error classification, and no extra history records for interruption detection. Audit J1/J2 coverage alongside J3/J4; independently review, run the full suite, and verify the built gem.
+
+Execution-recovery verification: 981 specs, 3,381 assertions across the full PostgreSQL suite; Standard, gem build, and whitespace checks passed. Independent spec and quality reviews approved J2–J4. Real SIGKILL tests verify replacement retry/discard handlers, ordinary recovery, and exactly one replacement history entry. An unpacked gem passed configured exception handling, backend-retry payload/schedule preservation, and interruption-handler/history checks. Regressions cover atomic batch/concurrency/retention behavior, authoritative force-discard, nested callback isolation, reporter failures, and excluded exceptions. Worker, cron, adapter, and global shutdown drain remaining resources before re-raising fatal thread errors; reset keeps the database open until callbacks finish. No migrations or dependencies were added. J1 remains open for durations, latency, and per-attempt payload/schedule snapshots.
+
 ### Remaining slices
 
-1. Execution recovery: configurable handled exception classes, unhandled-error retries, interruption callbacks and error history (J1–J4).
+1. Execution history and metrics: snapshot each attempt's payload and scheduled time, persist monotonic duration, and expose job/attempt queue and runtime latency. Preserve unknown values for unfinished or historical attempts instead of inventing zero durations (remaining J1 and part of I4).
 2. Operations: process heartbeats, supervisor, systemd, Rails integration.
 3. Dashboard: authenticated job actions, histories, batches, schedules, processes and metrics.
 4. Compatibility: additional lock strategies, PgBouncer, benchmark and final parity audit.

@@ -2,10 +2,11 @@
 
 module DecentJob
   class Performer
-    Result = Data.define(:job_id, :state, :error)
+    Result = Data.define(:job_id, :state, :error, :unhandled_error, :error_event)
 
-    def initialize(database: DecentJob.database, enable_pauses: DecentJob.configuration.enable_pauses)
+    def initialize(database: DecentJob.database, enable_pauses: DecentJob.configuration.enable_pauses, on_unhandled_exception: nil)
       @database = database
+      @on_unhandled_exception = on_unhandled_exception
       @store = Store.new(database)
       @claim = Claim.new(database, enable_pauses: enable_pauses)
     end
@@ -38,7 +39,7 @@ module DecentJob
         error_event = {"enqueue_retry" => "retried", "discard" => "discarded", "retry_stopped" => "retry_stopped"}.fetch(name.split(".").first)
       end
       context = {database: @database, job_id: row.fetch("active_job_id"), id: row.fetch("id"), execution_id: row.fetch("execution_id"),
-                 batch_id: row["batch_id"], batch_callback_id: row["batch_callback_id"], stopping: stopping}
+                 execution_interrupted: row["execution_interrupted"], batch_id: row["batch_id"], batch_callback_id: row["batch_callback_id"], stopping: stopping}
       begin
         Current.with(context) do
           ActiveSupport::Notifications.subscribed(subscriber, /\A(?:perform|enqueue_retry|discard|retry_stopped)\.active_job\z/) do
@@ -50,16 +51,28 @@ module DecentJob
             end
           end
         end
-      rescue => exception
-        error_event = "unhandled" unless error_event == "retry_stopped" && error.equal?(exception)
+      rescue *DecentJob.configuration.handled_exception_classes => exception
+        error_event = if exception.is_a?(InterruptError)
+          "interrupted"
+        elsif error_event == "retry_stopped" && error.equal?(exception)
+          "retry_stopped"
+        else
+          "unhandled"
+        end
         error = exception
         state = "discarded"
         unhandled = true
+      rescue Exception => exception # standard:disable Lint/RescueException
+        # The worker distinguishes application exceptions deliberately excluded
+        # from handling from recoverable infrastructure failures.
+        @on_unhandled_exception&.call(exception)
+        raise
       end
-      state, error, forced = finish(row, state, error, error_event, active_job, unhandled)
+      unhandled_error = error if unhandled
+      state, error, error_event, forced = finish(row, state, error, error_event, active_job, unhandled)
       raise error if raise_errors && unhandled && !forced
 
-      Result.new(job_id: row.fetch("id"), state: state, error: error)
+      Result.new(job_id: row.fetch("id"), state: state, error: error, unhandled_error: unhandled_error, error_event: error_event)
     end
 
     def wrap_execution(&block)
@@ -102,20 +115,24 @@ module DecentJob
       end
       context = {id: row.fetch("id"), execution_id: row.fetch("execution_id")}
       ConcurrencyClaims.new(@database).finish(context, after_release: cleanup) do |connection|
-        current = connection.exec_params("SELECT state, execution_id, batch_id, batch_callback_id, finished_at, error FROM decent_jobs WHERE id = $1 FOR UPDATE", [row.fetch("id")]).first
+        current = connection.exec_params("SELECT state, execution_id, batch_id, batch_callback_id, finished_at, error, error_event FROM decent_jobs WHERE id = $1 FOR UPDATE", [row.fetch("id")]).first
         raise "Execution ownership lost" unless current && current["execution_id"] == row.fetch("execution_id")
 
         if current["finished_at"]
           state = current.fetch("state")
+          error_event = current["error_event"]
           stored_error = JSON.parse(current["error"] || "{}")
           error = Job::DiscardJobError.new(stored_error["message"]) if stored_error["class"] == "DecentJob::Job::DiscardJobError"
           forced = true
           next
         end
 
-        state = "retried" if current["state"] == "ready"
+        state = "retried" if current["state"] == "ready" || (unhandled && DecentJob.configuration.retry_on_unhandled_error)
         if state == "retried"
-          connection.exec_params("UPDATE decent_jobs SET error = $2, error_event = $3 WHERE id = $1", [row.fetch("id"), details, error_event])
+          connection.exec_params(<<~SQL, [row.fetch("id"), details, error_event])
+            UPDATE decent_jobs SET state = 'ready', error = $2, error_event = $3,
+              updated_at = clock_timestamp() WHERE id = $1
+          SQL
         else
           connection.exec_params(<<~SQL, [row.fetch("id"), state, details, error_event])
             UPDATE decent_jobs SET state = $2, finished_at = clock_timestamp(),
@@ -129,7 +146,7 @@ module DecentJob
         BatchStore.new(@database).request(connection, batch_ids, job_id: row.fetch("id"), discarded: state == "discarded")
       end
       batch_ids.sort.each { |id| BatchStore.new(@database).reconcile(id) }
-      [state, error, forced]
+      [state, error, error_event, forced]
     end
   end
 end
