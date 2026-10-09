@@ -6,9 +6,10 @@ require "logger"
 module DecentJob
   class Configuration
     attr_accessor :database_url, :execution_mode, :queues, :max_threads,
-      :poll_interval, :enable_listen_notify, :shutdown_timeout, :logger, :on_thread_error, :enable_pauses, :cron, :enable_cron, :cron_graceful_restart_period
+      :poll_interval, :enable_listen_notify, :shutdown_timeout, :logger, :on_thread_error, :enable_pauses, :preserve_job_records, :cron, :enable_cron, :cron_graceful_restart_period
 
     def initialize
+      @preserve_job_records = true
       @enable_cron = ENV.fetch("DECENT_JOB_ENABLE_CRON", "false") == "true"
       @cron_graceful_restart_period = Float(ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]) if ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]
       @cron = JSON.parse(ENV.fetch("DECENT_JOB_CRON", "{}"), symbolize_names: true)
@@ -34,6 +35,9 @@ module DecentJob
       period = @cron_graceful_restart_period
       if !period.nil? && (!period.is_a?(Numeric) || !period.finite? || !period.positive?)
         raise ArgumentError, "cron_graceful_restart_period must be a finite positive number or nil"
+      end
+      unless [true, false, :on_unhandled_error].include?(@preserve_job_records) || @preserve_job_records.respond_to?(:call)
+        raise ArgumentError, "preserve_job_records must be true, false, :on_unhandled_error, or callable"
       end
       cron_entries
       self

@@ -44,7 +44,7 @@ A manual retry keeps the prior error with `error_event: "retried"` until the nex
 
 Retry requires the job class to exist and use a DecentJob adapter for the same database. Missing classes raise `DecentJob::Job::DeserializationError`; an incompatible job adapter raises `DecentJob::Job::AdapterMismatchError`. Callback-created jobs must also use that database; invalid groups are rejected before their captured writes. Unavailable serialized arguments do not prevent a retry from being queued: Active Job handles deserialization when it executes. Discard and destroy remain available for jobs whose class or arguments can no longer be loaded.
 
-Deleting cron records also deletes their occurrence deduplication history. Recurring scheduling can enqueue that occurrence again during catch-up. Automatic retention is tracked separately in the implementation plan.
+Deleting cron records also deletes their occurrence deduplication history. Recurring scheduling can enqueue that occurrence again during catch-up. [Record preservation](record-preservation.md) controls which jobs remain after execution; operator discard actions retain their records until explicitly destroyed. Age-based cleanup is tracked separately in the implementation plan.
 
 ## Cooperative stopping
 

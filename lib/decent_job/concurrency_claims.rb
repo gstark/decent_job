@@ -57,7 +57,7 @@ module DecentJob
       rows.each { |row| promote(connection, row.fetch("scope")) if row["state"] == "granted" }
     end
 
-    def finish(context)
+    def finish(context, after_release: ->(_connection) {})
       synchronize(context.fetch(:id)) do |connection|
         yield connection
         release(connection, context)
@@ -72,6 +72,9 @@ module DecentJob
           schedule(connection, context.fetch(:id))
           connection.exec_params("UPDATE decent_job_concurrency_claims SET state = 'promoted', updated_at = clock_timestamp() WHERE job_id = $1 AND execution_id = $2 AND state = 'promotion_pending'", [context.fetch(:id), context.fetch(:execution_id)])
         end
+        # Terminal cleanup must follow release and its state read, and commit
+        # atomically with finishing the attempt and promoting its waiters.
+        after_release.call(connection)
       end
     end
 

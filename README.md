@@ -220,7 +220,7 @@ Batch properties use Active Job serialization, including symbols, dates, and Glo
 
 To build a batch incrementally, use `Batch.new`, `add(jobs)` or an `add` block, then `enqueue`. Added jobs are persisted immediately, while finish/success callbacks wait until the batch is marked enqueued. `enqueue` accepts an array and a block together. The class method returns the batch; instance `enqueue` and `add` return accepted jobs. Existing jobs can be attached without inserting them again. A running job can access its batch through `batch` and `batch?`; ordinary jobs it enqueues do not automatically inherit membership.
 
-Calling `enqueue` again reopens the same batch. Calling `retry` reopens it and retries only discarded members, running their Active Job enqueue callbacks and preserving IDs and execution history. Old callback jobs are retained but are not manually retried. `active_jobs` and `callback_active_jobs` return all associated deserialized jobs, including completed jobs.
+Calling `enqueue` again reopens the same batch. Calling `retry` reopens it and retries only discarded members still in storage, running their Active Job enqueue callbacks and preserving IDs and execution history. Old callback jobs are not manually retried. `active_jobs` and `callback_active_jobs` return associated deserialized jobs still in storage, including preserved completed jobs.
 
 Create several new batches in one transaction with pairs of batches and job arrays:
 
@@ -256,7 +256,7 @@ Execution is **at least once**. A process can die after an external side effect 
 
 Session locks require direct PostgreSQL connections or session pooling. PgBouncer transaction pooling is not supported by the current locking mode. Stop workers before forking and construct fresh database instances in child processes.
 
-Unhandled job errors are retained as discarded jobs. Inspect records and attempt histories with:
+Unhandled job errors are retained as discarded jobs by default. Inspect records and attempt histories with:
 
 ```ruby
 store = DecentJob::Store.new(DecentJob.database)
@@ -273,7 +273,7 @@ record.retry_job # Only discarded jobs are eligible.
 
 Ordinary actions reject worker lock conflicts. Explicit force-discard remains authoritative when running code returns or attempts to retry; it does not terminate that code. The job's adapter exposes cooperative shutdown, force-discard, and pause reasons through `stopping?`.
 
-Records are currently retained indefinitely. Automatic retention and remaining operational features are tracked in the parity checklist.
+Use `config.preserve_job_records` to retain all completed jobs (the default), delete them after execution, preserve only unhandled failures, or apply a custom predicate. Unfinished retries and cron occurrence records remain preserved. See [record preservation](docs/record-preservation.md) for batch behavior, error events, and operator actions. Age-based cleanup remains planned.
 
 ## Development
 

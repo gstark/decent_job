@@ -21,6 +21,7 @@ module DecentJob
     private
 
     def execute(row, raise_errors:, stopping:)
+      active_job = nil
       error = nil
       error_event = nil
       state = "succeeded"
@@ -28,6 +29,9 @@ module DecentJob
       current_thread = Thread.current
       subscriber = lambda do |name, _start, _finish, _id, payload|
         next unless Thread.current == current_thread && payload[:job]&.job_id == row.fetch("active_job_id")
+
+        active_job = payload[:job]
+        next if name == "perform.active_job"
 
         state = name.start_with?("enqueue_retry") ? "retried" : "discarded"
         error = payload[:error]
@@ -37,8 +41,13 @@ module DecentJob
                  batch_id: row["batch_id"], batch_callback_id: row["batch_callback_id"], stopping: stopping}
       begin
         Current.with(context) do
-          ActiveSupport::Notifications.subscribed(subscriber, /\A(?:enqueue_retry|discard|retry_stopped)\.active_job\z/) do
-            wrap_execution { ActiveJob::Base.execute(row.fetch("payload")) }
+          ActiveSupport::Notifications.subscribed(subscriber, /\A(?:perform|enqueue_retry|discard|retry_stopped)\.active_job\z/) do
+            value = wrap_execution { ActiveJob::Base.execute(row.fetch("payload")) }
+            if value.is_a?(Exception) && error.nil?
+              error = value
+              error_event = "handled"
+              state = "discarded"
+            end
           end
         end
       rescue => exception
@@ -47,7 +56,7 @@ module DecentJob
         state = "discarded"
         unhandled = true
       end
-      state, error, forced = finish(row, state, error, error_event)
+      state, error, forced = finish(row, state, error, error_event, active_job, unhandled)
       raise error if raise_errors && unhandled && !forced
 
       Result.new(job_id: row.fetch("id"), state: state, error: error)
@@ -61,11 +70,38 @@ module DecentJob
       end
     end
 
-    def finish(row, state, error, error_event)
+    def preserve_record?(active_job, error, error_event, unhandled)
+      policy = DecentJob.configuration.preserve_job_records
+      if policy.respond_to?(:call)
+        # Isolate application SQL failures so retaining a record remains possible.
+        return @database.transaction { policy.call(active_job, error, error_event&.to_sym) }
+      end
+
+      policy == true || (policy == :on_unhandled_error && unhandled)
+    rescue => exception
+      begin
+        @database.transaction { DecentJob.configuration.on_thread_error.call(exception) }
+      rescue
+        nil
+      end
+      true
+    end
+
+    def finish(row, state, error, error_event, active_job, unhandled)
       details = error && JSON.generate("class" => error.class.name, "message" => error.message, "backtrace" => error.backtrace || [])
       batch_ids = []
       forced = false
-      ConcurrencyClaims.new(@database).finish(id: row.fetch("id"), execution_id: row.fetch("execution_id")) do |connection|
+      cleanup = lambda do |connection|
+        next if forced || state == "retried" || row["cron_key"]
+        next if preserve_record?(active_job, error, error_event, unhandled)
+
+        connection.exec_params(<<~SQL, [row.fetch("id"), row.fetch("execution_id")])
+          DELETE FROM decent_jobs WHERE id = $1 AND execution_id = $2
+            AND state IN ('succeeded', 'discarded') AND finished_at IS NOT NULL AND cron_key IS NULL
+        SQL
+      end
+      context = {id: row.fetch("id"), execution_id: row.fetch("execution_id")}
+      ConcurrencyClaims.new(@database).finish(context, after_release: cleanup) do |connection|
         current = connection.exec_params("SELECT state, execution_id, batch_id, batch_callback_id, finished_at, error FROM decent_jobs WHERE id = $1 FOR UPDATE", [row.fetch("id")]).first
         raise "Execution ownership lost" unless current && current["execution_id"] == row.fetch("execution_id")
 
