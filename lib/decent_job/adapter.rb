@@ -12,6 +12,13 @@ module DecentJob
       @stopping = false
     end
 
+    def reset_after_fork
+      @execution_mode = :external if @execution_mode == :async
+      @worker_mutex = Mutex.new
+      @worker = nil
+      @stopping = false
+    end
+
     def database
       @database ||= DecentJob.database
     end

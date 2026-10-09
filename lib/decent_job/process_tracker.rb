@@ -33,18 +33,21 @@ module DecentJob
       raise ForkedDatabase, "create a new process tracker after forking" if @pid != Process.pid
       registered = false
       loop do
-        previous = @mutex.synchronize do
-          return nil if @stopped
-          if @monitor&.alive? && @registrations.zero?
-            @monitor
-          else
-            @registrations += 1
-            registered = true
-            @monitor = Thread.new { monitor } unless @monitor&.alive?
-            nil
+        previous = DecentJob.synchronize_resource_start(skip_during_fork: true) do
+          @mutex.synchronize do
+            return nil if @stopped
+            if @monitor&.alive? && @registrations.zero?
+              @monitor
+            else
+              @registrations += 1
+              registered = true
+              @monitor = Thread.new { monitor } unless @monitor&.alive?
+              nil
+            end
           end
         end
         break if registered
+        return nil unless previous
         previous.join
       end
       loop do
@@ -67,6 +70,11 @@ module DecentJob
         end
         last&.join
       end
+    end
+
+    def shutdown?
+      return true unless @mutex
+      @mutex.synchronize { !@monitor&.alive? }
     end
 
     # Read only cached monitor state: never touch another thread's PG session.

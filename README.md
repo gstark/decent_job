@@ -63,6 +63,8 @@ SIGINT or SIGTERM stops claiming jobs and allows running jobs to finish. The CLI
 
 Add `--probe-port 7001` to expose HTTP liveness and worker readiness checks. The CLI also supports systemd readiness, stopping, and watchdog notifications. See [health probes and systemd](docs/health-services.md) for configuration and shutdown behavior.
 
+Add `--subprocesses 3` to supervise three workers, or use pipe-separated recipes such as `--queues 'critical:2|default:4'`. Each child gets its own connections and threads. See [the supervisor](docs/supervisor.md) for lifecycle hooks, crash replacement, cluster readiness, and shutdown.
+
 ## Configuration
 
 Configure before opening the database or enqueueing jobs:

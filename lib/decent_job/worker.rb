@@ -41,28 +41,35 @@ module DecentJob
     end
 
     def start
-      @mutex.synchronize do
-        return self if @threads.any?(&:alive?)
+      DecentJob.synchronize_resource_start do
+        @mutex.synchronize do
+          return self if @threads.any?(&:alive?)
 
-        @stopping = false
-        @listener_connected = false
-        reset_stats(running: true)
-        @failure = nil
-        @process_cleanup_at = 0
-        @process_cleanup_running = false
-        @process_tracker = ProcessTracker.new(database: @database, **@process_options, state: method(:stats), on_thread_error: @on_thread_error)
-        @execution_threads = @pools.each_with_index.flat_map do |pool, index|
-          Array.new(pool.fetch(:threads)) do
-            Thread.new { run(pool, index) }
+          @stopping = false
+          @listener_connected = false
+          reset_stats(running: true)
+          @failure = nil
+          @process_cleanup_at = 0
+          @process_cleanup_running = false
+          @process_tracker = ProcessTracker.new(database: @database, **@process_options, state: method(:stats), on_thread_error: @on_thread_error)
+          @execution_threads = @pools.each_with_index.flat_map do |pool, index|
+            Array.new(pool.fetch(:threads)) do
+              Thread.new { run(pool, index) }
+            end
           end
-        end
-        @threads = @execution_threads.dup
-        if @enable_listen_notify
-          @listener_reader, @listener_writer = IO.pipe
-          @threads << Thread.new { listen }
+          @threads = @execution_threads.dup
+          if @enable_listen_notify
+            @listener_reader, @listener_writer = IO.pipe
+            @threads << Thread.new { listen }
+          end
         end
       end
       self
+    end
+
+    def shutdown?
+      return true unless @threads
+      @mutex.synchronize { @threads.none?(&:alive?) }
     end
 
     def running?

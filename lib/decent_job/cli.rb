@@ -36,9 +36,7 @@ module DecentJob
       cleanup_options = options.delete(:cleanup) || {}
       applications.each { |file| require File.expand_path(file) }
       begin
-        DecentJob.configure do |configuration|
-          options.each { |name, value| configuration.public_send("#{name}=", value) }
-        end
+        DecentJob.apply_cli_configuration(options)
       rescue ArgumentError => error
         raise OptionParser::InvalidArgument, error.message
       end
@@ -77,6 +75,7 @@ module DecentJob
         parser.on("--probe-port PORT", Integer, "Serve health probes on this port (0 chooses an available port)") { |value| options[:probe_port] = value }
         parser.on("--probe-handler HANDLER", "Probe server: simple or optional webrick") { |value| options[:probe_handler] = value }
         parser.on("--queues EXPRESSION", "Queue selection and optional thread pools") { |value| options[:queues] = value }
+        parser.on("--subprocesses N", Integer, "Fork and supervise N worker processes") { |value| options[:subprocesses] = value }
         parser.on("--max-threads N", Integer, "Default threads per queue pool") { |value| options[:max_threads] = value }
         parser.on("--poll-interval N", Float, "Polling interval in seconds") { |value| options[:poll_interval] = value }
         parser.on("--shutdown-timeout N", Float, "Time allowed for running jobs to finish") { |value| options[:shutdown_timeout] = value }
@@ -89,6 +88,12 @@ module DecentJob
     end
 
     def start
+      configuration = DecentJob.configuration
+      if configuration.subprocesses.positive?
+        return start_cluster if Process.respond_to?(:fork)
+        @stderr.puts "Warning: fork is unavailable; running queue groups in one process."
+        DecentJob.apply_cli_configuration(queues: configuration.single_process_config.queues, subprocesses: 0)
+      end
       reader, writer = IO.pipe
       previous_traps = {}
       begin
@@ -129,6 +134,32 @@ module DecentJob
       end
       if @shutdown_timed_out
         @stderr.puts "Error: shutdown timed out; jobs, cron callbacks, or probe callbacks are still running."
+        1
+      else
+        @stdout.puts "DecentJob stopped."
+        0
+      end
+    end
+
+    def start_cluster
+      supervisor = Supervisor.new
+      service = nil
+      begin
+        supervisor.start(
+          on_start: -> {
+            service = SystemdService.new
+            service.start
+            @stdout.puts "DecentJob started. Send SIGINT or SIGTERM to stop."
+            @stdout.flush
+          },
+          on_shutdown: -> { service&.stopping }
+        )
+      ensure
+        @shutdown_timed_out = supervisor.shutdown_timed_out
+        service&.stop
+      end
+      if @shutdown_timed_out
+        @stderr.puts "Error: shutdown timed out; subprocesses or probe callbacks did not drain."
         1
       else
         @stdout.puts "DecentJob stopped."

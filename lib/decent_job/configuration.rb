@@ -14,6 +14,7 @@ module DecentJob
     alias_method :cleanup_discarded_jobs?, :cleanup_discarded_jobs
 
     def initialize
+      self.subprocesses = Integer(ENV.fetch("DECENT_JOB_SUBPROCESSES", "0"), 10)
       self.probe_port = Integer(ENV["DECENT_JOB_PROBE_PORT"], 10) if ENV["DECENT_JOB_PROBE_PORT"]
       self.probe_handler = ENV["DECENT_JOB_PROBE_HANDLER"]
       self.advisory_lock_heartbeat = ENV.fetch("DECENT_JOB_ADVISORY_LOCK_HEARTBEAT", "false")
@@ -38,6 +39,29 @@ module DecentJob
       @shutdown_timeout = Float(ENV.fetch("DECENT_JOB_SHUTDOWN_TIMEOUT", "30"))
       @logger = Logger.new($stdout)
       @on_thread_error = ->(error) { @logger.error("#{error.class}: #{error.message}") }
+    end
+
+    def subprocesses=(value)
+      raise ArgumentError, "subprocesses must be a nonnegative integer" unless value.is_a?(Integer) && value >= 0
+      @subprocesses = value
+    end
+
+    def subprocesses
+      groups = queue_groups
+      (groups.size > 1) ? groups.size : @subprocesses
+    end
+
+    def subprocess_configs
+      groups = queue_groups
+      if groups.size > 1 && @subprocesses.positive?
+        @logger.warn("Queue groups override subprocesses=#{@subprocesses} with #{groups.size}")
+      end
+      recipes = (groups.size > 1) ? groups : Array.new(subprocesses, groups.first)
+      recipes.map { |queues| child_configuration(queues) }
+    end
+
+    def single_process_config
+      child_configuration(queue_groups.join(";"))
     end
 
     def self.validate_process_options!(advisory, interval)
@@ -116,7 +140,7 @@ module DecentJob
       validate_handled_exceptions!
       raise ArgumentError, "retry_on_unhandled_error must be true or false" unless [true, false].include?(@retry_on_unhandled_error)
       raise ArgumentError, "execution_mode must be external, inline, or async" unless %i[external inline async].include?(@execution_mode)
-      QueueSelection.pools(@queues, default_threads: @max_threads)
+      queue_groups.each { |group| QueueSelection.pools(group, default_threads: @max_threads) }
       raise ArgumentError, "poll_interval must be positive" unless @poll_interval.is_a?(Numeric) && @poll_interval.positive? && @poll_interval.finite?
       raise ArgumentError, "shutdown_timeout must be nonnegative" unless @shutdown_timeout.is_a?(Numeric) && @shutdown_timeout >= 0 && @shutdown_timeout.finite?
       raise ArgumentError, "on_thread_error must be callable" unless @on_thread_error.respond_to?(:call)
@@ -149,7 +173,7 @@ module DecentJob
       else
         0
       end
-      QueueSelection.pools(@queues, default_threads: @max_threads).sum { |pool| pool.fetch(:threads) } + 2 + cron_connections
+      QueueSelection.pools(queue_groups.join(";"), default_threads: @max_threads).sum { |pool| pool.fetch(:threads) } + 2 + cron_connections
     end
 
     def cron_manager_options
@@ -166,6 +190,20 @@ module DecentJob
     end
 
     private
+
+    def queue_groups
+      raise ArgumentError, "queues must be a nonempty string" unless @queues.is_a?(String) && !@queues.strip.empty?
+      groups = @queues.split("|", -1).map(&:strip)
+      raise ArgumentError, "queue groups must not be empty" if groups.any?(&:empty?)
+      groups
+    end
+
+    def child_configuration(queues)
+      dup.tap do |configuration|
+        configuration.queues = queues
+        configuration.subprocesses = 0
+      end
+    end
 
     def validate_handled_exceptions!
       valid = @handled_exceptions.is_a?(Array) && @handled_exceptions.all? do |value|

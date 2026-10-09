@@ -82,4 +82,4 @@ TimeoutStopSec=45
 
 Keep the service manager's stop timeout longer than DecentJob's drain deadline so it can finish cleanup and report its exit status. `systemd_watchdog_start.decent_job` includes the watchdog interval; `systemd_watchdog_error.decent_job` includes notification errors.
 
-Supervisor process management and child readiness channels remain separate work. The cluster application interface is available, but this checkpoint's CLI integration runs one process.
+The [supervisor](supervisor.md) also integrates these probes and notifications. In cluster mode, started requires every configured child slot, and connected requires fresh readiness reports from every child. The supervisor starts its probe and watchdog after the initial forks, emits STOPPING before child drain, and keeps the watchdog running until child and probe cleanup finishes.

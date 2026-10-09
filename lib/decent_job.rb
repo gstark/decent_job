@@ -22,11 +22,13 @@ require "decent_job/cron_store"
 require "decent_job/current"
 require "decent_job/database"
 require "decent_job/execution"
+require "decent_job/fork_safety"
 require "decent_job/inline_buffer"
 require "decent_job/interrupt_error"
 require "decent_job/interrupted_error"
 require "decent_job/job"
 require "decent_job/job_retry"
+require "decent_job/lifecycle_hooks"
 require "decent_job/pauses"
 require "decent_job/performer"
 require "decent_job/probe_server"
@@ -35,6 +37,8 @@ require "decent_job/process_tracker"
 require "decent_job/queue_selection"
 require "decent_job/schema"
 require "decent_job/store"
+require "decent_job/subprocess"
+require "decent_job/supervisor"
 require "decent_job/systemd_service"
 require "decent_job/worker"
 
@@ -44,6 +48,9 @@ ActiveJob::Base.include DecentJob::ActiveJobExtensions::Cron
 ActiveJob.singleton_class.prepend DecentJob::ActiveJobExtensions::CronBulk
 
 module DecentJob
+  extend LifecycleHooks
+  extend ForkSafety
+
   VERSION = "0.1.0"
   MUTEX = Mutex.new
   @configuration = Configuration.new
@@ -57,7 +64,7 @@ module DecentJob
     attr_reader :configuration
 
     def configure
-      MUTEX.synchronize do
+      runtime_mutex.synchronize do
         raise ArgumentError, "configure before opening the database; call reset! to restart" if @database
         yield @configuration
         @configuration.validate!
@@ -65,7 +72,7 @@ module DecentJob
     end
 
     def database
-      MUTEX.synchronize do
+      runtime_mutex.synchronize do
         @configuration.validate!
         raise ArgumentError, "set DECENT_JOB_DATABASE_URL or configure database_url" unless @configuration.database_url
         @database ||= Database.new(url: @configuration.database_url, pool_size: @configuration.pool_size)
@@ -93,8 +100,10 @@ module DecentJob
     end
 
     def start
+      raise ForkInProgress, "runtime is preparing to fork" if @forking
       connection_pool = database
-      worker = MUTEX.synchronize do
+      worker = runtime_mutex.synchronize do
+        raise ForkInProgress, "runtime is preparing to fork" if @forking
         @stopping = false
         @cron_stopping = false
         @cron_stopped_databases.delete(connection_pool)
@@ -108,17 +117,17 @@ module DecentJob
     end
 
     def started?
-      workers = MUTEX.synchronize { @stopping ? [] : @workers.dup }
+      workers = runtime_mutex.synchronize { @stopping ? [] : @workers.dup }
       !workers.empty? && workers.all?(&:started?)
     end
 
     def connected?
-      workers = MUTEX.synchronize { @stopping ? [] : @workers.dup }
+      workers = runtime_mutex.synchronize { @stopping ? [] : @workers.dup }
       !workers.empty? && workers.all?(&:connected?)
     end
 
     def cron_managers
-      MUTEX.synchronize { @cron_managers.values.dup }
+      runtime_mutex.synchronize { @cron_managers.values.dup }
     end
 
     def cron_running?
@@ -126,6 +135,7 @@ module DecentJob
     end
 
     def start_cron(database: nil, automatic: false)
+      raise ForkInProgress, "runtime is preparing to fork" if @forking
       connection_pool = database || self.database
       # Resolve configuration outside the registry lock: constant loading and
       # adapter lookup may call back into DecentJob.
@@ -139,7 +149,8 @@ module DecentJob
           raise ArgumentError, "Cron jobs must use a DecentJob adapter with the cron entry database"
         end
       end
-      MUTEX.synchronize do
+      runtime_mutex.synchronize do
+        raise ForkInProgress, "runtime is preparing to fork" if @forking
         return if automatic && (@stopping || @cron_stopping || @cron_stopped_databases[connection_pool])
         unless automatic
           @cron_stopping = false
@@ -155,7 +166,7 @@ module DecentJob
 
     def stop_cron(timeout: nil, database: nil)
       validate_timeout!(timeout)
-      managers = MUTEX.synchronize do
+      managers = runtime_mutex.synchronize do
         if database
           @cron_stopped_databases[database] = true
           [@cron_managers[database]].compact
@@ -168,12 +179,12 @@ module DecentJob
     end
 
     def stopping?
-      MUTEX.synchronize { @stopping }
+      runtime_mutex.synchronize { @stopping }
     end
 
     def shutdown(timeout: nil)
       validate_timeout!(timeout)
-      resources = MUTEX.synchronize do
+      resources = runtime_mutex.synchronize do
         @stopping = true
         @cron_stopping = true
         @cron_managers.values + @workers
@@ -182,7 +193,9 @@ module DecentJob
     end
 
     def start_worker(worker)
-      MUTEX.synchronize do
+      raise ForkInProgress, "runtime is preparing to fork" if @forking
+      runtime_mutex.synchronize do
+        raise ForkInProgress, "runtime is preparing to fork" if @forking
         return if @stopping
         register_exit_hook
         @workers << worker unless @workers.include?(worker)
@@ -198,7 +211,7 @@ module DecentJob
       rescue Exception => error # standard:disable Lint/RescueException
         failure = error
       end
-      MUTEX.synchronize do
+      runtime_mutex.synchronize do
         @worker = nil
         @workers = []
         @cron_managers = {}

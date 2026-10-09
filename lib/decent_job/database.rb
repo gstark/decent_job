@@ -5,12 +5,86 @@ require "pg"
 module DecentJob
   class ConnectionTimeout < StandardError; end
   class ClosedDatabase < StandardError; end
+  class ForkInProgress < StandardError; end
   class ForkedDatabase < StandardError; end
   class TransactionAborted < StandardError; end
 
   # A bounded pool. A checkout belongs to one thread until its block returns.
   # Nested operations reuse that checkout, including transactions and locks.
   class Database
+    @registry_mutex = Mutex.new
+    @registry = ObjectSpace::WeakMap.new
+
+    class << self
+      def register(database)
+        @registry_mutex.synchronize { @registry[database] = true }
+      end
+
+      def with_prepared_fork
+        @registry_mutex.synchronize do
+          databases = @registry.keys
+          prepared = []
+          begin
+            databases.each do |database|
+              database.prepare_fork
+              prepared << database
+            end
+            yield
+          ensure
+            prepared.each(&:resume_after_fork) if Process.pid == prepared.first&.owner_pid
+          end
+        end
+      end
+
+      def reset_after_fork
+        @registry_mutex = Mutex.new
+        @registry.keys.each(&:reset_after_fork)
+      end
+    end
+
+    attr_reader :owner_pid
+
+    def prepare_fork
+      raise ForkedDatabase, "create a new Database after forking" if @pid != Process.pid
+      @mutex.synchronize do
+        raise ForkInProgress, "database has borrowed or connecting sessions" unless @size == @idle.size
+        @fork_prepared = true
+        @idle.each { |connection| connection.finish unless connection.finished? }
+        @idle.clear
+        @size = 0
+      end
+    end
+
+    def resume_after_fork
+      @mutex.synchronize { @fork_prepared = false }
+    end
+
+    def reset_after_fork
+      raise ForkInProgress, "pool must be prepared in the parent before resetting in its child" unless @fork_prepared && @pid != Process.pid
+      # Parent preparation closed every owned connection before the fork. Never
+      # send PostgreSQL termination packets from an inherited child connection.
+      @mutex = Mutex.new
+      @available = ConditionVariable.new
+      @borrowed = {}
+      @transaction_callbacks = {}
+      @idle = []
+      @size = 0
+      @fork_prepared = false
+      @pid = @owner_pid = Process.pid
+    end
+
+    def resize(pool_size)
+      raise ArgumentError, "pool_size must be positive" unless pool_size.is_a?(Integer) && pool_size.positive?
+      @mutex.synchronize do
+        @pool_size = pool_size
+        while @size > @pool_size && (connection = @idle.pop)
+          connection.finish unless connection.finished?
+          @size -= 1
+        end
+        @available.broadcast
+      end
+    end
+
     def initialize(url:, pool_size: 5, checkout_timeout: 5)
       raise ArgumentError, "pool_size must be positive" unless pool_size.is_a?(Integer) && pool_size.positive?
       raise ArgumentError, "checkout_timeout must be positive" unless checkout_timeout.positive?
@@ -25,7 +99,8 @@ module DecentJob
       @transaction_callbacks = {}
       @size = 0
       @closed = false
-      @pid = Process.pid
+      @pid = @owner_pid = Process.pid
+      Database.register(self)
     end
 
     def with_connection
@@ -127,6 +202,7 @@ module DecentJob
       registered = false
       @mutex.synchronize do
         loop do
+          raise ForkInProgress, "database is preparing to fork" if @fork_prepared
           raise ClosedDatabase, "database is closed" if @closed
 
           connection = @idle.pop
@@ -164,7 +240,7 @@ module DecentJob
     def checkin(connection)
       @mutex.synchronize do
         @borrowed.delete(Thread.current)
-        if @closed || connection.finished? || connection.status != PG::CONNECTION_OK
+        if @closed || @size > @pool_size || connection.finished? || connection.status != PG::CONNECTION_OK
           connection.finish unless connection.finished?
           @size -= 1
         else

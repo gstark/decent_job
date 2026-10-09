@@ -22,20 +22,22 @@ module DecentJob
     end
 
     def start
-      @mutex.synchronize do
-        return self if !@stopping || @threads.any?(&:alive?)
+      DecentJob.synchronize_resource_start do
+        @mutex.synchronize do
+          return self if !@stopping || @threads.any?(&:alive?)
 
-        @stopping = false
-        started_at = Time.now
-        zone = Time.zone
-        @threads = cron_entries.flat_map do |entry|
-          state = {pending: [], ready: false}
-          threads = [Thread.new { Time.use_zone(zone) { run(entry, state, started_at) } }]
-          2.times { threads << Thread.new { Time.use_zone(zone) { dispatch(entry, state) } } }
-          if @graceful_restart_period
-            threads << Thread.new { Time.use_zone(zone) { replay(entry, state, started_at) } }
+          @stopping = false
+          started_at = Time.now
+          zone = Time.zone
+          @threads = cron_entries.flat_map do |entry|
+            state = {pending: [], ready: false}
+            threads = [Thread.new { Time.use_zone(zone) { run(entry, state, started_at) } }]
+            2.times { threads << Thread.new { Time.use_zone(zone) { dispatch(entry, state) } } }
+            if @graceful_restart_period
+              threads << Thread.new { Time.use_zone(zone) { replay(entry, state, started_at) } }
+            end
+            threads
           end
-          threads
         end
       end
       self
@@ -46,6 +48,7 @@ module DecentJob
     end
 
     def shutdown?
+      return true unless @threads
       @mutex.synchronize { @stopping && @threads.none?(&:alive?) }
     end
 

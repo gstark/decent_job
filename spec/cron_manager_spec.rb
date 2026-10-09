@@ -286,10 +286,11 @@ describe "cron manager" do
     origin = Time.at(Time.now.to_i)
     now = origin
     scheduled = Queue.new
-    recurring = entry(cron: ->(_) {
-      scheduled << true
-      "* * * * * * UTC"
-    })
+    recurring = entry(cron: ->(_) { "* * * * * * UTC" })
+    calculate_next = recurring.method(:next_at)
+    recurring.define_singleton_method(:next_at) do |**options|
+      calculate_next.call(**options).tap { scheduled << true }
+    end
     Time.stub(:now, -> { clock_mutex.synchronize { now } }) do
       scheduler = manager([recurring], start_on_initialize: true)
       Timeout.timeout(5) { scheduled.pop }
