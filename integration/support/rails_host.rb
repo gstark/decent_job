@@ -24,6 +24,12 @@ if HOST_SCENARIO == "dequeue_explicit"
 end
 DecentJob.configuration.lock_strategy = :advisory if HOST_SCENARIO == "lock_strategy_explicit"
 
+if HOST_SCENARIO == "configuration_explicit"
+  DecentJob.configuration.max_threads = 3
+  DecentJob.configuration.max_cache = 0
+  DecentJob.configuration.enable_listen_notify = false
+end
+
 if HOST_SCENARIO == "logging"
   DecentJob::LogSubscriber.logger
 elsif HOST_SCENARIO == "logging_explicit"
@@ -76,6 +82,10 @@ class DecentJobHostApplication < Rails::Application
     config.decent_job.queue_select_limit = "0"
   end
   config.decent_job.lock_strategy = "skiplocked" if HOST_SCENARIO.start_with?("lock_strategy")
+  if HOST_SCENARIO.start_with?("configuration")
+    config.decent_job.max_cache = 11
+    config.decent_job.enable_listen_notify = true
+  end
   if HOST_SCENARIO == "cron_boot"
     config.decent_job.enable_cron = true
     config.decent_job.cron = {tick: {cron: "* * * * * *", class: "ScheduledHostJob"}}
@@ -127,6 +137,19 @@ result = {events: HOST_EVENTS, mode: RailsHostJob.queue_adapter.execution_mode,
           active_record_loaded: defined?(ActiveRecord::Base) ? true : false}
 
 case HOST_SCENARIO
+when "configuration", "configuration_explicit"
+  snapshot = -> { [DecentJob.configuration.max_threads, DecentJob.configuration.max_cache, DecentJob.configuration.enable_listen_notify] }
+  result[:initial] = snapshot.call
+  application.config.decent_job.max_threads = 4
+  application.config.decent_job.max_cache = 12
+  DecentJob.configure_rails(application)
+  result[:changed] = snapshot.call
+  %i[max_threads max_cache enable_listen_notify].each { |key| application.config.decent_job.delete(key) }
+  DecentJob.configure_rails(application)
+  result[:removed] = snapshot.call
+  job = RailsHostJob.perform_later("configured host")
+  DecentJob::Performer.new.perform_one
+  result[:finished] = !store.find(job.provider_job_id).fetch("finished_at").nil?
 when "lock_strategy", "lock_strategy_explicit"
   result[:lock_strategy] = DecentJob.configuration.lock_strategy
   performer = DecentJob::Performer.new

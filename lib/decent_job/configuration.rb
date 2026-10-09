@@ -10,6 +10,27 @@ module DecentJob
     ASYNC_MODES = (SERVER_ASYNC_MODES + [:async_all]).freeze
     EXECUTION_MODES = (ASYNC_MODES + %i[external inline]).freeze
 
+    # These setters retain their own validation; the wrapper records ownership only
+    # after a successful application assignment, never during initialization/host setup.
+    GENERIC_OPTIONS = %i[database_url queues max_threads handled_exceptions retry_on_unhandled_error
+      enable_listen_notify shutdown_timeout enable_pauses preserve_job_records cron enable_cron
+      cron_graceful_restart_period max_cache advisory_lock_heartbeat process_heartbeat_interval
+      cleanup_discarded_jobs cleanup_preserved_jobs_before_seconds_ago cleanup_interval_jobs
+      cleanup_interval_seconds probe_port probe_handler probe_app daemonize pidfile idle_timeout
+      lower_thread_priority subprocesses on_thread_error].freeze
+    SPECIAL_OPTIONS = %i[execution_mode logger poll_interval dequeue_query_sort queue_select_limit lock_strategy].freeze
+
+    module ExplicitAssignments
+      GENERIC_OPTIONS.each do |name|
+        define_method("#{name}=") do |value|
+          result = super(value)
+          @explicit_options[name] = true if @explicit_options && !@applying_rails_options
+          result
+        end
+      end
+    end
+    prepend ExplicitAssignments
+
     def self.validate_execution_mode!(mode)
       raise ArgumentError, "execution_mode must be #{EXECUTION_MODES.join(", ")}" unless EXECUTION_MODES.include?(mode)
     end
@@ -35,35 +56,48 @@ module DecentJob
       @environment_lock_strategy = normalize_lock_strategy(ENV["DECENT_JOB_LOCK_STRATEGY"])
       @environment_dequeue_query_sort = normalize_dequeue_query_sort(ENV["DECENT_JOB_DEQUEUE_QUERY_SORT"])
       @environment_queue_select_limit = normalize_queue_select_limit(ENV["DECENT_JOB_QUEUE_SELECT_LIMIT"])
-      self.lower_thread_priority = ENV.fetch("DECENT_JOB_LOWER_THREAD_PRIORITY", "false") == "true"
-      self.daemonize = ENV.fetch("DECENT_JOB_DAEMONIZE", "false")
+      self.lower_thread_priority = environment_boolean("DECENT_JOB_LOWER_THREAD_PRIORITY", default: false)
+      self.daemonize = environment_boolean("DECENT_JOB_DAEMONIZE", default: false)
       self.pidfile = ENV.fetch("DECENT_JOB_PIDFILE", File.expand_path("tmp/pids/decent_job.pid", Dir.pwd))
       self.idle_timeout = Float(ENV["DECENT_JOB_IDLE_TIMEOUT"]) if ENV["DECENT_JOB_IDLE_TIMEOUT"]
       self.subprocesses = Integer(ENV.fetch("DECENT_JOB_SUBPROCESSES", "0"), 10)
       self.probe_port = Integer(ENV["DECENT_JOB_PROBE_PORT"], 10) if ENV["DECENT_JOB_PROBE_PORT"]
       self.probe_handler = ENV["DECENT_JOB_PROBE_HANDLER"]
-      self.advisory_lock_heartbeat = ENV.fetch("DECENT_JOB_ADVISORY_LOCK_HEARTBEAT", "false")
+      self.advisory_lock_heartbeat = environment_boolean("DECENT_JOB_ADVISORY_LOCK_HEARTBEAT", default: false)
       self.process_heartbeat_interval = Float(ENV.fetch("DECENT_JOB_PROCESS_HEARTBEAT_INTERVAL", "30"))
-      self.cleanup_discarded_jobs = ENV.fetch("DECENT_JOB_CLEANUP_DISCARDED_JOBS", "true")
+      self.cleanup_discarded_jobs = environment_boolean("DECENT_JOB_CLEANUP_DISCARDED_JOBS", default: true)
       self.cleanup_preserved_jobs_before_seconds_ago = Float(ENV.fetch("DECENT_JOB_CLEANUP_PRESERVED_JOBS_BEFORE_SECONDS_AGO", "1209600"))
       self.cleanup_interval_jobs = ENV["DECENT_JOB_CLEANUP_INTERVAL_JOBS"]
       self.cleanup_interval_seconds = ENV["DECENT_JOB_CLEANUP_INTERVAL_SECONDS"]
       @handled_exceptions = [StandardError, NotImplementedError]
       @retry_on_unhandled_error = false
       @preserve_job_records = true
-      @enable_cron = ENV.fetch("DECENT_JOB_ENABLE_CRON", "false") == "true"
+      @enable_cron = environment_boolean("DECENT_JOB_ENABLE_CRON", default: false)
       @cron_graceful_restart_period = Float(ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]) if ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]
       @cron = JSON.parse(ENV.fetch("DECENT_JOB_CRON", "{}"), symbolize_names: true)
       @database_url = ENV["DECENT_JOB_DATABASE_URL"] || ENV["DATABASE_URL"]
       @environment_execution_mode = ENV["DECENT_JOB_EXECUTION_MODE"]&.to_sym
       @queues = ENV.fetch("DECENT_JOB_QUEUES", "*")
-      @max_threads = Integer(ENV.fetch("DECENT_JOB_MAX_THREADS", "5"))
+      @max_threads = Integer(ENV["DECENT_JOB_MAX_THREADS"] || ENV["RAILS_MAX_THREADS"] || "5")
       @environment_poll_interval = Float(ENV["DECENT_JOB_POLL_INTERVAL"]) if ENV["DECENT_JOB_POLL_INTERVAL"]
       self.max_cache = Integer(ENV.fetch("DECENT_JOB_MAX_CACHE", "10000"), 10)
-      @enable_listen_notify = ENV.fetch("DECENT_JOB_ENABLE_LISTEN_NOTIFY", "true") != "false"
-      @enable_pauses = ENV.fetch("DECENT_JOB_ENABLE_PAUSES", "false") == "true"
+      @enable_listen_notify = environment_boolean("DECENT_JOB_ENABLE_LISTEN_NOTIFY", default: true)
+      @enable_pauses = environment_boolean("DECENT_JOB_ENABLE_PAUSES", default: false)
       @shutdown_timeout = Float(ENV.fetch("DECENT_JOB_SHUTDOWN_TIMEOUT", "30"))
       @default_logger = ActiveSupport::TaggedLogging.new(ActiveSupport::Logger.new($stdout))
+      @baseline_options = GENERIC_OPTIONS.each_with_object({}) do |name, baseline|
+        variable = "@#{name}"
+        baseline[name] = copy_containers(instance_variable_get(variable)) if instance_variable_defined?(variable)
+      end
+      @explicit_options = {}
+    end
+
+    def initialize_copy(original)
+      super
+      copies = {}.compare_by_identity
+      original.instance_variables.each do |variable|
+        instance_variable_set(variable, copy_containers(original.instance_variable_get(variable), copies))
+      end
     end
 
     attr_writer :execution_mode, :logger, :on_thread_error
@@ -83,6 +117,16 @@ module DecentJob
     end
 
     def apply_rails_config(options, environment:, logger:)
+      # Use the public iterator: host options can be lazy application objects.
+      normalized = {}
+      options.each do |name, value|
+        key = name.to_sym if name.is_a?(String) || name.is_a?(Symbol)
+        unless GENERIC_OPTIONS.include?(key) || SPECIAL_OPTIONS.include?(key)
+          raise ArgumentError, "unknown configuration option: #{name.inspect}"
+        end
+        normalized[key] = value
+      end
+      options = normalized
       @rails_environment = environment
       @rails_poll_interval = options[:poll_interval]
       @rails_lock_strategy = normalize_lock_strategy(options[:lock_strategy])
@@ -92,11 +136,26 @@ module DecentJob
       @rails_execution_mode = options[:execution_mode]&.to_sym
       @rails_logger = options[:logger] || logger
       previous = @rails_options || {}
-      options.each do |name, value|
-        next if %i[execution_mode logger poll_interval dequeue_query_sort queue_select_limit lock_strategy].include?(name.to_sym) || (previous.key?(name) && previous[name] == value)
-        public_send("#{name}=", value)
+      @applying_rails_options = true
+      begin
+        GENERIC_OPTIONS.each do |name|
+          next if @explicit_options.key?(name)
+          if options.key?(name)
+            # Preserve supported edits through mutable getters until the host value changes.
+            next if previous.key?(name) && previous[name] == options[name]
+            public_send("#{name}=", copy_containers(options[name]))
+          elsif previous.key?(name)
+            if @baseline_options.key?(name)
+              public_send("#{name}=", copy_containers(@baseline_options[name]))
+            elsif instance_variable_defined?("@#{name}")
+              remove_instance_variable("@#{name}")
+            end
+          end
+        end
+        @rails_options = copy_containers(options)
+      ensure
+        @applying_rails_options = false
       end
-      @rails_options = options.to_h.dup
       self
     end
 
@@ -331,6 +390,34 @@ module DecentJob
     end
 
     private
+
+    def environment_boolean(name, default:)
+      value = ENV[name]
+      return default if value.nil?
+      !["", "0", "f", "F", "false", "FALSE", "off", "OFF"].include?(value)
+    end
+
+    # Application objects (classes, loggers, callable services) remain shared.
+    # Copy only configuration containers, including cycles/shared nested values.
+    def copy_containers(value, copies = {}.compare_by_identity)
+      return value if value.respond_to?(:call)
+      return copies[value] if copies.key?(value)
+      case value
+      when Hash
+        copy = copies[value] = value.dup
+        copy.clear
+        copy.default = copy_containers(value.default, copies) unless value.default_proc
+        value.each { |key, item| copy[copy_containers(key, copies)] = copy_containers(item, copies) }
+        copy
+      when Array
+        copy = copies[value] = value.dup
+        copy.map! { |item| copy_containers(item, copies) }
+      when String
+        copies[value] = value.dup
+      else
+        value
+      end
+    end
 
     def normalize_lock_strategy(value)
       return if value.nil?

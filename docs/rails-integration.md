@@ -13,7 +13,7 @@ config.decent_job.max_threads = 5
 
 Run `bundle exec decent_job migrate --require ./config/environment.rb` to install DecentJob's tables, then `bundle exec decent_job start --require ./config/environment.rb` to run workers. The connection may point to a separate PostgreSQL database. DecentJob uses its own pg pool even when Active Record connects to the same database.
 
-Rails options override environment defaults. Explicit `DecentJob.configure` execution mode and logger values retain precedence; CLI worker options override application settings. The Rails logger is used unless a DecentJob logger was configured. Standalone use does not load Rails or Active Record.
+Rails options override environment defaults. Explicit Ruby settings retain precedence, including when Rails options change or are removed; CLI worker options override application settings. See [configuration sources](configuration.md) for environment fallbacks and mutable settings. The Rails logger is used unless a DecentJob logger was configured. Standalone use does not load Rails or Active Record.
 
 ## Execution modes and boot
 

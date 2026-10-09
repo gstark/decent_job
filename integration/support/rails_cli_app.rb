@@ -13,8 +13,12 @@ end
 
 class RailsCliChildJob < ActiveJob::Base
   def perform
+    max_threads = DecentJob.configuration.max_threads
+    Rails.application.config.decent_job.max_threads = 3
+    DecentJob.configure_rails(Rails.application)
     File.write(ENV.fetch("HOST_RESULT"), JSON.generate(
-      max_threads: DecentJob.configuration.max_threads,
+      max_threads: max_threads,
+      reapplied_max_threads: DecentJob.configuration.max_threads,
       processes: DecentJob::ProcessRecord.all.size
     ))
   end

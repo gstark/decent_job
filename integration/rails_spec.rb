@@ -28,6 +28,10 @@ describe "Rails 8.1 host integration" do
                    "DECENT_JOB_DEQUEUE_QUERY_SORT" => scenario.start_with?("dequeue") ? "created_at" : nil,
                    "DECENT_JOB_QUEUE_SELECT_LIMIT" => scenario.start_with?("dequeue") ? "5" : nil,
                    "DECENT_JOB_LOCK_STRATEGY" => scenario.start_with?("lock_strategy") ? "hybrid" : nil,
+                   "DECENT_JOB_MAX_THREADS" => scenario.start_with?("configuration") ? "6" : nil,
+                   "RAILS_MAX_THREADS" => nil,
+                   "DECENT_JOB_MAX_CACHE" => scenario.start_with?("configuration") ? "7" : nil,
+                   "DECENT_JOB_ENABLE_LISTEN_NOTIFY" => scenario.start_with?("configuration") ? "off" : nil,
                    "DECENT_JOB_EXECUTION_MODE" => nil, "DECENT_JOB_ENABLE_CRON" => "false"}
     Open3.popen3(environment, RbConfig.ruby, "-Ilib", "integration/support/rails_host.rb", pgroup: true) do |input, output, error, process|
       input.close
@@ -64,6 +68,20 @@ describe "Rails 8.1 host integration" do
       _(result.fetch("mode")).must_equal mode
       _(result.fetch("started")).must_equal false
     end
+  end
+
+  it "replaces and removes Rails settings over captured environment defaults" do
+    result = run_host("configuration")
+    _(result.fetch("initial")).must_equal [1, 11, true]
+    _(result.fetch("changed")).must_equal [4, 12, true]
+    _(result.fetch("removed")).must_equal [6, 7, false]
+    _(result.fetch("finished")).must_equal true
+  end
+
+  it "preserves explicit values through Rails boot, changed settings, and removed settings" do
+    result = run_host("configuration_explicit", early_load: true)
+    %w[initial changed removed].each { |key| _(result.fetch(key)).must_equal [3, 0, false] }
+    _(result.fetch("finished")).must_equal true
   end
 
   it "preserves an explicitly configured logger" do
@@ -161,6 +179,7 @@ describe "Rails 8.1 host integration" do
       result = JSON.parse(File.read(result_path))
       _(JSON.parse(File.read(boot_path))).must_equal false
       _(result.fetch("max_threads")).must_equal 1
+      _(result.fetch("reapplied_max_threads")).must_equal 1
       _(result.fetch("processes")).must_equal 1
       Process.kill("TERM", process.pid)
       status = Timeout.timeout(8) { process.value }
