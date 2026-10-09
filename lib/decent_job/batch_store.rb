@@ -217,7 +217,7 @@ module DecentJob
         reconcile(id)
       rescue => error
         begin
-          DecentJob.configuration.on_thread_error.call(error)
+          DecentJob.configuration.on_thread_error&.call(error)
         rescue
           nil
         end

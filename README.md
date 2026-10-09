@@ -91,7 +91,7 @@ DecentJob.configure do |config|
 end
 ```
 
-`DECENT_JOB_DATABASE_URL` falls back to `DATABASE_URL`. The other settings support `DECENT_JOB_EXECUTION_MODE`, `DECENT_JOB_QUEUES`, `DECENT_JOB_MAX_THREADS`, `DECENT_JOB_LOWER_THREAD_PRIORITY`, `DECENT_JOB_POLL_INTERVAL`, `DECENT_JOB_MAX_CACHE`, `DECENT_JOB_ENABLE_LISTEN_NOTIFY`, `DECENT_JOB_ENABLE_PAUSES`, and `DECENT_JOB_SHUTDOWN_TIMEOUT`. `DECENT_JOB_MAX_THREADS` falls back to `RAILS_MAX_THREADS`, then `5`. Environment boolean values such as `false`, `0`, and `off` disable an option. CLI options override configuration in the required application file. See [configuration sources](docs/configuration.md) for Ruby/Rails precedence, environment parsing, and copy isolation.
+`DECENT_JOB_DATABASE_URL` falls back to `DATABASE_URL`. The other settings support `DECENT_JOB_EXECUTION_MODE`, `DECENT_JOB_QUEUES`, `DECENT_JOB_MAX_THREADS`, `DECENT_JOB_LOWER_THREAD_PRIORITY`, `DECENT_JOB_POLL_INTERVAL`, `DECENT_JOB_MAX_CACHE`, `DECENT_JOB_ENABLE_LISTEN_NOTIFY`, `DECENT_JOB_ENABLE_PAUSES`, and `DECENT_JOB_SHUTDOWN_TIMEOUT`. `DECENT_JOB_MAX_THREADS` falls back to `RAILS_MAX_THREADS`, then `5`. Environment boolean values such as `false`, `0`, and `off` disable an option. CLI options override configuration in the required application file. See [configuration sources](docs/configuration.md) for Ruby/Rails precedence, environment parsing, copy isolation, validation diagnostics, and optional error reporting.
 
 Queue expressions:
 

@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "active_support/tagged_logging"
+require "decent_job/configuration/errors"
+require "decent_job/configuration/validator"
 require "json"
 require "logger"
 
@@ -52,7 +54,10 @@ module DecentJob
     alias_method :cleanup_discarded_jobs?, :cleanup_discarded_jobs
     alias_method :daemonize?, :daemonize
 
+    attr_reader :errors
+
     def initialize
+      @errors = Errors.new
       @environment_lock_strategy = normalize_lock_strategy(ENV["DECENT_JOB_LOCK_STRATEGY"])
       @environment_dequeue_query_sort = normalize_dequeue_query_sort(ENV["DECENT_JOB_DEQUEUE_QUERY_SORT"])
       @environment_queue_select_limit = normalize_queue_select_limit(ENV["DECENT_JOB_QUEUE_SELECT_LIMIT"])
@@ -98,6 +103,7 @@ module DecentJob
       original.instance_variables.each do |variable|
         instance_variable_set(variable, copy_containers(original.instance_variable_get(variable), copies))
       end
+      @errors = original.errors.dup
     end
 
     attr_writer :execution_mode, :logger, :on_thread_error
@@ -336,23 +342,14 @@ module DecentJob
       end
     end
 
+    def valid?
+      @errors = Errors.new
+      Validator.new(self, @errors).validate
+      @errors.empty?
+    end
+
     def validate!
-      validate_handled_exceptions!
-      raise ArgumentError, "retry_on_unhandled_error must be true or false" unless [true, false].include?(@retry_on_unhandled_error)
-      self.class.validate_execution_mode!(execution_mode)
-      queue_groups.each { |group| QueueSelection.pools(group, default_threads: @max_threads) }
-      self.class.validate_poll_interval!(poll_interval)
-      raise ArgumentError, "shutdown_timeout must be nonnegative" unless @shutdown_timeout.is_a?(Numeric) && @shutdown_timeout >= 0 && @shutdown_timeout.finite?
-      raise ArgumentError, "on_thread_error must be callable" unless on_thread_error.respond_to?(:call)
-      raise ArgumentError, "enable_cron must be true or false" unless [true, false].include?(@enable_cron)
-      period = @cron_graceful_restart_period
-      if !period.nil? && (!period.is_a?(Numeric) || !period.finite? || !period.positive?)
-        raise ArgumentError, "cron_graceful_restart_period must be a finite positive number or nil"
-      end
-      unless [true, false, :on_unhandled_error].include?(@preserve_job_records) || @preserve_job_records.respond_to?(:call)
-        raise ArgumentError, "preserve_job_records must be true, false, :on_unhandled_error, or callable"
-      end
-      cron_entries
+      raise ArgumentError, errors.full_messages.join("; ") unless valid?
       self
     end
 

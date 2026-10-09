@@ -148,7 +148,7 @@ module DecentJob
       policy == true || (policy == :on_unhandled_error && unhandled)
     rescue => exception
       begin
-        @database.transaction { DecentJob.configuration.on_thread_error.call(exception) }
+        @database.transaction { DecentJob.configuration.on_thread_error&.call(exception) }
       rescue
         nil
       end

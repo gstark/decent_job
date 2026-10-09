@@ -24,7 +24,7 @@ module DecentJob
     end
 
     def report_thread_error(error)
-      configuration.on_thread_error.call(error)
+      configuration.on_thread_error&.call(error)
     rescue Exception # standard:disable Lint/RescueException
       nil
     end

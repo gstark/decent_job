@@ -86,6 +86,10 @@ class DecentJobHostApplication < Rails::Application
     config.decent_job.max_cache = 11
     config.decent_job.enable_listen_notify = true
   end
+  if HOST_SCENARIO == "diagnostics"
+    config.decent_job.on_thread_error = nil
+    config.decent_job.cron = {valid: {cron: "0 * * * *", class: "DiagnosticsHostJob"}}
+  end
   if HOST_SCENARIO == "cron_boot"
     config.decent_job.enable_cron = true
     config.decent_job.cron = {tick: {cron: "* * * * * *", class: "ScheduledHostJob"}}
@@ -127,6 +131,15 @@ if HOST_SCENARIO == "cron_boot"
   JOB
 end
 
+if HOST_SCENARIO == "diagnostics"
+  FileUtils.mkdir_p(File.join(HOST_ROOT, "app/jobs"))
+  File.write(File.join(HOST_ROOT, "app/jobs/diagnostics_host_job.rb"), <<~JOB)
+    class DiagnosticsHostJob < RailsHostJob
+      self.queue_adapter = :decent_job
+    end
+  JOB
+end
+
 application = DecentJobHostApplication.initialize!
 application.executor.to_run { HOST_EVENTS << ["executor_run"] }
 application.executor.to_complete { HOST_EVENTS << ["executor_complete"] }
@@ -137,6 +150,25 @@ result = {events: HOST_EVENTS, mode: RailsHostJob.queue_adapter.execution_mode,
           active_record_loaded: defined?(ActiveRecord::Base) ? true : false}
 
 case HOST_SCENARIO
+when "diagnostics"
+  result[:valid] = DecentJob.configuration.valid?
+  result[:errors] = DecentJob.configuration.errors.to_h
+  result[:reporter_disabled] = DecentJob.configuration.on_thread_error.nil?
+  application.config.decent_job.cron = {
+    missing: {cron: "* * * * *", class: "MissingDiagnosticJob"},
+    malformed: {cron: "invalid", class: "DiagnosticsHostJob"}
+  }
+  begin
+    DecentJob.configure_rails(application)
+  rescue ArgumentError => error
+    result[:rejected_message] = error.message
+  end
+  result[:active_cron_keys] = DecentJob.configuration.cron.keys
+  result[:active_errors] = DecentJob.configuration.errors.to_h
+  DecentJob.configuration.preserve_job_records = ->(*) { raise "retention predicate failed" }
+  job = DiagnosticsHostJob.perform_later("disabled reporter")
+  DecentJob::Performer.new.perform_one
+  result[:finished] = !store.find(job.provider_job_id).fetch("finished_at").nil?
 when "configuration", "configuration_explicit"
   snapshot = -> { [DecentJob.configuration.max_threads, DecentJob.configuration.max_cache, DecentJob.configuration.enable_listen_notify] }
   result[:initial] = snapshot.call

@@ -44,3 +44,35 @@ The following environment variables use the same boolean conversion:
 An absent variable uses its default. Empty strings, `0`, `f`, `F`, `false`, `FALSE`, `off`, and `OFF` disable the option. Other nonempty strings enable it. This conversion applies to environment strings; Ruby setters retain their existing validation. Empty strings become `false`, including where GoodJob's boolean cast returns a false-like `nil`.
 
 Numeric settings reject malformed values instead of silently truncating them. Settings expressed in seconds retain supported fractional values. See [scheduling](scheduling.md), [shutdown](shutdown.md), [worker controls](worker-observability.md), [process tracking](process-tracking.md), and [Rails integration](rails-integration.md) for individual defaults and runtime behavior.
+
+## Validation and diagnostics
+
+Use `valid?` to inspect a configuration without raising for ordinary validation failures:
+
+```ruby
+config = DecentJob.configuration
+unless config.valid?
+  warn config.errors.full_messages.join("\n")
+  warn config.errors[:cron].join("\n")
+end
+```
+
+`errors` contains symbol keys and arrays of messages, supports `empty?`, `to_h`, and `full_messages`, and starts empty. Reading an absent field returns an empty array. Each validation replaces the previous diagnostics. Correct the settings and call `valid?` again to clear resolved errors. Copies have independent diagnostics and validate their own settings.
+
+Validation collects independent setting errors and all invalid cron entries. Cron diagnostics identify the entry and, for an unresolved job class, its configured name. It does not open a database, enqueue jobs, or run application cron, preservation, or error callbacks. Resolving a named cron job class can invoke the application's autoloader. Fatal exceptions propagate normally.
+
+`validate!` runs the same checks, raises `ArgumentError` with the diagnostics on failure, and returns the configuration on success. `DecentJob.configure`, Rails initialization, and CLI configuration use raising validation before accepting a candidate. Some setters reject invalid values immediately; `valid?` does not defer those setter checks. `cron_entries` still raises if definitions cannot produce valid entries.
+
+The diagnostic collection is a small library API. It does not require Active Model or implement its validation framework.
+
+## Error reporting
+
+The default `on_thread_error` callback logs the exception class and message through the configured logger. Set a callable to send operational errors to an application reporter, or assign `nil` to disable this callback:
+
+```ruby
+DecentJob.configure do |config|
+  config.on_thread_error = nil
+end
+```
+
+Nil is an explicit setting and retains precedence over Rails options. Disabling the callback does not change job retry/discard outcomes, retention, batch recovery, or shutdown. Normal job logging and instrumentation remain available. Failures raised by a configured reporter remain contained by the operation's existing reporting boundary.

@@ -84,6 +84,19 @@ describe "Rails 8.1 host integration" do
     _(result.fetch("finished")).must_equal true
   end
 
+  it "validates autoloaded cron classes, rejects all invalid entries, and supports disabled reporting" do
+    result = run_host("diagnostics")
+    _(result.fetch("valid")).must_equal true
+    _(result.fetch("errors")).must_equal({})
+    _(result.fetch("reporter_disabled")).must_equal true
+    _(result.fetch("rejected_message")).must_include "MissingDiagnosticJob"
+    _(result.fetch("rejected_message")).must_include "malformed"
+    _(result.fetch("active_cron_keys")).must_equal ["valid"]
+    _(result.fetch("active_errors")).must_equal({})
+    _(result.fetch("finished")).must_equal true
+    _(result.fetch("active_record_loaded")).must_equal false
+  end
+
   it "preserves an explicitly configured logger" do
     result = run_host("custom_logger")
     _(result.fetch("logger")).must_equal false
