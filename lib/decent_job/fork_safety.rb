@@ -38,11 +38,14 @@ module DecentJob
 
     def with_prepared_fork
       owner = Process.pid
-      previous = runtime_mutex.synchronize do
-        raise ForkInProgress, "runtime is already preparing to fork" if @forking
-        raise LifecycleInProgress, "runtime is #{@runtime_transition}" if @runtime_transition
-        @forking = true
-        [@stopping, @cron_stopping]
+      previous = nil
+      Thread.handle_interrupt(Object => :never) do
+        previous = runtime_mutex.synchronize do
+          raise ForkInProgress, "runtime is already preparing to fork" if @forking
+          raise LifecycleInProgress, "runtime is #{@runtime_transition}" if @runtime_transition
+          @forking = true
+          [@stopping, @cron_stopping]
+        end
       end
       raise ForkInProgress, "workers or cron did not drain before fork" unless shutdown(timeout: configuration.shutdown_timeout)
       run_lifecycle_hooks(:before_supervisor_fork)
@@ -54,9 +57,11 @@ module DecentJob
       Database.with_prepared_fork { yield }
     ensure
       if previous && Process.pid == owner
-        runtime_mutex.synchronize do
-          @forking = false
-          @stopping, @cron_stopping = previous
+        Thread.handle_interrupt(Object => :never) do
+          runtime_mutex.synchronize do
+            @forking = false
+            @stopping, @cron_stopping = previous
+          end
         end
       end
     end
@@ -82,12 +87,7 @@ module DecentJob
       # Preserve registered adapters in the child's lifecycle so reset! retires
       # them, without adopting ObjectSpace's allocated or failed adapters.
       ObjectSpace.each_object(Adapter, &:reset_after_fork)
-      ActiveSupport::IsolatedExecutionState.delete(:decent_job_worker)
-      Thread.current[:decent_job_execution] = nil
-      Thread.current[:decent_job_inline_buffer] = nil
-      %i[decent_job_batch_context decent_job_cron_context decent_job_bulk_buffer].each do |key|
-        Thread.current.thread_variable_set(key, nil)
-      end
+      ExecutionState.reset_after_fork
     end
 
     # CLI overrides preserve application-owned adapters and cached Database

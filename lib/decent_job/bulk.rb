@@ -3,11 +3,11 @@
 module DecentJob
   module Bulk
     def self.current_buffer
-      Thread.current.thread_variable_get(:decent_job_bulk_buffer)
+      ExecutionState[:bulk_buffer]
     end
 
     def self.current_buffer=(buffer)
-      Thread.current.thread_variable_set(:decent_job_bulk_buffer, buffer)
+      ExecutionState[:bulk_buffer] = buffer
     end
 
     def self.capture(active_jobs = nil, queue_adapter: nil, callbacks_run: false, &block)
@@ -39,11 +39,7 @@ module DecentJob
     end
 
     def self.with_buffer(buffer)
-      previous = current_buffer
-      self.current_buffer = buffer
-      yield
-    ensure
-      self.current_buffer = previous
+      ExecutionState.with(:bulk_buffer, buffer) { yield }
     end
 
     def self.capture_block(buffer, &block)

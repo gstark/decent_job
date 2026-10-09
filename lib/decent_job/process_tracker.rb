@@ -116,7 +116,9 @@ module DecentJob
               connection.exec_params("SELECT pg_advisory_lock(hashtextextended(current_schema() || '.decent_job_processes.' || $1, 0))", [process_id])
             end
           end
-          refresh(connection)
+          # Registration may wait inside an application executor. A reloader
+          # could wait for that parent; heartbeat work only needs its executor.
+          DecentJob.wrap_execution(reload: false) { refresh(connection) }
           @mutex.synchronize do
             @ready = true
             @condition.broadcast

@@ -19,12 +19,12 @@ describe "Rails 8.1 host integration" do
 
   after { FileUtils.remove_entry(@directory) }
 
-  def run_host(scenario, mode: "external", active_record: false, server: false, backlog: nil, environment: "test", early_load: false, expect_work: false)
+  def run_host(scenario, mode: "external", active_record: false, server: false, backlog: nil, environment: "test", early_load: false, expect_work: false, isolation: "thread")
     result_path = File.join(@directory, "performed") if backlog || expect_work
     DecentJob::Store.new(database).enqueue_all([RailsHostJob.new(backlog)]) if backlog
     environment = {"HOST_CONNECTION" => JSON.generate(@connection_options), "HOST_ROOT" => @directory,
                    "HOST_LOAD_EARLY" => early_load.to_s, "HOST_SCENARIO" => scenario, "HOST_MODE" => mode, "HOST_ACTIVE_RECORD" => active_record.to_s,
-                   "HOST_SERVER" => server.to_s, "HOST_RESULT" => result_path, "RAILS_ENV" => environment,
+                   "HOST_SERVER" => server.to_s, "HOST_RESULT" => result_path, "RAILS_ENV" => environment, "HOST_ISOLATION" => isolation,
                    "DECENT_JOB_EXECUTION_MODE" => nil, "DECENT_JOB_ENABLE_CRON" => "false"}
     Open3.popen3(environment, RbConfig.ruby, "-Ilib", "integration/support/rails_host.rb", pgroup: true) do |input, output, error, process|
       input.close
@@ -169,5 +169,19 @@ describe "Rails 8.1 host integration" do
   it "reloads changed job classes before the next execution" do
     result = run_host("reload")
     _(result.fetch("versions")).must_equal [["version", 1, true], ["version", 2, true]]
+  end
+
+  it "isolates fiber captures and transactions and wraps heartbeat callbacks in the host executor" do
+    result = run_host("runtime_isolation", isolation: "fiber")
+    _(result.fetch("isolation")).must_equal "fiber"
+    _(result.fetch("backend_pids").uniq.size).must_equal 2
+    _(result.fetch("captured_arguments")).must_equal [["captured"]]
+    _(result.fetch("committed_arguments")).must_equal ["independent"]
+    _(result.fetch("callbacks")).must_equal ["second_commit", "first_rollback"]
+    _(result.fetch("job_count")).must_equal 1
+    _(result.fetch("bulk_context")).must_be_nil
+    _(result.fetch("monitor_executor")).must_equal true
+    _(result.fetch("pool_active")).must_equal 0
+    _(result.fetch("process_count")).must_equal 0
   end
 end

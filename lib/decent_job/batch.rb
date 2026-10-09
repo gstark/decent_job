@@ -41,7 +41,7 @@ module DecentJob
     end
 
     def self.current_context
-      Thread.current.thread_variable_get(:decent_job_batch_context)
+      ExecutionState[:batch_context]
     end
 
     def self.context_for(database, job: nil)
@@ -68,11 +68,7 @@ module DecentJob
     end
 
     def self.with_context(context)
-      previous = current_context
-      Thread.current.thread_variable_set(:decent_job_batch_context, context)
-      yield
-    ensure
-      Thread.current.thread_variable_set(:decent_job_batch_context, previous)
+      ExecutionState.with(:batch_context, context) { yield }
     end
 
     def self.enqueue_all(pairs)

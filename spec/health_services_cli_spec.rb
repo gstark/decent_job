@@ -6,6 +6,8 @@ require "spec_helper"
 require "stringio"
 
 describe "health service CLI lifecycle" do
+  before { DecentJob.reset! }
+
   after do
     DecentJob.reset!
   end
@@ -19,7 +21,7 @@ describe "health service CLI lifecycle" do
         _(cli.run(["--probe-port", "0", "--probe-handler", "simple"])).must_equal 1
       end
     end
-    _(DecentJob.configuration.probe_port).must_equal 0
+    _(DecentJob.configuration.probe_port).must_equal 0, error.string
     _(DecentJob.configuration.probe_handler).must_equal :simple
     _(error.string).must_include "original startup failure"
     _(error.string).wont_include "secondary shutdown failure"

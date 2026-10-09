@@ -3,15 +3,11 @@
 module DecentJob
   module Current
     def self.execution
-      Thread.current[:decent_job_execution]
+      ExecutionState[:execution]
     end
 
     def self.with(execution)
-      previous = self.execution
-      Thread.current[:decent_job_execution] = execution
-      yield
-    ensure
-      Thread.current[:decent_job_execution] = previous
+      ExecutionState.with(:execution, execution) { yield }
     end
   end
 end

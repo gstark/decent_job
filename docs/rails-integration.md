@@ -34,6 +34,8 @@ Framework readiness does not reopen an explicitly stopped adapter. Use `adapter.
 
 ## Transactions
 
+DecentJob follows `config.active_support.isolation_level` for execution metadata and its pg pool. Under fiber isolation, interleaved fibers have separate checkouts and transaction callbacks. Configure isolation at boot; see [runtime resource ownership](runtime-resources.md).
+
 Enable Active Job 8.1's supported transaction deferral on your base job:
 
 ```ruby

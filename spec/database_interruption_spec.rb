@@ -47,8 +47,8 @@ describe "database asynchronous interruption" do
 
   it "returns checkout ownership when interrupted before the caller receives it" do
     acquired = Queue.new
-    database.define_singleton_method(:checkout) do
-      result = super()
+    database.define_singleton_method(:checkout) do |**options|
+      result = super(**options)
       acquired << true
       Queue.new.pop
       result

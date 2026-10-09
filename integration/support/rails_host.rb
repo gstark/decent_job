@@ -41,6 +41,7 @@ class DecentJobHostApplication < Rails::Application
   config.secret_key_base = "host integration test secret" * 4
   config.logger = Logger.new(StringIO.new)
   config.active_support.deprecation = :stderr
+  config.active_support.isolation_level = ENV.fetch("HOST_ISOLATION", "thread").to_sym
   config.active_job.queue_adapter = :decent_job
   config.decent_job.database_url = HOST_OPTIONS
   config.decent_job.max_threads = 1
@@ -178,6 +179,55 @@ when "reload"
   HostReloadJob.perform_later
   DecentJob.perform_inline
   result[:versions] = HOST_EVENTS.select { |event| event.first == "version" }
+when "runtime_isolation"
+  pool = DecentJob.database
+  callbacks = []
+  backend_pids = []
+  buffer = DecentJob::Bulk::Buffer.new
+  first = Fiber.new do
+    application.executor.wrap do
+      pool.transaction do |connection|
+        backend_pids << connection.backend_pid
+        pool.after_commit { callbacks << "first_commit" }
+        pool.after_rollback { callbacks << "first_rollback" }
+        DecentJob::Bulk.with_buffer(buffer) do
+          RailsHostJob.perform_later("captured")
+          Fiber.yield
+        end
+        raise "rollback first fiber"
+      end
+    end
+  rescue RuntimeError => error
+    raise unless error.message == "rollback first fiber"
+  end
+  first.resume
+  independent = Fiber.new do
+    application.executor.wrap do
+      pool.transaction do |connection|
+        backend_pids << connection.backend_pid
+        pool.after_commit { callbacks << "second_commit" }
+        RailsHostJob.perform_later("independent")
+      end
+    end
+  end.resume
+  first.resume
+  observed = Queue.new
+  tracker = DecentJob::ProcessTracker.new(database: pool, state: -> {
+    observed << application.executor.active?
+    {}
+  })
+  application.executor.wrap do
+    tracker.register { result[:monitor_executor] = Timeout.timeout(3) { observed.pop } }
+  end
+  result[:isolation] = ActiveSupport::IsolatedExecutionState.isolation_level
+  result[:backend_pids] = backend_pids
+  result[:captured_arguments] = buffer.active_jobs.map(&:arguments)
+  result[:committed_arguments] = store.find(independent.provider_job_id).fetch("payload").fetch("arguments")
+  result[:callbacks] = callbacks
+  result[:job_count] = pool.with_connection { |connection| connection.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0).to_i }
+  result[:bulk_context] = DecentJob::Bulk.current_buffer
+  result[:pool_active] = pool.stats.fetch(:active)
+  result[:process_count] = DecentJob::ProcessRecord.all(database: pool).size
 else
   raise "Unknown scenario: #{HOST_SCENARIO}"
 end

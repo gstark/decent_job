@@ -105,6 +105,8 @@ Smaller priority numbers run first. Equal priorities use scheduled time and job 
 
 The default database pool reserves one connection per execution thread plus two for application operations. Automatic cron adds three per configured entry, or four when restart catch-up is enabled. Each worker's heartbeat monitor and optional listener have additional dedicated connections. Account separately for connections used by application code, especially Active Record. See [recurring jobs](docs/recurring-jobs.md) for scheduler costs and [process tracking](docs/process-tracking.md) for heartbeat lifecycle, worker statistics, and connection sizing.
 
+Job metadata, enqueue context, and pooled connections follow Active Support's configured thread or fiber isolation. Set that policy at boot, before scoped work or checkouts begin. See [runtime resources and execution isolation](docs/runtime-resources.md) for resource bounds and transaction ownership.
+
 Per-job notification controls and transactional publication are described in [notifications](docs/notifications.md). Disabling a notification does not prevent execution. Workers cache future deadlines and can run scheduled jobs with polling disabled. See [worker scheduling](docs/scheduling.md) for cache limits, polling defaults, and recovery tradeoffs.
 
 Use `DecentJob.stats` and `DecentJob.idle?` to inspect registered workers in the current process. Jobs can use `DecentJob.current_thread_shutting_down?` for cooperative shutdown. See [worker activity and thread controls](docs/worker-observability.md) for counters, timestamps, and `--lower-thread-priority` configuration.

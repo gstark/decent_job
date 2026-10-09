@@ -55,9 +55,9 @@ module DecentJob
       @loading_cli_application = previous
     end
 
-    def wrap_execution(&block)
+    def wrap_execution(reload: true, &block)
       application = Rails.application if defined?(Rails) && Rails.respond_to?(:application)
-      wrapper = if application&.respond_to?(:reloader)
+      wrapper = if reload && application&.respond_to?(:reloader)
         application.reloader
       elsif application&.respond_to?(:executor)
         application.executor

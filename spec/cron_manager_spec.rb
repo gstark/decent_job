@@ -403,7 +403,7 @@ describe "cron manager" do
       restored << Thread.current.thread_variable_get(:cron_spec_executor)
     end
     host = Module.new
-    application = Struct.new(:executor, :reloader).new(Object.new, executor)
+    application = Struct.new(:executor, :reloader).new(Class.new(ActiveSupport::Executor), executor)
     host.define_singleton_method(:application) { application }
     Object.const_set(:Rails, host)
     recurring = entry(cron: ->(previous) {

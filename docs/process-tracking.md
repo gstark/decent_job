@@ -63,4 +63,6 @@ Each scheduler also reports `max_cache`, `active_cache`, and `available_cache`. 
 
 `Database#stats` reports configured pool size, allocated connections, active checkouts, and idle connections. The dedicated heartbeat and LISTEN connections are outside those counts. Reserve one additional connection for each active tracker, plus the listener when enabled. An idle worker keeps its tracker; a standalone performer only starts one after acquiring a candidate job.
 
+With Active Support's fiber isolation enabled, concurrent fibers count as separate checkout owners. [Runtime resources](runtime-resources.md) lists the thread and session bounds and explains how scoped state and transactions follow that setting.
+
 Create fresh database and worker objects after forking. Inherited pools and trackers are rejected instead of reusing the parent's connections or process identity. A child's rejected use must not remove the parent's process record.

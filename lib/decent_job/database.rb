@@ -9,7 +9,7 @@ module DecentJob
   class ForkedDatabase < StandardError; end
   class TransactionAborted < StandardError; end
 
-  # A bounded pool. A checkout belongs to one thread until its block returns.
+  # A bounded pool. A checkout belongs to one execution context until its block returns.
   # Nested operations reuse that checkout, including transactions and locks.
   class Database
     @registry_mutex = Mutex.new
@@ -17,27 +17,46 @@ module DecentJob
 
     class << self
       def register(database)
-        @registry_mutex.synchronize { @registry[database] = true }
+        @registry_mutex.synchronize do
+          raise ForkInProgress, "databases are preparing to fork" if @fork_prepared
+          @registry[database] = true
+        end
       end
 
       def with_prepared_fork
-        @registry_mutex.synchronize do
-          databases = @registry.keys
-          prepared = []
-          begin
-            databases.each do |database|
-              database.prepare_fork
-              prepared << database
-            end
-            yield
+        owner = Process.pid
+        acquired = false
+        databases = nil
+        prepared = []
+        Thread.handle_interrupt(Object => :never) do
+          @registry_mutex.synchronize do
+            raise ForkInProgress, "databases are already preparing to fork" if @fork_prepared
+            @fork_prepared = true
+            acquired = true
+            databases = @registry.keys
+          end
+        end
+        databases.each do |database|
+          Thread.handle_interrupt(Object => :never) do
+            # Register cleanup before preparation can close sessions or fail.
+            prepared << database
+            database.prepare_fork
+          end
+        end
+        yield
+      ensure
+        if acquired && Process.pid == owner
+          Thread.handle_interrupt(Object => :never) do
+            prepared.each(&:resume_after_fork)
           ensure
-            prepared.each(&:resume_after_fork) if Process.pid == prepared.first&.owner_pid
+            @registry_mutex.synchronize { @fork_prepared = false }
           end
         end
       end
 
       def reset_after_fork
         @registry_mutex = Mutex.new
+        @fork_prepared = false
         @registry.keys.each(&:reset_after_fork)
       end
     end
@@ -106,20 +125,21 @@ module DecentJob
     def with_connection
       raise ForkedDatabase, "create a new Database after forking" if @pid != Process.pid
 
-      nested = @mutex.synchronize { @borrowed[Thread.current] }
+      owner = ActiveSupport::IsolatedExecutionState.context
+      nested = @mutex.synchronize { @borrowed[owner] }
       return yield nested if nested
 
       # Protect ownership handoffs, while pool waits/connect and application
       # work remain interruptible. Ensure also covers checkout's return boundary.
       Thread.handle_interrupt(Object => :on_blocking) do
-        connection = checkout
+        connection = checkout(owner: owner)
         Thread.handle_interrupt(Object => :immediate) { yield connection }
       ensure
         Thread.handle_interrupt(Object => :never) do
-          connection ||= @mutex.synchronize { @borrowed[Thread.current] }
+          connection ||= @mutex.synchronize { @borrowed[owner] }
           # A killed PG query can leave unread protocol data despite CONNECTION_OK.
           # Retire only after application ensure blocks have released ownership.
-          checkin(connection, interrupted: Thread.current.status == "aborting") if connection
+          checkin(connection, owner: owner, interrupted: Thread.current.status == "aborting") if connection
         end
       end
     end
@@ -129,7 +149,7 @@ module DecentJob
         Thread.handle_interrupt(Object => :on_blocking) do
           nested = connection.transaction_status != PG::PQTRANS_IDLE
           savepoint = "decent_job_#{Thread.current.object_id}_#{rand(1 << 32)}"
-          frames = @mutex.synchronize { @transaction_callbacks[Thread.current] ||= [] }
+          frames = @mutex.synchronize { @transaction_callbacks[connection] ||= [] }
           callbacks = {commit: [], rollback: []}
           frames << callbacks
           committed = false
@@ -152,7 +172,7 @@ module DecentJob
               end
             ensure
               frames.pop
-              @mutex.synchronize { @transaction_callbacks.delete(Thread.current) } if frames.empty?
+              @mutex.synchronize { @transaction_callbacks.delete(connection) } if frames.empty?
             end
             if committed
               if frames.empty?
@@ -170,7 +190,7 @@ module DecentJob
     end
 
     def after_commit(&block)
-      frames = @mutex.synchronize { @transaction_callbacks[Thread.current] }
+      frames = @mutex.synchronize { @transaction_callbacks[@borrowed[ActiveSupport::IsolatedExecutionState.context]] }
       if frames && !frames.empty?
         frames.last[:commit] << block
       else
@@ -181,7 +201,7 @@ module DecentJob
     # Savepoint commits retain these callbacks until the outer transaction ends.
     # Without an active transaction there is no rollback to observe.
     def after_rollback(&block)
-      frames = @mutex.synchronize { @transaction_callbacks[Thread.current] }
+      frames = @mutex.synchronize { @transaction_callbacks[@borrowed[ActiveSupport::IsolatedExecutionState.context]] }
       frames.last[:rollback] << block if frames && !frames.empty?
     end
 
@@ -209,7 +229,7 @@ module DecentJob
 
     private
 
-    def checkout
+    def checkout(owner:)
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + @checkout_timeout
       reserved = false
       registered = false
@@ -220,7 +240,7 @@ module DecentJob
 
           connection = @idle.pop
           if connection
-            @borrowed[Thread.current] = connection
+            @borrowed[owner] = connection
             return connection
           elsif @size < @pool_size
             @size += 1
@@ -236,7 +256,7 @@ module DecentJob
       connection = connect
       @mutex.synchronize do
         raise ClosedDatabase, "database is closed" if @closed
-        @borrowed[Thread.current] = connection
+        @borrowed[owner] = connection
         registered = true
       end
       connection
@@ -281,12 +301,12 @@ module DecentJob
       cancellation&.finish
     end
 
-    def checkin(connection, interrupted: false)
+    def checkin(connection, owner:, interrupted: false)
       cancel_interrupted_query(connection) if interrupted
     ensure
       @mutex.synchronize do
-        @borrowed.delete(Thread.current)
-        @transaction_callbacks.delete(Thread.current)
+        @borrowed.delete(owner)
+        @transaction_callbacks.delete(connection)
         if interrupted || @closed || @size > @pool_size || connection.finished? || connection.status != PG::CONNECTION_OK
           connection.finish unless connection.finished?
           @size -= 1
