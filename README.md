@@ -2,9 +2,9 @@
 
 A PostgreSQL backend for Active Job with two direct runtime dependencies: `activejob` and `pg`.
 
-The current implementation supports persistent jobs, delayed execution, priorities, queue pools, bulk capture, labels, concurrency limits and throttles, persistent pauses, retries, discards, execution history, inline and async execution, and external workers. It uses session advisory locks, LISTEN/NOTIFY, and polling.
+The current implementation supports persistent jobs, delayed execution, priorities, queue pools, bulk capture, batches, labels, concurrency limits and throttles, persistent pauses, retries, discards, execution history, inline and async execution, and external workers. It uses session advisory locks, LISTEN/NOTIFY, and polling.
 
-This is an early implementation. Full GoodJob parity remains the project goal. Batches, recurring schedules, the dashboard, and several operational features are still planned. See [the parity checklist](docs/parity.md) and [implementation plan](docs/implementation-plan.md).
+This is an early implementation. Full GoodJob parity remains the project goal. Recurring schedules, the dashboard, and several operational features are still planned. See [the parity checklist](docs/parity.md) and [implementation plan](docs/implementation-plan.md).
 
 ## Install and run
 
@@ -182,6 +182,56 @@ A block captures enqueues until it returns. An exception in the block abandons i
 Captured callbacks observe provisional enqueue success. Admission happens after the block, so a later rejection updates the job's status but cannot undo callback side effects. Ordinary `perform_later` and explicit controlled bulk jobs suppress `after_enqueue` when admission rejects them.
 
 `DecentJob::Bulk.capture { ... }` captures jobs without flushing them and restores an enclosing capture afterward. Pass either explicit jobs or a block to these APIs. To make writes across multiple flush groups atomic on one database, wrap bulk enqueue in `DecentJob.database.transaction`.
+
+## Batches
+
+Group jobs and enqueue callbacks when the group finishes:
+
+```ruby
+class GreetingBatchFinishedJob < ActiveJob::Base
+  def perform(batch, options)
+    puts "#{batch.properties.fetch(:account)}: #{options.fetch(:event)}"
+  end
+end
+
+batch = DecentJob::Batch.enqueue(
+  description: "Account greetings",
+  on_finish: GreetingBatchFinishedJob,
+  callback_queue_name: "default",
+  callback_priority: 10,
+  account: 42
+) do
+  GreetingJob.perform_later("Ada")
+  GreetingJob.perform_later("Grace")
+end
+
+batch.reload.jobs_finished? # All member jobs have finished.
+batch.reload.finished?      # All members and callback jobs have finished.
+batch.reload.succeeded?     # Finished with no discarded member or callback.
+```
+
+`on_success` fires when all members finish without a discard. `on_discard` fires on the first discarded member or callback; it can fire before the other members finish. `on_finish` fires once all members finish. Each receives the batch and `{event: :success}`, `{event: :discard}`, or `{event: :finish}`. Callback jobs can use ordinary Active Job retry handlers. Callback ordering is not guaranteed.
+
+Batch properties use Active Job serialization, including symbols, dates, and GlobalID objects. Supply arbitrary keyword properties or an explicit `properties:` hash. Batches themselves support GlobalID serialization. Use `DecentJob::Batch.find(id)` to load a batch and `reload` to refresh an existing object's state.
+
+To build a batch incrementally, use `Batch.new`, `add(jobs)` or an `add` block, then `enqueue`. Added jobs are persisted immediately, while finish/success callbacks wait until the batch is marked enqueued. `enqueue` accepts an array and a block together. The class method returns the batch; instance `enqueue` and `add` return accepted jobs. Existing jobs can be attached without inserting them again. A running job can access its batch through `batch` and `batch?`; ordinary jobs it enqueues do not automatically inherit membership.
+
+Calling `enqueue` again reopens the same batch. Calling `retry` reopens it and retries only discarded members, running their Active Job enqueue callbacks and preserving IDs and execution history. Old callback jobs are retained but are not manually retried. `active_jobs` and `callback_active_jobs` return all associated deserialized jobs, including completed jobs.
+
+Create several new batches in one transaction with pairs of batches and job arrays:
+
+```ruby
+first = DecentJob::Batch.new(account: 42, on_finish: GreetingBatchFinishedJob)
+second = DecentJob::Batch.new(account: 43, on_finish: GreetingBatchFinishedJob)
+DecentJob::Batch.enqueue_all([
+  [first, [GreetingJob.new("Ada")]],
+  [second, []]
+])
+```
+
+This uses bulk inserts for batch records and ordinary members, with individual admission checks for controlled jobs. Empty batches also run their callbacks. All batches, members, and callback jobs must use DecentJob adapters sharing the same database object; pass `database:` to batch constructors when using an isolated database. A job can belong to only one member batch. Batch operations flush independently of an enclosing bulk capture, and captured enqueue callbacks observe the provisional success described above.
+
+Callback enqueue is deduplicated per batch generation. Completion requests commit with job results, allowing idle worker polls to recover callbacks after a crash. Admission-rejected callbacks remain pending until a later poll admits them. Callback execution has the same at-least-once guarantee as other jobs. Batch records and callback delivery history are currently retained indefinitely.
 
 ## Transactions and reliability
 

@@ -19,16 +19,18 @@ module DecentJob
         jobs.zip(ids).each_slice(500) do |entries|
           params = []
           values = entries.map do |job, id|
+            batch = Batch.context_for(@database, job: job) || {}
             offset = params.size
             payload = job.serialize.merge("provider_job_id" => id)
             params.concat([id, job.job_id, job.queue_name, job.class.name, job.priority || 0,
               JSON.generate(payload), (job.scheduled_at || Time.now).utc.iso8601(6),
               PG::TextEncoder::Array.new.encode(payload.fetch("decent_job_labels", [])),
-              PG::TextEncoder::Array.new.encode(payload.fetch("decent_job_concurrency_keys", []))])
-            "(#{(1..9).map { |index| "$#{offset + index}" }.join(", ")})"
+              PG::TextEncoder::Array.new.encode(payload.fetch("decent_job_concurrency_keys", [])),
+              batch[:batch_id], batch[:batch_callback_id]])
+            "(#{(1..11).map { |index| "$#{offset + index}" }.join(", ")})"
           end
           connection.exec_params(<<~SQL, params)
-            INSERT INTO decent_jobs (id, active_job_id, queue_name, job_class, priority, payload, scheduled_at, labels, concurrency_keys)
+            INSERT INTO decent_jobs (id, active_job_id, queue_name, job_class, priority, payload, scheduled_at, labels, concurrency_keys, batch_id, batch_callback_id)
             VALUES #{values.join(", ")}
           SQL
         end

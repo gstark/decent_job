@@ -11,6 +11,7 @@ module DecentJob
     end
 
     def perform_one(queues: "*", job_id: nil, raise_errors: false, stopping: -> { false })
+      BatchStore.new(@database).reconcile_pending
       ConcurrencyClaims.new(@database).recover
       @claim.with_next(queues: queues, job_id: job_id, stopping: stopping) do |row|
         execute(row, raise_errors: raise_errors)
@@ -30,7 +31,8 @@ module DecentJob
         state = name.start_with?("enqueue_retry") ? "retried" : "discarded"
         error = payload[:error]
       end
-      context = {database: @database, job_id: row.fetch("active_job_id"), id: row.fetch("id"), execution_id: row.fetch("execution_id")}
+      context = {database: @database, job_id: row.fetch("active_job_id"), id: row.fetch("id"), execution_id: row.fetch("execution_id"),
+                 batch_id: row["batch_id"], batch_callback_id: row["batch_callback_id"]}
       begin
         Current.with(context) do
           ActiveSupport::Notifications.subscribed(subscriber, /\A(?:enqueue_retry|discard|retry_stopped)\.active_job\z/) do
@@ -58,8 +60,9 @@ module DecentJob
 
     def finish(row, state, error)
       details = error && JSON.generate("class" => error.class.name, "message" => error.message, "backtrace" => error.backtrace || [])
+      batch_ids = []
       ConcurrencyClaims.new(@database).finish(id: row.fetch("id"), execution_id: row.fetch("execution_id")) do |connection|
-        current = connection.exec_params("SELECT state, execution_id FROM decent_jobs WHERE id = $1 FOR UPDATE", [row.fetch("id")]).first
+        current = connection.exec_params("SELECT state, execution_id, batch_id, batch_callback_id FROM decent_jobs WHERE id = $1 FOR UPDATE", [row.fetch("id")]).first
         raise "Execution ownership lost" unless current && current["execution_id"] == row.fetch("execution_id")
 
         state = "retried" if current["state"] == "ready"
@@ -69,10 +72,13 @@ module DecentJob
               updated_at = clock_timestamp(), error = $3 WHERE id = $1
           SQL
         end
-        connection.exec_params(<<~SQL, [row.fetch("execution_id"), state, details])
-          UPDATE decent_job_executions SET state = $2, finished_at = clock_timestamp(), error = $3 WHERE id = $1
+        connection.exec_params(<<~SQL, [row.fetch("execution_id"), state, details, current["batch_id"]])
+          UPDATE decent_job_executions SET state = $2, finished_at = clock_timestamp(), error = $3, batch_id = $4 WHERE id = $1
         SQL
+        batch_ids = current.values_at("batch_id", "batch_callback_id").compact.uniq
+        BatchStore.new(@database).request(connection, batch_ids, job_id: row.fetch("id"), discarded: state == "discarded")
       end
+      batch_ids.sort.each { |id| BatchStore.new(@database).reconcile(id) }
       state
     end
   end

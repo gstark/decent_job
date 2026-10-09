@@ -132,7 +132,7 @@ describe "decent_job executable" do
     _(output).must_include "schema installed"
     _(error).wont_include "Error:"
     database.with_connection do |connection|
-      _(connection.exec("SELECT version FROM decent_job_schema_migrations ORDER BY version").column_values(0)).must_equal ["1", "2", "3"]
+      _(connection.exec("SELECT version FROM decent_job_schema_migrations ORDER BY version").column_values(0)).must_equal ["1", "2", "3", "4"]
     end
   end
 

@@ -81,6 +81,41 @@ module DecentJob
         @children << buffer
       end
 
+      def capture(&block)
+        Bulk.with_buffer(self, &block)
+      rescue
+        discard
+        raise
+      end
+
+      # Run controlled jobs' callbacks before acquiring a batch's complete set
+      # of concurrency locks. Admission still happens when this buffer flushes.
+      def prepare
+        prepared = self.class.new
+        pending = @entries.reverse
+        callbacks_prepared = @entries.select(&:callbacks_run).to_h { |entry| [entry.job.object_id, true] }
+        added = {}
+        while (entry = pending.pop)
+          identity = entry.job.object_id
+          if !entry.callbacks_run && !entry.job.provider_job_id && entry.job.respond_to?(:decent_job_resolved_concurrency_rules)
+            next if callbacks_prepared[identity]
+            callbacks_prepared[identity] = true
+            captured = self.class.new
+            captured.capture { entry.job.enqueue }
+            captured.entries.each { |child| callbacks_prepared[child.job.object_id] = true if child.callbacks_run }
+            pending.concat(captured.entries.reverse)
+            @children.concat(captured.children)
+          else
+            next if added[identity]
+            added[identity] = true
+            prepared.add(entry.job, queue_adapter: entry.adapter, callbacks_run: entry.callbacks_run)
+          end
+        end
+        @entries = prepared.entries
+        @active_jobs.replace(prepared.active_jobs)
+        self
+      end
+
       def enqueue
         entries = @entries.uniq { |entry| entry.job.object_id }.reject { |entry| entry.job.provider_job_id }
         entries.group_by { |entry| [entry.adapter, entry.callbacks_run] }.each do |(adapter, callbacks_run), group|
@@ -109,7 +144,7 @@ module DecentJob
 
       protected
 
-      attr_reader :entries
+      attr_reader :entries, :children
     end
   end
 end

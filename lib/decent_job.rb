@@ -1,9 +1,12 @@
 # frozen_string_literal: true
 
 require "active_job"
+require "decent_job/active_job_extensions/batches"
 require "decent_job/active_job_extensions/concurrency"
 require "decent_job/active_job_extensions/labels"
 require "decent_job/adapter"
+require "decent_job/batch"
+require "decent_job/batch_store"
 require "decent_job/bulk"
 require "decent_job/claim"
 require "decent_job/concurrency_controls"
@@ -20,6 +23,7 @@ require "decent_job/store"
 require "decent_job/worker"
 
 ActiveJob::QueueAdapters.autoload :DecentJobAdapter, "active_job/queue_adapters/decent_job_adapter"
+ActiveJob::Base.include DecentJob::ActiveJobExtensions::Batches
 
 module DecentJob
   VERSION = "0.1.0"

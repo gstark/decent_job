@@ -30,9 +30,21 @@ First-slice verification: 88 specs, 284 assertions; Standard passed; gem build a
 
 Job-controls verification: 213 specs, 766 assertions; Standard and gem build passed. The built package includes both new migrations and the controls/bulk implementation. Real PostgreSQL specs cover competing enqueuers, simultaneous claims, promotion before retry persistence, multiple releases, changed rules between attempts, and SIGKILL recovery. Independent spec-compliance and code-quality reviews passed. This slice includes documented adaptations for captured callback timing, stricter invalid-option validation, and a consistent top-level label pause API.
 
+### Batches slice
+
+- [x] Persist batch metadata, Active Job properties, membership, and GlobalID references.
+- [x] Add enqueue/add/reopen/retry and multi-batch enqueue APIs with one-database validation.
+- [x] Deduplicate success/discard/finish callback deliveries transactionally and retain pending callbacks after admission rejection.
+- [x] Record completion requests atomically with job finish; recover callback work on idle polls after process failure.
+- [x] Preserve inline/nested contexts, recursive reopening, existing/running membership, callback retries, and phase-specific completion state.
+- [x] Test competing final completions and opposing concurrency-scope orders; review lock ownership and rollback paths.
+- [x] Document, independently review, and verify the complete slice.
+
+Batch verification: 301 specs, 1,081 assertions; Standard and gem build passed. The package contains migration 004 and all batch implementation files. Independent spec-compliance and code-quality reviews passed. Real PostgreSQL tests cover callback deduplication and recovery after SIGKILL, concurrent discards during reconciliation and reopening, recursive callback-created controlled jobs, database isolation, retry callbacks, and inline/async multi-batch execution.
+
 ### Remaining slices
 
-1. Workflows: batches and transactionally deduplicated callbacks, recurring schedules and catch-up.
+1. Recurring schedules: cron parsing, timezone/DST behavior, deduplicated enqueue, persistent enable/disable controls, and restart catch-up.
 2. Operations: retention, process heartbeats, supervisor, systemd, Rails integration.
 3. Dashboard: authenticated job actions, histories, batches, schedules, processes and metrics.
 4. Compatibility: additional lock strategies, PgBouncer, full scheduling grammar, benchmark and parity audit.

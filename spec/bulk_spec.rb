@@ -14,6 +14,16 @@ class ControlledBulkJob < BulkJob
   include DecentJob::ActiveJobExtensions::Concurrency
 end
 
+class ControlledBulkDescendantJob < ControlledBulkJob
+  before_enqueue do
+    depth = arguments.first
+    ActiveJob.perform_all_later(self.class.new(depth - 1)) if depth.positive?
+    self.arguments = [depth, "scope-#{depth}"]
+    self.queue_name = "generation-#{depth}"
+    self.decent_job_labels = ["prepared-#{depth}"]
+  end
+end
+
 describe DecentJob::Bulk do
   include DatabaseSpec
 
@@ -238,5 +248,44 @@ describe DecentJob::Bulk do
 
     _(DecentJob::Bulk.enqueue(job)).must_equal [job]
     _(BulkJob.queue_adapter.enqueued_jobs.size).must_equal 1
+  end
+
+  it "prepares bulk-created controlled descendants before returning their scopes" do
+    ControlledBulkDescendantJob.decent_job_control_concurrency_with(key: -> { arguments.last }, enqueue_limit: 10)
+    buffer = DecentJob::Bulk::Buffer.new
+    buffer.add(ControlledBulkDescendantJob.new(2))
+    buffer.prepare
+
+    _(buffer.active_jobs.size).must_equal 3
+    _(buffer.active_jobs.map(&:queue_name).sort).must_equal ["generation-0", "generation-1", "generation-2"]
+    _(buffer.active_jobs.flat_map(&:decent_job_labels).sort).must_equal ["prepared-0", "prepared-1", "prepared-2"]
+    scopes = buffer.active_jobs.flat_map { |job| job.decent_job_resolved_concurrency_rules(stage: :metadata).map(&:scope) }
+    _(scopes.sort).must_equal ["key:scope-0", "key:scope-1", "key:scope-2"]
+    _(BulkJob.callback_events.tally.values).must_equal [1, 1, 1]
+    _(BulkJob.after_callback_events.tally.values).must_equal [1, 1, 1]
+    database.with_connection { |connection| _(connection.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0)).must_equal "0" }
+  end
+
+  it "prepares a duplicated controlled job object only once" do
+    job = ControlledBulkJob.new("same object")
+    buffer = DecentJob::Bulk::Buffer.new
+    buffer.add([job, job])
+    buffer.prepare
+
+    _(buffer.active_jobs).must_equal [job]
+    _(BulkJob.callback_events).must_equal [job.job_id]
+    _(BulkJob.after_callback_events).must_equal [job.job_id]
+  end
+
+  it "prefers a captured controlled entry over an unprepared duplicate" do
+    job = ControlledBulkJob.new("same object")
+    buffer = DecentJob::Bulk::Buffer.new
+    buffer.add(job)
+    buffer.capture { job.enqueue }
+    buffer.prepare
+
+    _(buffer.active_jobs).must_equal [job]
+    _(BulkJob.callback_events).must_equal [job.job_id]
+    _(BulkJob.after_callback_events).must_equal [job.job_id]
   end
 end

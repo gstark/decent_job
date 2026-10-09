@@ -2,6 +2,8 @@
 
 module DecentJob
   class Adapter
+    attr_reader :execution_mode
+
     def initialize(database: nil, execution_mode: DecentJob.configuration.execution_mode)
       raise ArgumentError, "unknown execution mode" unless %i[external inline async].include?(execution_mode)
       @database = database
