@@ -58,7 +58,7 @@ module DecentJob
       process_id = event.payload[:process_id]
 
       info(tags: [process_id]) do
-        "DecentJob scheduler is shut down."
+        (event.payload[:stopped] == false) ? "DecentJob scheduler is still draining." : "DecentJob scheduler is shut down."
       end
     end
 
@@ -79,7 +79,7 @@ module DecentJob
       process_id = event.payload[:process_id]
 
       info(tags: [process_id]) do
-        "DecentJob scheduler has restarted."
+        (event.payload[:restarted] == false) ? "DecentJob scheduler restart #{event.payload[:outcome]}." : "DecentJob scheduler has restarted."
       end
     end
 

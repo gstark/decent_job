@@ -57,7 +57,7 @@ module DecentJob
 
     def self.observe(database, on_error, &block)
       Thread.handle_interrupt(Object => :immediate) do
-        database.in_transaction? ? database.transaction(&block) : block.call
+        database&.in_transaction? ? database.transaction(&block) : block.call
       end
     rescue Exception => error # standard:disable Lint/RescueException
       report(error, database, on_error)
@@ -73,7 +73,7 @@ module DecentJob
         ActiveSupport::IsolatedExecutionState[:decent_job_reporting_observer_error] = true
         callback = ->(*) { on_error&.call(error) }
         Thread.handle_interrupt(Object => :immediate) do
-          database.in_transaction? ? database.transaction(&callback) : callback.call
+          database&.in_transaction? ? database.transaction(&callback) : callback.call
         end
       rescue Exception # standard:disable Lint/RescueException
         nil

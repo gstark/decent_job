@@ -15,6 +15,8 @@ adapter.restart(timeout: 30)
 
 The timeout applies to the whole drain. The defaults match [shutdown](shutdown.md): `nil` waits indefinitely, zero signals without waiting, and positive values provide a grace period. `force: true` requests interruption after that period. Ruby cleanup can outlive it, in which case restart returns false and does not create a replacement run.
 
+[Lifecycle notifications](instrumentation.md#lifecycle-observations) identify the captured run and distinguish stopped, draining, and refused restart outcomes. Observers run synchronously outside lifecycle mutexes; their time can consume the shutdown grace period. Every selected resource receives its stop signal before shutdown observers run.
+
 ## Explicit and automatic startup
 
 Calling `Worker#start` or `CronManager#start` explicitly can restart a stopped owner. Calling start repeatedly while its run is alive does not create another set of resources. An owner does not replace its old run while old threads or its process monitor still need to finish.

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "decent_job/lifecycle_events"
 require "decent_job/resource_shutdown"
 
 module DecentJob
@@ -32,20 +33,34 @@ module DecentJob
           return false if expected_revision && expected_revision != @lifecycle_revision
           return self if !@stopping || @threads.any?(&:alive?)
 
+          began = monotonic_time
           @stopping = false
           @lifecycle_revision += 1
+          @run_id = (@run_id || 0) + 1
           @interrupted_threads = {}
           started_at = Time.now
           zone = Time.zone
-          @threads = cron_entries.flat_map do |entry|
-            state = {pending: [], ready: false}
-            threads = [Thread.new { Time.use_zone(zone) { run(entry, state, started_at) } }]
-            2.times { threads << Thread.new { Time.use_zone(zone) { dispatch(entry, state) } } }
-            if @graceful_restart_period
-              threads << Thread.new { Time.use_zone(zone) { replay(entry, state, started_at) } }
+          @threads = []
+          allocated = false
+          begin
+            Thread.handle_interrupt(Object => :never) do
+              cron_entries.each do |entry|
+                state = {pending: [], ready: false}
+                allocate_thread { Time.use_zone(zone) { run(entry, state, started_at) } }
+                2.times { allocate_thread { Time.use_zone(zone) { dispatch(entry, state) } } }
+                allocate_thread { Time.use_zone(zone) { replay(entry, state, started_at) } } if @graceful_restart_period
+              end
             end
-            threads
+            allocated = true
+          ensure
+            unless allocated
+              @stopping = true
+              @threads.each(&:kill)
+            end
           end
+          LifecycleEvents.record(self, "cron_manager_start",
+            {cron_manager: self, cron_entries: cron_entries.dup, run_id: @run_id,
+             operation_duration: monotonic_time - began}, on_error: @on_thread_error)
         end
       end
       self
@@ -62,7 +77,7 @@ module DecentJob
 
     def shutdown(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
-      begin_shutdown.wait(deadline: deadline, force: force)
+      begin_shutdown.wait(deadline: deadline, force: force, timeout: timeout)
     end
 
     def begin_shutdown
@@ -102,10 +117,19 @@ module DecentJob
     def restart(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
       handle = begin_shutdown
-      handle.wait(deadline: deadline, force: force) ? handle.restart : false
+      handle.wait(deadline: deadline, force: force, timeout: timeout) ? handle.restart : false
     end
 
     private
+
+    def allocate_thread(&block)
+      @threads << Thread.new do
+        Thread.handle_interrupt(Object => :immediate) do
+          @mutex.synchronize {} # Do not invoke entries before allocation succeeds.
+          block.call
+        end
+      end
+    end
 
     def run(entry, state, started_at)
       historical = safely { in_context { CronEntry.last_jobs_by_key([entry], before: started_at)[entry.key.to_s] } } if @graceful_restart_period

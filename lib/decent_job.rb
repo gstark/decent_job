@@ -33,6 +33,7 @@ require "decent_job/interrupt_error"
 require "decent_job/interrupted_error"
 require "decent_job/job"
 require "decent_job/job_retry"
+require "decent_job/lifecycle_events"
 require "decent_job/lifecycle_hooks"
 require "decent_job/log_subscriber"
 require "decent_job/notifier"
@@ -240,7 +241,7 @@ module DecentJob
 
     def stop_cron(timeout: nil, database: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
-      ResourceShutdown.wait_all(begin_cron_shutdown(database: database), deadline: deadline, force: force)
+      ResourceShutdown.wait_all(begin_cron_shutdown(database: database), deadline: deadline, force: force, timeout: timeout)
     end
 
     def begin_cron_shutdown(database: nil)
@@ -265,21 +266,25 @@ module DecentJob
     def shutdown(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
       _revision, handles = begin_shutdown
-      ResourceShutdown.wait_all(handles, deadline: deadline, force: force)
+      ResourceShutdown.wait_all(handles, deadline: deadline, force: force, timeout: timeout)
     end
 
     def restart(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
-      revision, handles = begin_shutdown
-      return false unless ResourceShutdown.wait_all(handles, deadline: deadline, force: force)
+      revision, handles, restart_handles = begin_shutdown(restarting: true)
+      return false unless ResourceShutdown.prepare_restart(handles, restart_handles: restart_handles,
+        deadline: deadline, force: force, timeout: timeout)
 
       synchronize_resource_start do
-        return false unless revision == @lifecycle_revision
+        unless revision == @lifecycle_revision
+          restart_handles.each { |handle| handle.restart_failed(:refused) }
+          return false
+        end
         @lifecycle_revision += 1
         @stopping = false
         @cron_stopping = false
         locally_stopped_cron = @cron_managers.filter_map { |pool, manager| manager if @cron_stopped_databases[pool] }
-        restarted = handles.map do |handle|
+        restarted = restart_handles.map do |handle|
           next true if @locally_stopped_workers&.include?(handle.resource) || locally_stopped_cron.include?(handle.resource)
           handle.restart
         end.all?
@@ -287,12 +292,19 @@ module DecentJob
       end
     end
 
-    def begin_shutdown
+    def begin_shutdown(restarting: false)
       runtime_mutex.synchronize do
         @lifecycle_revision = (@lifecycle_revision || 0) + 1
         @stopping = true
         @cron_stopping = true
-        [@lifecycle_revision, ResourceShutdown.capture_all(@cron_managers.values + @workers)]
+        handles = ResourceShutdown.capture_all(@cron_managers.values + @workers)
+        if restarting
+          locally_stopped_cron = @cron_managers.filter_map { |pool, manager| manager if @cron_stopped_databases[pool] }
+          restart_handles = handles.reject do |handle|
+            @locally_stopped_workers&.include?(handle.resource) || locally_stopped_cron.include?(handle.resource)
+          end
+        end
+        [@lifecycle_revision, handles, restart_handles]
       end
     end
 

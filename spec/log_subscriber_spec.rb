@@ -78,6 +78,15 @@ describe "DecentJob logging" do
     end
   end
 
+  it "describes unfinished shutdown and unsuccessful restart truthfully" do
+    ActiveSupport::Notifications.instrument("scheduler_shutdown.decent_job", stopped: false)
+    _(@output.string).must_include "scheduler is still draining."
+    _(@output.string).wont_include "scheduler is shut down."
+    ActiveSupport::Notifications.instrument("scheduler_restart_pools.decent_job", restarted: false, outcome: :refused)
+    _(@output.string).must_include "scheduler restart refused."
+    _(@output.string).wont_include "scheduler has restarted."
+  end
+
   it "ignores successful timer and job tasks" do
     %i[finished_timer_task finished_job_task].each { |name| ActiveSupport::Notifications.instrument("#{name}.decent_job", error: nil) }
     _(@output.string).must_equal ""

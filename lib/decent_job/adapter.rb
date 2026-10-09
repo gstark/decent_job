@@ -96,23 +96,31 @@ module DecentJob
     def shutdown(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
       _revision, handles = begin_shutdown
-      ResourceShutdown.wait_all(handles, deadline: deadline, force: force)
+      ResourceShutdown.wait_all(handles, deadline: deadline, force: force, timeout: timeout)
     end
 
     def restart(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
       return false if @worker_mutex.synchronize { @retired }
       revision, handles = begin_shutdown
-      return false unless ResourceShutdown.wait_all(handles, deadline: deadline, force: force)
+      return false unless ResourceShutdown.prepare_restart(handles, deadline: deadline, force: force, timeout: timeout)
 
-      @worker_mutex.synchronize do
-        return false if @retired || revision != @lifecycle_revision
-        DecentJob.synchronize_resource_start do
-          return false if DecentJob.stopping?
-          return false unless handles.map(&:restart).all?
-          @lifecycle_revision += 1
-          @stopping = false
-          DecentJob.locally_resume_worker(@worker, database: @database)
+      LifecycleEvents.defer do
+        @worker_mutex.synchronize do
+          if @retired || revision != @lifecycle_revision
+            handles.each { |handle| handle.restart_failed(:refused) }
+            return false
+          end
+          DecentJob.synchronize_resource_start do
+            if DecentJob.stopping?
+              handles.each { |handle| handle.restart_failed(:refused) }
+              return false
+            end
+            return false unless handles.map(&:restart).all?
+            @lifecycle_revision += 1
+            @stopping = false
+            DecentJob.locally_resume_worker(@worker, database: @database)
+          end
         end
       end
       start_async
@@ -185,22 +193,24 @@ module DecentJob
     end
 
     def start_async
-      return unless DecentJob.async_ready? && execute_async?
-      return unless @database || DecentJob.configuration.database_url
+      LifecycleEvents.defer do
+        return unless DecentJob.async_ready? && execute_async?
+        return unless @database || DecentJob.configuration.database_url
 
-      return if @worker_mutex.synchronize { @stopping }
-      connection_pool = @database || DecentJob.database(automatic: true)
-      return unless connection_pool
-      worker = @worker_mutex.synchronize do
-        return if @stopping
-        DecentJob.synchronize_resource_start(automatic: true) do
-          @database ||= connection_pool
-          @worker ||= Worker.new(database: connection_pool, **DecentJob.configuration.worker_options)
-          DecentJob.start_worker(@worker)
+        return if @worker_mutex.synchronize { @stopping }
+        connection_pool = @database || DecentJob.database(automatic: true)
+        return unless connection_pool
+        worker = @worker_mutex.synchronize do
+          return if @stopping
+          DecentJob.synchronize_resource_start(automatic: true) do
+            @database ||= connection_pool
+            @worker ||= Worker.new(database: connection_pool, **DecentJob.configuration.worker_options)
+            DecentJob.start_worker(@worker)
+          end
         end
+        DecentJob.start_cron(database: database, automatic: true) if worker && DecentJob.configuration.enable_cron
+        worker
       end
-      DecentJob.start_cron(database: database, automatic: true) if worker && DecentJob.configuration.enable_cron
-      worker
     end
 
     private

@@ -3,6 +3,7 @@
 require "decent_job/cleaner"
 require "decent_job/cleanup_tracker"
 require "decent_job/instrumentation"
+require "decent_job/lifecycle_events"
 require "decent_job/performer"
 require "decent_job/queue_selection"
 require "decent_job/resource_shutdown"
@@ -57,14 +58,20 @@ module DecentJob
     end
 
     def start(expected_revision: nil, automatic: false)
-      DecentJob.synchronize_resource_start(automatic: automatic) do
-        @mutex.synchronize do
-          return false if automatic && @stopping && @lifecycle_revision.positive?
-          return false if expected_revision && expected_revision != @lifecycle_revision
-          return self if @threads.any?(&:alive?) || (@process_tracker && !@process_tracker.shutdown?)
+      start_run(expected_revision: expected_revision, automatic: automatic).first
+    end
 
+    private def start_run(expected_revision: nil, automatic: false)
+      result = DecentJob.synchronize_resource_start(automatic: automatic) do
+        @mutex.synchronize do
+          return [false, nil] if automatic && @stopping && @lifecycle_revision.positive?
+          return [false, nil] if expected_revision && expected_revision != @lifecycle_revision
+          return [self, nil] if @threads.any?(&:alive?) || (@process_tracker && !@process_tracker.shutdown?)
+
+          began = monotonic_time
           @stopping = false
           @lifecycle_revision += 1
+          @run_id = (@run_id || 0) + 1
           @executing_job_ids = {}
           @interrupted_job_ids = []
           @interrupted_threads = {}
@@ -75,19 +82,54 @@ module DecentJob
           @process_cleanup_at = 0
           @process_cleanup_running = false
           @process_tracker = ProcessTracker.new(database: @database, **@process_options, state: method(:stats), on_thread_error: @on_thread_error)
-          @execution_threads = @pools.each_with_index.flat_map do |pool, index|
-            Array.new(pool.fetch(:threads)) do
-              Thread.new { run(pool, index) }
+          @execution_pool_indexes = {}
+          @execution_threads = []
+          @threads = []
+          allocated = false
+          begin
+            Thread.handle_interrupt(Object => :never) do
+              @pools.each_with_index do |pool, index|
+                pool.fetch(:threads).times do
+                  thread = Thread.new do
+                    Thread.handle_interrupt(Object => :immediate) do
+                      @mutex.synchronize {} # Allocation must complete before execution starts.
+                      run(pool, index)
+                    end
+                  end
+                  @threads << thread
+                  @execution_threads << thread
+                  @execution_pool_indexes[thread] = index
+                end
+              end
+              if @enable_listen_notify
+                @listener_reader, @listener_writer = IO.pipe
+                @threads << Thread.new do
+                  Thread.handle_interrupt(Object => :immediate) do
+                    @mutex.synchronize {}
+                    listen
+                  end
+                end
+              end
+            end
+            allocated = true
+          ensure
+            unless allocated
+              @stopping = true
+              @threads.each(&:kill)
+              @listener_reader&.close
+              @listener_writer&.close
+              @listener_reader = @listener_writer = nil
+              @process_tracker.stop
+              reset_stats
             end
           end
-          @threads = @execution_threads.dup
-          if @enable_listen_notify
-            @listener_reader, @listener_writer = IO.pipe
-            @threads << Thread.new { listen }
+          lifecycle_pools.each do |payload|
+            observe_lifecycle("scheduler_create_pool", payload.merge(operation_duration: monotonic_time - began))
           end
+          [self, @run_id]
         end
       end
-      self
+      result || [self, nil]
     end
 
     def shutdown?
@@ -140,18 +182,19 @@ module DecentJob
     # Without force, a timeout leaves jobs running; callers may wait again later.
     def shutdown(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
-      begin_shutdown.wait(deadline: deadline, force: force)
+      begin_shutdown.wait(deadline: deadline, force: force, timeout: timeout)
     end
 
     def restart(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
       handle = begin_shutdown
-      handle.wait(deadline: deadline, force: force) ? handle.restart : false
+      ResourceShutdown.prepare_restart([handle], deadline: deadline, force: force, timeout: timeout) ? handle.restart : false
     end
 
     # Internal lifecycle protocol: signal only, with no joins or user callbacks.
     def begin_shutdown
       @mutex.synchronize do
+        active = @threads.any?(&:alive?) || (@process_tracker && !@process_tracker.shutdown?)
         @lifecycle_revision += 1
         @stopping = true
         @caches.each(&:clear)
@@ -161,7 +204,26 @@ module DecentJob
         ResourceShutdown.new(self, @lifecycle_revision,
           [@threads.dup, @process_tracker,
             {threads: @execution_threads.dup, job_ids: @executing_job_ids,
-             interrupted_threads: @interrupted_threads, interrupted_job_ids: @interrupted_job_ids}, @failure])
+             interrupted_threads: @interrupted_threads, interrupted_job_ids: @interrupted_job_ids,
+             pools: lifecycle_pools, pool_indexes: @execution_pool_indexes || {}}, @failure],
+          lifecycle_pools: lifecycle_pools, observe_shutdown: active)
+      end
+    end
+
+    private def shutdown_snapshot_stopped?(snapshot)
+      threads, tracker = snapshot
+      threads.none?(&:alive?) && (!tracker || tracker.shutdown?)
+    end
+
+    private def observe_lifecycle(name, payload)
+      LifecycleEvents.record(self, name, payload, database: @database, on_error: @on_thread_error)
+    end
+
+    private def lifecycle_pools
+      @scheduler_stats.each_with_index.map do |pool, index|
+        queues = pool.fetch(:queues).dup
+        {scheduler: self, queues: queues, performer_name: queues.dup,
+         pool_index: index, max_threads: pool.fetch(:max_threads), run_id: @run_id}
       end
     end
 
@@ -226,22 +288,25 @@ module DecentJob
 
     private
 
-    def interrupt_executions(threads:, job_ids:, interrupted_threads:, interrupted_job_ids:)
-      targets, ids = @mutex.synchronize do
+    def interrupt_executions(threads:, job_ids:, interrupted_threads:, interrupted_job_ids:, pools:, pool_indexes:)
+      targets, reports = @mutex.synchronize do
         targets = threads.select do |thread|
           thread != Thread.current && thread.alive? && !interrupted_threads.key?(thread)
         end
         targets.each { |thread| interrupted_threads[thread] = true }
         ids = targets.filter_map { |thread| job_ids[thread] }.uniq
         interrupted_job_ids.concat(ids.map(&:dup)).uniq!
-        [targets, ids]
+        reports = targets.group_by { |thread| pool_indexes.fetch(thread) }.map do |index, pool_threads|
+          pools.fetch(index).merge(active_job_ids: pool_threads.filter_map { |thread| job_ids[thread]&.dup }.uniq)
+        end
+        [targets, reports]
       end
       return if targets.empty?
 
       # Request every interruption before invoking observers, which may reenter
       # shutdown or raise. Keep the report independent of observer mutation.
       targets.each(&:kill)
-      ActiveSupport::Notifications.instrument("scheduler_shutdown_kill.decent_job", active_job_ids: ids.map(&:dup))
+      reports.each { |payload| observe_lifecycle("scheduler_shutdown_kill", payload) }
     rescue Exception => error # standard:disable Lint/RescueException
       report_error(error)
     end

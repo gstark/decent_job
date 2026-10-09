@@ -71,14 +71,28 @@ describe "explicit lifecycle restart across processes" do
         _(stopping.fetch("stopped")).must_equal false
         _(stopping.fetch("restarted")).must_equal false
         _(stopping.fetch("process_ids")).must_equal [original_id]
+        initial_pool = stopping.fetch("events").find { |event| event.fetch("name") == "scheduler_create_pool" }
+        _(initial_pool).wont_be_nil
+        _(initial_pool.values_at("pool_index", "max_threads", "registered_pools", "adapter_started")).must_equal [0, 1, 1, true]
+        _(initial_pool.fetch("process_id")).wont_equal Process.pid
+        original_run = initial_pool.fetch("run_id")
+        incomplete = stopping.fetch("events").find { |event| event.fetch("name") == "scheduler_restart_pools" }
+        _(incomplete.values_at("old_run_id", "new_run_id", "restarted", "outcome")).must_equal [original_run, nil, false, "incomplete"]
+        draining = stopping.fetch("events").select { |event| event.fetch("name") == "scheduler_shutdown" }
+        _(draining).wont_be_empty
+        _(draining.all? { |event| event.values_at("run_id", "stopped", "draining", "timeout") == [original_run, false, true, 0] }).must_equal true
         followup_id = stopping.fetch("followup_id")
         _(@store.find(followup_id).fetch("state")).must_equal "ready"
         _(File.exist?(File.join(@directory, "followup"))).must_equal false
+        signal("drain")
+        await { File.exist?(File.join(@directory, "draining_started")) }
         signal("release")
         await { snapshot("drained") }
         drained = snapshot("drained")
         _(drained.fetch("stopped")).must_equal true
         _(drained.fetch("active")).must_be_empty
+        completion = drained.fetch("events").reverse.find { |event| event.fetch("name") == "scheduler_shutdown" }
+        _(completion.values_at("run_id", "stopped", "draining", "timeout")).must_equal [original_run, true, false, 5]
         _(@store.find(first.provider_job_id).fetch("state")).must_equal "succeeded"
         _(@store.executions(followup_id)).must_be_empty
         signal("restart")
@@ -89,6 +103,13 @@ describe "explicit lifecycle restart across processes" do
         _(resumed.fetch("process_ids")).wont_include original_id
         _(resumed.fetch("stats").fetch("succeeded_executions_count")).must_equal 1
         _(resumed.fetch("stats").fetch("schedulers").sum { |pool| pool.fetch("max_threads") }).must_equal 1
+        created = resumed.fetch("events").select { |event| event.fetch("name") == "scheduler_create_pool" }
+        _(created.size).must_equal 2
+        new_run = created.last.fetch("run_id")
+        _(new_run).wont_equal original_run
+        restarted_event = resumed.fetch("events").last
+        _(restarted_event.fetch("name")).must_equal "scheduler_restart_pools"
+        _(restarted_event.values_at("old_run_id", "new_run_id", "restarted", "outcome")).must_equal [original_run, new_run, true, "restarted"]
         _(@store.executions(first.provider_job_id).size).must_equal 1
         _(@store.executions(followup_id).size).must_equal 1
         _(File.read(File.join(@directory, "followup"))).must_equal followup_id
@@ -98,6 +119,9 @@ describe "explicit lifecycle restart across processes" do
         _(finished.fetch("global")).must_equal true
         _(finished.fetch("adapter")).must_equal true
         _(finished.fetch("pool").fetch("active")).must_equal 0
+        stopped_runs = finished.fetch("events").select { |event| event.fetch("name") == "scheduler_shutdown" && event.fetch("stopped") }
+        _(stopped_runs.map { |event| event.fetch("run_id") }).must_equal [original_run, new_run]
+        _(stopped_runs.all? { |event| event.fetch("operation_duration") >= 0 }).must_equal true
       end
       _(DecentJob::ProcessRecord.active(database: database)).must_be_empty
     end

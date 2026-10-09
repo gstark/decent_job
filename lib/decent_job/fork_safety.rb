@@ -14,7 +14,9 @@ module DecentJob
         raise LifecycleInProgress, "runtime is #{@runtime_transition}" if @runtime_transition
         block.call
       }
-      runtime_mutex.owned? ? operation.call : runtime_mutex.synchronize(&operation)
+      LifecycleEvents.defer do
+        runtime_mutex.owned? ? operation.call : runtime_mutex.synchronize(&operation)
+      end
     end
 
     def with_runtime_transition(name)

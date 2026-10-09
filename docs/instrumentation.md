@@ -66,11 +66,15 @@ These events are currently emitted by the runtime:
 | `enqueue_concurrency_throttle_exceeded` | Same admission fields, plus `window` in seconds | info |
 | `finished_job_task` | Worker/pool metadata, returned `result` (possibly nil), task `error`, completion `time` | error when `error` is present |
 | `finished_timer_task` | Worker/pool metadata, wake `result`, `error`, completion `time` | error when `error` is present |
+| `scheduler_create_pool` | Worker/pool metadata, `max_threads`, captured `run_id`, `operation_duration` | info |
+| `scheduler_shutdown_start`, `scheduler_shutdown` | Captured worker/pool/run metadata, `timeout`, `force`, `stopped`, `draining`; completion includes `operation_duration` and any drain `error` | info |
+| `scheduler_restart_pools` | Captured worker/pool metadata, `old_run_id`, `new_run_id`, `restarted`, `outcome`; successful allocation includes `operation_duration` | info |
+| `cron_manager_start` | `cron_manager`, detached `cron_entries` array, `run_id`, OS `process_id`, `thread_name`, `operation_duration` | info |
 | `notifier_listen`, `notifier_unlisten` | OS `process_id`, `thread_name`, standard exception metadata on SQL failure | info |
 | `notifier_notified` | Raw `payload`, OS `process_id`, `thread_name` | debug |
 | `notifier_notify_error` | Listener-task `error`, OS `process_id`, `thread_name` | error |
 | `cleanup_preserved_jobs` | `older_than`, cutoff `timestamp`, `destroyed_jobs_count`, `destroyed_executions_count`, `destroyed_batches_count`, total `destroyed_records_count` | info |
-| `scheduler_shutdown_kill` | Interrupted `active_job_ids` | warn |
+| `scheduler_shutdown_kill` | Captured worker/pool/run metadata and interrupted `active_job_ids`, grouped by pool | warn |
 | `cluster_start` | `subprocesses` | info |
 | `cluster_spawn` | `pid`, slot `index`, `restart_count` | info |
 | `cluster_reap` | `pid`, `index`, exit `status`, terminating `signal` | info |
@@ -122,8 +126,16 @@ Listener events run on the listener's dedicated connection owner. `notifier_list
 
 Worker runtime event observer errors use that worker's configured `on_thread_error`, including an explicit nil callback. Job events continue to use the global callback. All these callbacks are synchronous and run outside worker/runtime mutexes. The error callback and log subscriber are independent; if both log a failure, both messages may appear.
 
-## Remaining instrumentation work
+## Lifecycle observations
 
-The subscriber also implements the corresponding GoodJob handlers for scheduler creation/shutdown/restart and cron startup. Their runtime event producers are the next checkpoint; these handlers alone do not establish event parity.
+Pool creation, shutdown, and restart events identify the worker as `scheduler`, with normalized `queues`, its alias `performer_name`, zero-based `pool_index`, `max_threads`, OS `process_id`, and `thread_name`. A worker's `run_id` increases with each allocation. It identifies a run of that worker, not a globally unique process or scheduler. Cron managers maintain their own run IDs. Calling start on an already running resource does not emit another creation event.
 
-That checkpoint must place lifecycle observers outside the outer registry and resource locks while preserving captured-run shutdown and restart behavior. See the [implementation plan](implementation-plan.md) and [parity audit](parity.md) for the remaining I3 requirements.
+These lifecycle events describe transitions using metadata captured during the operation. Notifications run synchronously after registry, adapter, worker, and cron mutexes have been released. Their Active Support event duration measures notification delivery. `operation_duration` is measured in monotonic seconds around worker or cron allocation, captured-run draining, or replacement startup, respectively. Shutdown draining includes the start observer's time. A restart's replacement-start duration does not include the preceding shutdown. This differs from the reference's events that surround executor operations directly.
+
+Shutdown signals every selected resource before invoking start observers. Each completion reports the captured run's state, even if a later call already started a replacement. `stopped: false` and `draining: true` mean resources remain alive; the default log says the scheduler is still draining. `timeout` preserves the requested timeout: nil waits indefinitely, zero only signals, and a positive value allows a grace period. Synchronous observers can delay the caller and consume that shared grace period. Calling shutdown on a fully stopped resource emits no new shutdown events.
+
+Explicit restart reports `old_run_id`, `new_run_id`, and an `outcome` of `:restarted`, `:incomplete`, `:refused`, or `:failed`. A refused or incomplete attempt does not claim a new run. Creation events precede successful restart observations. A newer stop request can refuse a stale restart; global restart preserves owners that were stopped locally.
+
+Observers can inspect runtime state and call lifecycle methods. Lifecycle operations invoked from an observer still run, but nested lifecycle observations for the same resource are suppressed throughout that callback chain. This prevents an observer that always restarts its worker from recursively generating creation events forever. Later independent transitions remain observable. Raised observer or error-reporter exceptions are contained using the same instrumentation boundary as worker events.
+
+Cron startup captures a separate entries array after allocation, including an empty manager started during construction. An empty manager or a manager spanning multiple databases does not open a default database for observation.
