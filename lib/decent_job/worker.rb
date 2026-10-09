@@ -45,15 +45,21 @@ module DecentJob
       @stopping = true
       @threads = []
       @execution_threads = []
+      @executing_job_ids = {}
+      @interrupted_job_ids = []
+      @interrupted_threads = {}
       reset_stats
     end
 
     def start
       DecentJob.synchronize_resource_start do
         @mutex.synchronize do
-          return self if @threads.any?(&:alive?)
+          return self if @threads.any?(&:alive?) || (@process_tracker && !@process_tracker.shutdown?)
 
           @stopping = false
+          @executing_job_ids = {}
+          @interrupted_job_ids = []
+          @interrupted_threads = {}
           @idle_since = monotonic_time
           @listener_connected = false
           reset_stats(running: true)
@@ -78,7 +84,7 @@ module DecentJob
 
     def shutdown?
       return true unless @threads
-      @mutex.synchronize { @threads.none?(&:alive?) }
+      @mutex.synchronize { @threads.none?(&:alive?) && (!@process_tracker || @process_tracker.shutdown?) }
     end
 
     def running?
@@ -123,22 +129,23 @@ module DecentJob
       self
     end
 
-    # A timeout leaves running jobs alone; callers may wait again later.
-    def shutdown(timeout: nil)
+    # Without force, a timeout leaves jobs running; callers may wait again later.
+    def shutdown(timeout: nil, force: false)
       if !timeout.nil? && (!timeout.is_a?(Numeric) || !timeout.finite? || timeout.negative?)
         raise ArgumentError, "timeout must be a finite nonnegative number"
       end
       deadline = monotonic_time + timeout if timeout
-      threads = @mutex.synchronize do
+      threads, tracker, interruption, failure = @mutex.synchronize do
         @stopping = true
         @caches.each(&:clear)
         @condition.broadcast
         @listener_writer&.write_nonblock(".", exception: false)
-        @threads.dup
+        [@threads.dup, @process_tracker,
+          {threads: @execution_threads.dup, job_ids: @executing_job_ids,
+           interrupted_threads: @interrupted_threads, interrupted_job_ids: @interrupted_job_ids}, @failure]
       end
-      @process_tracker&.stop
+      tracker&.stop
       # A fatal task can make join raise; finish draining every owned thread.
-      failure = @mutex.synchronize { @failure }
       threads.each do |thread|
         next if thread == Thread.current
 
@@ -151,13 +158,19 @@ module DecentJob
       end
       remaining = deadline && [deadline - monotonic_time, 0].max
       begin
-        monitor_stopped = @process_tracker.nil? || @process_tracker.join(remaining)
+        monitor_stopped = tracker.nil? || (!threads.include?(Thread.current) && tracker.join(remaining))
       rescue Exception => error # standard:disable Lint/RescueException
         failure ||= error
       end
-      failure = @mutex.synchronize { @failure } || failure
+      interrupt_executions(**interruption) if force && deadline && monotonic_time >= deadline
+      failure = @mutex.synchronize { @failure if @process_tracker.equal?(tracker) } || failure
       raise failure if failure
       threads.none?(&:alive?) && monitor_stopped
+    end
+
+    # Return a detached report; callers cannot mutate execution bookkeeping.
+    def interrupted_job_ids
+      @mutex.synchronize { @interrupted_job_ids.map(&:dup) }
     end
 
     def process_id
@@ -189,6 +202,26 @@ module DecentJob
     end
 
     private
+
+    def interrupt_executions(threads:, job_ids:, interrupted_threads:, interrupted_job_ids:)
+      targets, ids = @mutex.synchronize do
+        targets = threads.select do |thread|
+          thread != Thread.current && thread.alive? && !interrupted_threads.key?(thread)
+        end
+        targets.each { |thread| interrupted_threads[thread] = true }
+        ids = targets.filter_map { |thread| job_ids[thread] }.uniq
+        interrupted_job_ids.concat(ids.map(&:dup)).uniq!
+        [targets, ids]
+      end
+      return if targets.empty?
+
+      # Request every interruption before invoking observers, which may reenter
+      # shutdown or raise. Keep the report independent of observer mutation.
+      targets.each(&:kill)
+      ActiveSupport::Notifications.instrument("scheduler_shutdown_kill.decent_job", active_job_ids: ids.map(&:dup))
+    rescue Exception => error # standard:disable Lint/RescueException
+      report_error(error)
+    end
 
     def normalize_hint(state)
       return {} if state.nil?
@@ -263,23 +296,25 @@ module DecentJob
 
     def run(pool, index)
       original_priority = Thread.current.priority
-      @process_tracker.register(stopping: method(:stopping?)) do
+      @process_tracker.register(stopping: method(:stopping?), wait_for_monitor: false) do
         ThreadStatus.with_worker(self) { run_registered(pool, index, original_priority) }
       end
     rescue Exception => error # standard:disable Lint/RescueException
       @mutex.synchronize { @failure ||= error }
       raise
     ensure
-      last = @mutex.synchronize do
-        counters = @scheduler_stats.fetch(index)
-        counters[:live_threads] -= 1
-        counters[:available_threads] -= 1
-        if @scheduler_stats.all? { |pool_stats| pool_stats.fetch(:live_threads).zero? }
-          @stopping = true
-          @caches.each(&:clear)
-          @condition.broadcast
-          @listener_writer&.write_nonblock(".", exception: false)
-          true
+      last = Thread.handle_interrupt(Object => :never) do
+        @mutex.synchronize do
+          counters = @scheduler_stats.fetch(index)
+          counters[:live_threads] -= 1
+          counters[:available_threads] -= 1
+          if @scheduler_stats.all? { |pool_stats| pool_stats.fetch(:live_threads).zero? }
+            @stopping = true
+            @caches.each(&:clear)
+            @condition.broadcast
+            @listener_writer&.write_nonblock(".", exception: false)
+            true
+          end
         end
       end
       @process_tracker.stop if last
@@ -291,21 +326,25 @@ module DecentJob
       executing = false
       lowered_priority = false
       performer = Performer.new(database: @database, process_tracker: @process_tracker,
-        on_execution_start: lambda {
-          executing = true
-          @mutex.synchronize do
-            counters = @scheduler_stats.fetch(index)
-            @idle_since = monotonic_time
-            counters[:execution_at] = Time.now.iso8601(6)
-            counters[:active_threads] += 1
-            counters[:available_threads] -= 1
+        on_execution_start: lambda { |active_job_id|
+          Thread.handle_interrupt(Object => :never) do
+            @mutex.synchronize do
+              executing = true
+              @executing_job_ids[Thread.current] = active_job_id
+              counters = @scheduler_stats.fetch(index)
+              @idle_since = monotonic_time
+              counters[:execution_at] = Time.now.iso8601(6)
+              counters[:active_threads] += 1
+              counters[:available_threads] -= 1
+            end
           end
         }, on_unhandled_exception: ->(error) { execution_error = error })
       loop do
-        revision = await_work(index)
-        break unless revision
-
+        revision = nil
         begin
+          Thread.handle_interrupt(Object => :on_blocking) { revision = await_work(index) }
+          break unless revision
+
           execution_error = nil
           result = nil
           retry_attempt = false
@@ -314,6 +353,8 @@ module DecentJob
           cleanup_processes
           @mutex.synchronize { @scheduler_stats.fetch(index)[:check_queue_at] = Time.now.iso8601(6) }
           result = performer.perform_one(queues: selection, stopping: method(:stopping?))
+          break if Thread.current.status == "aborting"
+
           if result
             record_attempt(index, error: result.error)
             execution_finished = true
@@ -346,22 +387,27 @@ module DecentJob
           wait(retry_interval)
           retry_attempt = true
         ensure
-          @mutex.synchronize do
-            cache = @caches.fetch(index)
-            cache.busy -= 1
-            cache.wake(1) if result || retry_attempt || cache.revision != revision
-          end
-          if executing
-            @mutex.synchronize do
-              counters = @scheduler_stats.fetch(index)
-              unless execution_finished
-                @idle_since = monotonic_time
-                counters[:execution_at] = Time.now.iso8601(6)
+          Thread.handle_interrupt(Object => :never) do
+            if revision
+              @mutex.synchronize do
+                cache = @caches.fetch(index)
+                cache.busy -= 1
+                cache.wake(1) if result || retry_attempt || cache.revision != revision
               end
-              counters[:active_threads] -= 1
-              counters[:available_threads] += 1
             end
-            executing = false
+            if executing
+              @mutex.synchronize do
+                counters = @scheduler_stats.fetch(index)
+                unless execution_finished
+                  @idle_since = monotonic_time
+                  counters[:execution_at] = Time.now.iso8601(6)
+                end
+                counters[:active_threads] -= 1
+                counters[:available_threads] += 1
+              end
+              @mutex.synchronize { @executing_job_ids.delete(Thread.current) }
+              executing = false
+            end
           end
         end
       end

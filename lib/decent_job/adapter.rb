@@ -83,7 +83,7 @@ module DecentJob
       row ? Pauses.new(database).reason(queue: row.fetch("queue_name"), job_class: row.fetch("job_class"), labels: row.fetch("labels")) : false
     end
 
-    def shutdown(timeout: nil)
+    def shutdown(timeout: nil, force: false)
       if !timeout.nil? && (!timeout.is_a?(Numeric) || !timeout.finite? || timeout.negative?)
         raise ArgumentError, "timeout must be a finite nonnegative number"
       end
@@ -103,8 +103,8 @@ module DecentJob
       end
       attempt_shutdown.call { DecentJob.stop_cron(database: @database, timeout: 0) } if @database
       attempt_shutdown.call { worker.shutdown(timeout: 0) } if worker
-      cron_stopped = !@database || attempt_shutdown.call { DecentJob.stop_cron(database: @database, timeout: remaining_time(deadline)) }
-      worker_stopped = !worker || attempt_shutdown.call { worker.shutdown(timeout: remaining_time(deadline)) }
+      cron_stopped = !@database || attempt_shutdown.call { DecentJob.stop_cron(database: @database, timeout: remaining_time(deadline), force: force) }
+      worker_stopped = !worker || attempt_shutdown.call { worker.shutdown(timeout: remaining_time(deadline), force: force) }
       raise failure if failure
       cron_stopped && worker_stopped
     end

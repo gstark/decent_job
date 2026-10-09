@@ -48,6 +48,8 @@ end
 
 Inside an owned worker, `current_thread_running?` returns true until shutdown begins. It then returns false, and `current_thread_shutting_down?` returns true. Outside an owned worker they return true and nil, respectively. Nested inline work retains its enclosing worker's status. The context follows Active Support's configured thread or fiber isolation and is restored after nested scopes and exceptions.
 
+For jobs that do not stop cooperatively, shutdown accepts `force: true` and reports the Active Job IDs targeted for interruption. See [shutdown timeouts and recovery](shutdown.md).
+
 These helpers report the owning worker's lifecycle. The adapter's `stopping?` remains the API for job-specific force-discard and pause reasons. Jobs remain responsible for persisting any application checkpoint before returning.
 
 ## Execution thread priority

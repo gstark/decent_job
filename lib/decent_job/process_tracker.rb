@@ -29,7 +29,7 @@ module DecentJob
       @stopped = false
     end
 
-    def register(stopping: -> { false })
+    def register(stopping: -> { false }, wait_for_monitor: true)
       raise ForkedDatabase, "create a new process tracker after forking" if @pid != Process.pid
       registered = false
       loop do
@@ -39,9 +39,11 @@ module DecentJob
             if @monitor&.alive? && @registrations.zero?
               @monitor
             else
-              @registrations += 1
-              registered = true
-              @monitor = Thread.new { monitor } unless @monitor&.alive?
+              Thread.handle_interrupt(Object => :never) do
+                @registrations += 1
+                registered = true
+                @monitor = Thread.new { Thread.handle_interrupt(Object => :immediate) { monitor } } unless @monitor&.alive?
+              end
               nil
             end
           end
@@ -63,12 +65,16 @@ module DecentJob
       yield process_id
     ensure
       if registered
-        last = @mutex.synchronize do
-          @registrations -= 1
-          @condition.broadcast
-          @registrations.zero? ? @monitor : nil
+        last = Thread.handle_interrupt(Object => :never) do
+          @mutex.synchronize do
+            @registrations -= 1
+            @condition.broadcast
+            @registrations.zero? ? @monitor : nil
+          end
         end
-        last&.join
+        # Workers drain the monitor under their shared shutdown deadline.
+        # Standalone leases retain their synchronous cleanup guarantee.
+        last&.join if wait_for_monitor && Thread.current.status != "aborting"
       end
     end
 
@@ -94,7 +100,7 @@ module DecentJob
     def join(timeout = nil)
       return true if @pid != Process.pid
       monitor = @mutex.synchronize { @monitor }
-      !monitor || !!monitor.join(timeout)
+      !monitor || (monitor != Thread.current && !!monitor.join(timeout))
     end
 
     private

@@ -57,6 +57,8 @@ Explicit `start_cron` works even when automatic scheduling is disabled. Repeated
 
 `DecentJob.shutdown(timeout: 30)` stops schedulers and workers with one shared deadline. It returns `false` if callbacks or jobs remain running; a later shutdown can wait for them. `reset!` waits for completion, clears the registry and configuration, and closes the global database pool. An async adapter's `shutdown` also stops its database's configured scheduler and prevents that adapter from restarting during draining callbacks. Replace a shut-down adapter to resume its automatic workers. Other databases' managers remain running.
 
+Pass `force: true` to request interruption of owned cron callbacks after the shutdown deadline. Ruby cleanup may continue after that request; a later shutdown can wait for it. See [forced shutdown](shutdown.md).
+
 For independently configured schedules, construct and own a manager directly:
 
 ```ruby

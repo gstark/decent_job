@@ -109,48 +109,61 @@ module DecentJob
       nested = @mutex.synchronize { @borrowed[Thread.current] }
       return yield nested if nested
 
-      connection = checkout
-      begin
-        yield connection
+      # Protect ownership handoffs, while pool waits/connect and application
+      # work remain interruptible. Ensure also covers checkout's return boundary.
+      Thread.handle_interrupt(Object => :on_blocking) do
+        connection = checkout
+        Thread.handle_interrupt(Object => :immediate) { yield connection }
       ensure
-        checkin(connection)
+        Thread.handle_interrupt(Object => :never) do
+          connection ||= @mutex.synchronize { @borrowed[Thread.current] }
+          # A killed PG query can leave unread protocol data despite CONNECTION_OK.
+          # Retire only after application ensure blocks have released ownership.
+          checkin(connection, interrupted: Thread.current.status == "aborting") if connection
+        end
       end
     end
 
     def transaction
       with_connection do |connection|
-        nested = connection.transaction_status != PG::PQTRANS_IDLE
-        savepoint = "decent_job_#{Thread.current.object_id}_#{rand(1 << 32)}"
-        connection.exec(nested ? "SAVEPOINT #{savepoint}" : "BEGIN")
-        frames = @mutex.synchronize { @transaction_callbacks[Thread.current] ||= [] }
-        callbacks = {commit: [], rollback: []}
-        frames << callbacks
-        committed = false
-        begin
-          result = yield connection
-          raise TransactionAborted, "PostgreSQL transaction was aborted" if connection.transaction_status == PG::PQTRANS_INERROR
-          connection.exec(nested ? "RELEASE SAVEPOINT #{savepoint}" : "COMMIT")
-          committed = true
-          result
-        ensure
+        Thread.handle_interrupt(Object => :on_blocking) do
+          nested = connection.transaction_status != PG::PQTRANS_IDLE
+          savepoint = "decent_job_#{Thread.current.object_id}_#{rand(1 << 32)}"
+          frames = @mutex.synchronize { @transaction_callbacks[Thread.current] ||= [] }
+          callbacks = {commit: [], rollback: []}
+          frames << callbacks
+          committed = false
           begin
-            unless committed || connection.finished? || connection.status != PG::CONNECTION_OK
-              connection.exec(nested ? "ROLLBACK TO SAVEPOINT #{savepoint}" : "ROLLBACK")
-              connection.exec("RELEASE SAVEPOINT #{savepoint}") if nested
-            end
+            connection.exec(nested ? "SAVEPOINT #{savepoint}" : "BEGIN")
+            result = Thread.handle_interrupt(Object => :immediate) { yield connection }
+            # A handler may rescue an error raised by killed cleanup. Never
+            # commit that thread's unfinished transaction or release its savepoint.
+            next if Thread.current.status == "aborting"
+
+            raise TransactionAborted, "PostgreSQL transaction was aborted" if connection.transaction_status == PG::PQTRANS_INERROR
+            connection.exec(nested ? "RELEASE SAVEPOINT #{savepoint}" : "COMMIT")
+            committed = true
+            result
           ensure
-            frames.pop
-            @mutex.synchronize { @transaction_callbacks.delete(Thread.current) } if frames.empty?
-          end
-          if committed
-            if frames.empty?
-              callbacks[:commit].each(&:call)
-            else
-              frames.last[:commit].concat(callbacks[:commit])
-              frames.last[:rollback].concat(callbacks[:rollback])
+            begin
+              unless committed || Thread.current.status == "aborting" || connection.finished? || connection.status != PG::CONNECTION_OK
+                connection.exec(nested ? "ROLLBACK TO SAVEPOINT #{savepoint}" : "ROLLBACK")
+                connection.exec("RELEASE SAVEPOINT #{savepoint}") if nested
+              end
+            ensure
+              frames.pop
+              @mutex.synchronize { @transaction_callbacks.delete(Thread.current) } if frames.empty?
             end
-          else
-            callbacks[:rollback].each(&:call)
+            if committed
+              if frames.empty?
+                Thread.handle_interrupt(Object => :immediate) { callbacks[:commit].each(&:call) }
+              else
+                frames.last[:commit].concat(callbacks[:commit])
+                frames.last[:rollback].concat(callbacks[:rollback])
+              end
+            else
+              Thread.handle_interrupt(Object => :immediate) { callbacks[:rollback].each(&:call) }
+            end
           end
         end
       end
@@ -229,18 +242,52 @@ module DecentJob
       connection
     ensure
       if reserved && !registered
-        connection&.finish unless connection&.finished?
-        @mutex.synchronize do
-          @size -= 1
-          @available.signal
+        Thread.handle_interrupt(Object => :never) do
+          connection&.finish unless connection&.finished?
+          @mutex.synchronize do
+            @size -= 1
+            @available.signal
+          end
         end
       end
     end
 
-    def checkin(connection)
+    def cancel_interrupted_query(connection)
+      return if connection.finished? || connection.status != PG::CONNECTION_OK || connection.transaction_status != PG::PQTRANS_ACTIVE
+      unless defined?(PG::CancelConnection)
+        # Older libpq clients expose only pg's interruptible cancellation API.
+        # This remains owned cleanup; shutdown callers need not wait for it.
+        connection.async_cancel
+        return
+      end
+
+      cancellation = PG::CancelConnection.new(connection)
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 1
+      cancellation.start
+      loop do
+        state = cancellation.poll
+        return if state == PG::PGRES_POLLING_OK || state == PG::PGRES_POLLING_FAILED
+        remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        return unless remaining.positive?
+        socket = cancellation.socket_io
+        readable = (state == PG::PGRES_POLLING_READING) ? [socket] : nil
+        writable = (state == PG::PGRES_POLLING_WRITING) ? [socket] : nil
+        return unless IO.select(readable, writable, nil, remaining)
+      end
+    rescue PG::Error, IOError, SystemCallError
+      # Cancellation is best effort when the server or network has failed.
+      nil
+    ensure
+      cancellation&.finish
+    end
+
+    def checkin(connection, interrupted: false)
+      cancel_interrupted_query(connection) if interrupted
+    ensure
       @mutex.synchronize do
         @borrowed.delete(Thread.current)
-        if @closed || @size > @pool_size || connection.finished? || connection.status != PG::CONNECTION_OK
+        @transaction_callbacks.delete(Thread.current)
+        if interrupted || @closed || @size > @pool_size || connection.finished? || connection.status != PG::CONNECTION_OK
           connection.finish unless connection.finished?
           @size -= 1
         else

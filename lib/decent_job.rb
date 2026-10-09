@@ -195,7 +195,7 @@ module DecentJob
       end
     end
 
-    def stop_cron(timeout: nil, database: nil)
+    def stop_cron(timeout: nil, database: nil, force: false)
       validate_timeout!(timeout)
       managers = runtime_mutex.synchronize do
         if database
@@ -206,21 +206,21 @@ module DecentJob
           @cron_managers.values.dup
         end
       end
-      stop_resources(managers, timeout: timeout)
+      stop_resources(managers, timeout: timeout, force: force)
     end
 
     def stopping?
       runtime_mutex.synchronize { @stopping }
     end
 
-    def shutdown(timeout: nil)
+    def shutdown(timeout: nil, force: false)
       validate_timeout!(timeout)
       resources = runtime_mutex.synchronize do
         @stopping = true
         @cron_stopping = true
         @cron_managers.values + @workers
       end
-      stop_resources(resources, timeout: timeout)
+      stop_resources(resources, timeout: timeout, force: force)
     end
 
     def start_worker(worker)
@@ -286,7 +286,7 @@ module DecentJob
       end
     end
 
-    def stop_resources(resources, timeout:)
+    def stop_resources(resources, timeout:, force: false)
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout if timeout
       # A failed thread join must not prevent other resources receiving stop.
       failure = nil
@@ -297,7 +297,7 @@ module DecentJob
       end
       stopped = resources.map do |resource|
         remaining = deadline && [deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC), 0].max
-        resource.shutdown(timeout: remaining)
+        resource.shutdown(timeout: remaining, **(force ? {force: true} : {}))
       rescue Exception => error # standard:disable Lint/RescueException
         failure ||= error
         false

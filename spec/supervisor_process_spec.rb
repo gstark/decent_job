@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "minitest/mock"
 require "net/http"
 require "open3"
 require "socket"
@@ -70,13 +71,56 @@ describe "supervised CLI processes" do
       input.close
       yield process, output, error
     ensure
-      begin
-        Process.kill("KILL", -process.pid)
-      rescue Errno::ESRCH
-        nil
-      end
+      terminate_process_group(process.pid)
       process.join
     end
+  end
+
+  def terminate_process_group(pid)
+    Process.kill("KILL", -pid)
+  rescue Errno::ESRCH
+    nil
+  rescue Errno::EPERM
+    # Darwin reports EPERM for a group containing only unreaped zombies.
+    # Keep real permission failures visible whenever a live member remains.
+    members, status = Open3.capture2("ps", "-eo", "pgid=,state=")
+    raise unless status.success? && members.lines.none? { |line|
+      group, state = line.split
+      group.to_i == pid && !state.start_with?("Z")
+    }
+  end
+
+  it "accepts a zombie-only process group when Darwin refuses group cleanup" do
+    status = Minitest::Mock.new
+    status.expect(:success?, true)
+    Process.stub(:kill, ->(*) { raise Errno::EPERM }) do
+      Open3.stub(:capture2, ["42 Z\n43 R\n", status]) do
+        terminate_process_group(42)
+      end
+    end
+    status.verify
+  end
+
+  it "preserves permission errors when the target process group still has a live member" do
+    status = Minitest::Mock.new
+    status.expect(:success?, true)
+    Process.stub(:kill, ->(*) { raise Errno::EPERM }) do
+      Open3.stub(:capture2, ["42 Z\n42 S\n", status]) do
+        _ { terminate_process_group(42) }.must_raise Errno::EPERM
+      end
+    end
+    status.verify
+  end
+
+  it "preserves permission errors when process-group inspection fails" do
+    status = Minitest::Mock.new
+    status.expect(:success?, false)
+    Process.stub(:kill, ->(*) { raise Errno::EPERM }) do
+      Open3.stub(:capture2, ["", status]) do
+        _ { terminate_process_group(42) }.must_raise Errno::EPERM
+      end
+    end
+    status.verify
   end
 
   def stop(process, error)

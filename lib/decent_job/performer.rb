@@ -23,7 +23,11 @@ module DecentJob
     private
 
     def execute(row, raise_errors:, stopping:)
-      @on_execution_start&.call
+      if @on_execution_start.respond_to?(:arity) && @on_execution_start.arity == 1
+        @on_execution_start.call(row.fetch("active_job_id"))
+      else
+        @on_execution_start&.call
+      end
       active_job = nil
       error = nil
       error_event = nil
@@ -71,6 +75,10 @@ module DecentJob
         @on_unhandled_exception&.call(exception)
         raise
       end
+      # User ensure blocks and Active Job handlers can swallow termination by
+      # raising/rescuing another error. It remains an unfinished killed attempt.
+      return if Thread.current.status == "aborting"
+
       duration = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
       unhandled_error = error if unhandled
       state, error, error_event, forced = finish(row, state, error, error_event, active_job, unhandled, duration)

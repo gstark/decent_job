@@ -18,9 +18,10 @@ module DecentJob
         candidates(connection, selection, job_id).each do |candidate|
           return nil if stopping.call
           key = candidate.fetch("lock_key")
-          next unless connection.exec_params("SELECT pg_try_advisory_lock($1::bigint)", [key]).getvalue(0, 0) == "t"
-
+          locked = false
           begin
+            locked = connection.exec_params("SELECT pg_try_advisory_lock($1::bigint)", [key]).getvalue(0, 0) == "t"
+            next unless locked
             acquired = false
             result = @process_tracker.register(stopping: stopping) do |process_id|
               row = start(candidate.fetch("id"), process_id)
@@ -31,7 +32,7 @@ module DecentJob
             end
             return result if acquired
           ensure
-            connection.exec_params("SELECT pg_advisory_unlock($1::bigint)", [key]) unless connection.finished? || connection.status != PG::CONNECTION_OK
+            connection.exec_params("SELECT pg_advisory_unlock($1::bigint)", [key]) if locked && Thread.current.status != "aborting" && !connection.finished? && connection.status == PG::CONNECTION_OK
           end
         end
       end

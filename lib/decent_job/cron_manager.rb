@@ -17,6 +17,7 @@ module DecentJob
       @mutex = Mutex.new
       @condition = ConditionVariable.new
       @threads = []
+      @interrupted_threads = {}
       @stopping = true
       start if start_on_initialize
     end
@@ -27,6 +28,7 @@ module DecentJob
           return self if !@stopping || @threads.any?(&:alive?)
 
           @stopping = false
+          @interrupted_threads.clear
           started_at = Time.now
           zone = Time.zone
           @threads = cron_entries.flat_map do |entry|
@@ -52,7 +54,7 @@ module DecentJob
       @mutex.synchronize { @stopping && @threads.none?(&:alive?) }
     end
 
-    def shutdown(timeout: nil)
+    def shutdown(timeout: nil, force: false)
       if !timeout.nil? && (!timeout.is_a?(Numeric) || !timeout.finite? || timeout.negative?)
         raise ArgumentError, "timeout must be a finite nonnegative number"
       end
@@ -71,6 +73,15 @@ module DecentJob
         rescue Exception => error # standard:disable Lint/RescueException
           failure ||= error
         end
+      end
+      if force && deadline && monotonic_time >= deadline
+        targets = @mutex.synchronize do
+          threads.select do |thread|
+            next false if thread == Thread.current || !thread.alive? || @interrupted_threads.key?(thread)
+            @interrupted_threads[thread] = true
+          end
+        end
+        targets.each(&:kill)
       end
       raise failure if failure
       threads.none?(&:alive?)

@@ -36,6 +36,8 @@ Inline execution persists the outcome and raises the unhandled exception back to
 
 After process termination or a lost PostgreSQL session, another worker can acquire the job's advisory lock. It marks the previous unfinished attempt with `DecentJob::InterruptedError` and `error_event: "interrupted"`, then starts one replacement attempt. Recovery detection does not create a separate history entry of its own.
 
+[Forced worker shutdown](shutdown.md) uses the same recovery path. It lets Ruby cleanup unwind before retiring the interrupted connection and releasing its job lock. Until a replacement claims the job, the abandoned attempt remains unfinished.
+
 By default, the replacement executes the job body normally. To let Active Job handlers decide what happens after interruption, include the extension:
 
 ```ruby

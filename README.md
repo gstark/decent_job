@@ -61,6 +61,8 @@ bundle exec decent_job start --require ./jobs.rb --max-threads 5
 
 SIGINT or SIGTERM stops claiming jobs and allows running jobs to finish. The CLI exits unsuccessfully if its shutdown deadline expires. A later worker can recover jobs interrupted by process termination.
 
+Application shutdown APIs also accept `force: true` to interrupt owned work after a grace period. They report whether cleanup has drained and retain interrupted jobs for recovery. See [worker shutdown and interruption](docs/shutdown.md).
+
 Add `--probe-port 7001` to expose HTTP liveness and worker readiness checks. The CLI also supports systemd readiness, stopping, and watchdog notifications. See [health probes and systemd](docs/health-services.md) for configuration and shutdown behavior.
 
 Add `--subprocesses 3` to supervise three workers, or use pipe-separated recipes such as `--queues 'critical:2|default:4'`. Each child gets its own connections and threads. See [the supervisor](docs/supervisor.md) for lifecycle hooks, crash replacement, cluster readiness, and shutdown.
