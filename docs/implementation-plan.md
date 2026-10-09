@@ -46,12 +46,15 @@ Batch verification: 301 specs, 1,081 assertions; Standard and gem build passed. 
 
 - [x] Implement numeric cron expressions, extended day syntax, aliases, zones, and bounded calendar search without another runtime dependency.
 - [x] Record pinned-reference conformance fixtures, including DST gaps/folds and deliberate corrections to invalid-input handling.
-- [ ] Add natural-language schedule translation and callable schedule definitions with validation and display metadata.
+- [x] Add natural-language schedule translation with pinned-reference conformance fixtures.
+- [ ] Add callable schedule definitions with validation and display metadata.
 - [ ] Persist cron key/time and enable/disable overrides; deduplicate scheduled enqueue across processes in the same transaction as job insertion.
 - [ ] Add independent cron start/stop, per-entry error isolation, clock-drift handling, and graceful restart catch-up.
 - [ ] Integrate configuration, worker/application lifecycle, CLI controls, documentation, and independent reviews.
 
 Numeric parser verification: 469 specs, 1,361 assertions across the full suite; Standard, gem build, and unpacked parser boot passed. Independent spec-compliance and code-quality reviews approved the numeric module. Saved fixtures cover 88 schedules/start times, three ranges, and 23 invalid expressions. Seeded differential checks of 1,000 and 3,000 field combinations matched the pinned reference; additional timezone probes verified the documented corrections. This completes the parser foundation, not recurring-job execution. See cron-compatibility.md for the contract and remaining scope.
+
+Natural parser verification: 702 specs, 1,974 assertions across the full suite; Standard, gem build, and unpacked natural-parser boot passed. Independent spec-compliance and code-quality reviews approved the implementation after correcting capitalized-name composition. Saved fixtures cover 170 phrases, including 137 accepted schedules with five occurrences each. The reproducible differential script matched 9,795 expressions; independent review checked another 7,471 combinations without mismatches. Runtime dependencies remain Active Job and pg. Callable entries and recurring execution remain open.
 
 ### Remaining slices
 

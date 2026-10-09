@@ -6,7 +6,7 @@ The current implementation supports persistent jobs, delayed execution, prioriti
 
 This is an early implementation. Full GoodJob parity remains the project goal. Recurring schedules, the dashboard, and several operational features are still planned. See [the parity checklist](docs/parity.md) and [implementation plan](docs/implementation-plan.md).
 
-The numeric cron parser is implemented as a foundation for recurring schedules. Its supported expressions, reference comparisons, and timezone corrections are documented in [cron compatibility](docs/cron-compatibility.md).
+Numeric and natural-language cron parsing are implemented as a foundation for recurring schedules. Supported expressions, reference comparisons, and timezone corrections are documented in [cron compatibility](docs/cron-compatibility.md).
 
 ## Install and run
 

@@ -13,7 +13,7 @@ This is the implementation checklist for DecentJob's behavioral parity with the 
 | Labels and job controls | `spec/labels_spec.rb`, `spec/concurrency_rule_spec.rb`, `spec/concurrency_spec.rb`, `spec/perform_concurrency_spec.rb`, `spec/recovery_spec.rb` | Other lock modes, complete instrumentation and dashboard claim display |
 | Bulk capture | `spec/bulk_spec.rb`, `spec/batch_spec.rb`, `spec/batch_workflow_spec.rb` | Remaining adapter coverage audit (B1) |
 | Batches | `spec/batch_properties_spec.rb`, `spec/batch_spec.rb`, `spec/batch_store_spec.rb`, `spec/batch_workflow_spec.rb`, `spec/batch_retry_spec.rb`, `spec/batch_isolation_spec.rb`, `spec/batch_recovery_spec.rb`, `spec/batch_generation_spec.rb` | Dashboard pages and retention |
-| Numeric cron schedules | `spec/cron_schedule_spec.rb`, `spec/cron_conformance_spec.rb`, saved pinned-reference fixtures, and optional differential scripts | Natural language, callable entries, durable recurring enqueue and lifecycle; C1–C5 remain incomplete |
+| Numeric and natural-language cron schedules | Numeric and natural cron specs, saved pinned-reference fixtures, and optional differential scripts | Callable entries, durable recurring enqueue and lifecycle; C1–C5 remain incomplete |
 | Pauses | `spec/pauses_spec.rb` | Dashboard management |
 | CLI | `spec/cli_spec.rb` | Cleanup, probes, daemonization, subprocess supervisor, systemd |
 
@@ -171,6 +171,8 @@ The Rails engine is the reference UI. Equivalent DecentJob pages and operations 
 ## Completion evidence and known risks
 
 Numeric cron verification: `bundle exec rake` passed 469 specs and 1,361 assertions; Standard, gem build, and an unpacked parser boot passed. Independent reviews approved the numeric module with 168 focused specs and 280 assertions, plus a 3,000-case differential check at seed 139. [Cron compatibility](cron-compatibility.md) records the reference versions, supported grammar, range boundaries, timezone handling, and deliberate corrections to reference defects. This is partial evidence for C1/C2; it does not close those items or establish recurring-job execution.
+
+Natural cron verification: the full suite passed 702 specs and 1,974 assertions; Standard, gem build, and unpacked natural-parser boot passed. Independent reviews approved natural parsing, with 170 saved conformance cases, 9,795 reproducible differential comparisons, and another 7,471 review probes. Grammar includes intervals, named times, ordinals, ranges, combined clauses, and timezone suffixes. C1/C2 remain open for callable entries, validation, and display integration; recurring enqueue and manager lifecycle remain open.
 
 Batch slice verification: `bundle exec rake` passed 301 specs and 1,081 assertions on Ruby 3.4.10 / PostgreSQL 17.9; `bundle exec standardrb` and `gem build decent_job.gemspec` passed. Independent spec-compliance and code-quality reviews approved B3–B8; their focused batch/bulk run passed 107 specs and 379 assertions. Evidence covers callback queue/priority and properties, manual retry callbacks, recursive inline batches, multi-batch SQL inserts, async execution, real-process SIGKILL recovery, competing final completions, concurrent failure during reconciliation or reopening, and nested controlled enqueue hooks before scope locking.
 

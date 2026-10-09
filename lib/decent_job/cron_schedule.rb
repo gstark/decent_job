@@ -2,6 +2,7 @@
 
 require "date"
 require "decent_job/cron_schedule/field"
+require "decent_job/cron_schedule/natural"
 require "decent_job/cron_schedule/zone"
 
 module DecentJob
@@ -25,26 +26,14 @@ module DecentJob
     def initialize(expression)
       raise ArgumentError, "cron expression must be a string" unless expression.is_a?(String)
       @original = expression
-      normalized = expression.strip
-      if normalized.start_with?("@")
-        name, suffix = normalized.split(/\s+/, 2)
-        normalized = [ALIASES.fetch(name) { raise ArgumentError, "invalid cron alias" }, suffix].compact.join(" ")
+      begin
+        parse_numeric(expression)
+      rescue ArgumentError
+        normalized = Natural.compile(expression)
+        raise ArgumentError, "invalid cron expression" unless normalized
+        parse_numeric(normalized)
+        @original = normalized
       end
-      raise ArgumentError, "invalid cron expression" if normalized.match?(/[\r\n]/)
-      # Whitespace is allowed before trailing commas and between repeated
-      # commas, but never between a list separator and its following value.
-      normalized = normalized.gsub(/,(?:[ \t]*,)+/, ",")
-      raise ArgumentError, "invalid comma spacing" if normalized.match?(/[ \t]+,[^ \t&]/)
-      parts = normalized.gsub(/[ \t]+,/, ",").split(/[ \t]+/)
-      zone_name = parts.pop if parts.size > 5 && timezone_suffix?(parts.last)
-      @zone = Zone.new(zone_name)
-      raise ArgumentError, "expected five or six cron fields" unless [5, 6].include?(parts.size)
-      parts.unshift("0") if parts.size == 5
-      @day_and = parts[3].end_with?("&") || parts[5].end_with?("&")
-      parts[3] = parts[3].delete_suffix("&")
-      parts[5] = parts[5].delete_suffix("&")
-      @seconds, @minutes, @hours, @monthdays, @months, @weekdays = Field::BOUNDS.keys.zip(parts).map { |kind, part| Field.new(kind, part).values }
-      compact_days
     end
 
     def match?(time)
@@ -93,6 +82,29 @@ module DecentJob
     end
 
     private
+
+    def parse_numeric(expression)
+      normalized = expression.strip
+      if normalized.start_with?("@")
+        name, suffix = normalized.split(/\s+/, 2)
+        normalized = [ALIASES.fetch(name) { raise ArgumentError, "invalid cron alias" }, suffix].compact.join(" ")
+      end
+      raise ArgumentError, "invalid cron expression" if normalized.match?(/[\r\n]/)
+      # Whitespace is allowed before trailing commas and between repeated
+      # commas, but never between a list separator and its following value.
+      normalized = normalized.gsub(/,(?:[ \t]*,)+/, ",")
+      raise ArgumentError, "invalid comma spacing" if normalized.match?(/[ \t]+,[^ \t&]/)
+      parts = normalized.gsub(/[ \t]+,/, ",").split(/[ \t]+/)
+      zone_name = parts.pop if parts.size > 5 && timezone_suffix?(parts.last)
+      @zone = Zone.new(zone_name)
+      raise ArgumentError, "expected five or six cron fields" unless [5, 6].include?(parts.size)
+      parts.unshift("0") if parts.size == 5
+      @day_and = parts[3].end_with?("&") || parts[5].end_with?("&")
+      parts[3] = parts[3].delete_suffix("&")
+      parts[5] = parts[5].delete_suffix("&")
+      @seconds, @minutes, @hours, @monthdays, @months, @weekdays = Field::BOUNDS.keys.zip(parts).map { |kind, part| Field.new(kind, part).values }
+      compact_days
+    end
 
     def timezone_suffix?(part)
       Field.new(:weekdays, part.delete_suffix("&")).values
