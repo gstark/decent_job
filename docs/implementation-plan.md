@@ -42,6 +42,17 @@ Job-controls verification: 213 specs, 766 assertions; Standard and gem build pas
 
 Batch verification: 301 specs, 1,081 assertions; Standard and gem build passed. The package contains migration 004 and all batch implementation files. Independent spec-compliance and code-quality reviews passed. Real PostgreSQL tests cover callback deduplication and recovery after SIGKILL, concurrent discards during reconciliation and reopening, recursive callback-created controlled jobs, database isolation, retry callbacks, and inline/async multi-batch execution.
 
+### Recurring schedules slice
+
+- [x] Implement numeric cron expressions, extended day syntax, aliases, zones, and bounded calendar search without another runtime dependency.
+- [x] Record pinned-reference conformance fixtures, including DST gaps/folds and deliberate corrections to invalid-input handling.
+- [ ] Add natural-language schedule translation and callable schedule definitions with validation and display metadata.
+- [ ] Persist cron key/time and enable/disable overrides; deduplicate scheduled enqueue across processes in the same transaction as job insertion.
+- [ ] Add independent cron start/stop, per-entry error isolation, clock-drift handling, and graceful restart catch-up.
+- [ ] Integrate configuration, worker/application lifecycle, CLI controls, documentation, and independent reviews.
+
+Numeric parser verification: 469 specs, 1,361 assertions across the full suite; Standard, gem build, and unpacked parser boot passed. Independent spec-compliance and code-quality reviews approved the numeric module. Saved fixtures cover 88 schedules/start times, three ranges, and 23 invalid expressions. Seeded differential checks of 1,000 and 3,000 field combinations matched the pinned reference; additional timezone probes verified the documented corrections. This completes the parser foundation, not recurring-job execution. See cron-compatibility.md for the contract and remaining scope.
+
 ### Remaining slices
 
 1. Recurring schedules: cron parsing, timezone/DST behavior, deduplicated enqueue, persistent enable/disable controls, and restart catch-up.

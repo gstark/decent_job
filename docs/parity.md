@@ -13,6 +13,7 @@ This is the implementation checklist for DecentJob's behavioral parity with the 
 | Labels and job controls | `spec/labels_spec.rb`, `spec/concurrency_rule_spec.rb`, `spec/concurrency_spec.rb`, `spec/perform_concurrency_spec.rb`, `spec/recovery_spec.rb` | Other lock modes, complete instrumentation and dashboard claim display |
 | Bulk capture | `spec/bulk_spec.rb`, `spec/batch_spec.rb`, `spec/batch_workflow_spec.rb` | Remaining adapter coverage audit (B1) |
 | Batches | `spec/batch_properties_spec.rb`, `spec/batch_spec.rb`, `spec/batch_store_spec.rb`, `spec/batch_workflow_spec.rb`, `spec/batch_retry_spec.rb`, `spec/batch_isolation_spec.rb`, `spec/batch_recovery_spec.rb`, `spec/batch_generation_spec.rb` | Dashboard pages and retention |
+| Numeric cron schedules | `spec/cron_schedule_spec.rb`, `spec/cron_conformance_spec.rb`, saved pinned-reference fixtures, and optional differential scripts | Natural language, callable entries, durable recurring enqueue and lifecycle; C1–C5 remain incomplete |
 | Pauses | `spec/pauses_spec.rb` | Dashboard management |
 | CLI | `spec/cli_spec.rb` | Cleanup, probes, daemonization, subprocess supervisor, systemd |
 
@@ -169,6 +170,8 @@ The Rails engine is the reference UI. Equivalent DecentJob pages and operations 
 
 ## Completion evidence and known risks
 
+Numeric cron verification: `bundle exec rake` passed 469 specs and 1,361 assertions; Standard, gem build, and an unpacked parser boot passed. Independent reviews approved the numeric module with 168 focused specs and 280 assertions, plus a 3,000-case differential check at seed 139. [Cron compatibility](cron-compatibility.md) records the reference versions, supported grammar, range boundaries, timezone handling, and deliberate corrections to reference defects. This is partial evidence for C1/C2; it does not close those items or establish recurring-job execution.
+
 Batch slice verification: `bundle exec rake` passed 301 specs and 1,081 assertions on Ruby 3.4.10 / PostgreSQL 17.9; `bundle exec standardrb` and `gem build decent_job.gemspec` passed. Independent spec-compliance and code-quality reviews approved B3–B8; their focused batch/bulk run passed 107 specs and 379 assertions. Evidence covers callback queue/priority and properties, manual retry callbacks, recursive inline batches, multi-batch SQL inserts, async execution, real-process SIGKILL recovery, competing final completions, concurrent failure during reconciliation or reopening, and nested controlled enqueue hooks before scope locking.
 
 DecentJob batches require all jobs and callbacks to share a DecentJob database object. Reopening starts a new callback generation; callback delivery history remains retained. Completion requests commit atomically with job state, and idle polling recovers pending delivery. Batch operations flush independently of an enclosing bulk capture. These implementation choices are documented in the README and do not imply exactly-once job execution or GoodJob table compatibility.
@@ -184,4 +187,4 @@ The largest implementation risks are:
 5. Scope hidden in the dashboard. Performance ranges, DST editing, bulk filtered actions, live refresh, and concurrency-claim rendering are separately observable features, not consequences of having a jobs table.
 6. Source/spec inconsistencies. Examples sometimes have stale descriptions, and the top-level pause signature differs from the settings store. Read assertions and source together before translating a contract; record any chosen correction.
 
-This audit inspected the pinned source, commit delta, and named spec examples. It did not run GoodJob's suite, benchmark DecentJob, or verify any DecentJob implementation.
+The original audit inspected the pinned source, commit delta, and named spec examples. It did not run GoodJob's suite or benchmark DecentJob. Subsequent implementation verification is recorded above; unchecked requirements remain incomplete.
