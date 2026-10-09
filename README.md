@@ -125,6 +125,8 @@ Use `execution_mode = :inline` to run due jobs before enqueue returns. Future jo
 
 `DecentJob.perform_inline(queues: "*", limit: nil)` drains currently due jobs explicitly until no eligible job remains. It returns the number of attempted executions, including immediate retries. Pass a nonnegative integer to cap attempts; zero returns zero without opening the database. Future jobs remain pending until due, and unhandled errors propagate after their attempt is recorded. An unlimited drain can keep running while jobs keep arriving or retrying immediately, so use a finite limit when the caller needs a bound.
 
+PostgreSQL determines when jobs are due in every lock mode, including inline execution. Advancing only Ruby's test clock with `travel_to`, Timecop, or a stub does not make future jobs eligible. This deliberately differs from GoodJob. See [scheduling clocks](docs/scheduling.md#polling-and-deadlines).
+
 `DecentJob.shutdown?` observes whether all globally registered workers and cron managers have drained, including their listeners, heartbeat monitors, and callbacks. It is true before startup and does not request shutdown. See [lifecycle inspection](docs/lifecycle.md#shutdown-completion).
 
 `DecentJob.reset!` drains workers and cron callbacks, closes the global pool, and resets configuration. Existing adapter objects should be replaced after a reset.
@@ -175,7 +177,13 @@ end
 
 `total_limit` supplies the default for both enqueue and perform limits. An explicit `enqueue_limit` or `perform_limit` overrides that default for its phase. Legacy configuration uses the job class as its default key; `key: nil` disables it. New rules can match a key, a label, or all jobs when neither is supplied. A label takes precedence over a key. Label rules only apply to jobs carrying that label; `apply_label: true` adds it even when instance labels were explicitly supplied.
 
+A callable rule key returning nil, false, or a blank string disables that rule for the job. A static absent key with no label matches all jobs. Legacy keys remain dynamic before initial enqueue, then retain the resolved nonblank key through serialization and retries. Reading the key before enqueue does not freeze it ahead of other enqueue callbacks.
+
+The reference deprecates supplying both a label and a key. Use a label-only rule; DecentJob keeps the label precedence for existing configurations and does not evaluate the ignored key or emit a deprecation warning.
+
 Enqueue limits count unfinished jobs, excluding executing jobs for an enqueue-only limit. Admission and insertion share a PostgreSQL transaction and scope lock. Rejected `perform_later` calls return `false`. Limits run after application enqueue callbacks. The named callback `:_decent_job_concurrency_before_enqueue` supports Active Job's `skip_callback` API.
+
+If a configured `enqueue_limit` callable returns nil, the numeric limit falls back to `total_limit` while still excluding executing jobs, matching the reference's enqueue-only flag.
 
 Perform-limit rejections retry with Active Job's polynomial delay. Durable waiting claims let completion or crash recovery move a waiter forward immediately. Promotion does not reserve capacity; the job must pass its rules again. Controls are bypassed for direct `perform_now` and other queue adapters.
 
@@ -212,6 +220,8 @@ A block captures enqueues until it returns. An exception in the block abandons i
 Captured callbacks observe provisional enqueue success. Admission happens after the block, so a later rejection updates the job's status but cannot undo callback side effects. Ordinary `perform_later` and explicit controlled bulk jobs suppress `after_enqueue` when admission rejects them.
 
 `DecentJob::Bulk.capture { ... }` captures jobs without flushing them and restores an enclosing capture afterward. Pass either explicit jobs or a block to these APIs. To make writes across multiple flush groups atomic on one database, wrap bulk enqueue in `DecentJob.database.transaction`.
+
+Outside cron capture, direct adapter `enqueue_all` skips already-persisted Active Job identities and counts the rows it inserts. With distinct input objects sharing an identity, only the first inserted object receives a provider ID and success flag. Repeating the same object counts it once and keeps its successful status. Single-job duplicate enqueue still raises an enqueue error. This avoids the reference's overcount when several input objects map to one inserted identity. Cron capture only skips duplicate occurrences and still raises unrelated uniqueness errors.
 
 ## Batches
 

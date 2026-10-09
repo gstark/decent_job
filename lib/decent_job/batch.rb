@@ -249,7 +249,7 @@ module DecentJob
           ids = store.retry_members(id)
           store.mark_enqueued(id)
           request_reconciliation
-          inline_jobs = store.members(id, ids: ids).select { |job| job.queue_adapter.execution_mode == :inline }
+          inline_jobs = store.members(id, ids: ids, deserialize_arguments: false).select { |job| job.queue_adapter.execution_mode == :inline }
           database.after_commit { InlineBuffer.perform(database, inline_jobs.map(&:provider_job_id)) } unless inline_jobs.empty?
         end
       end

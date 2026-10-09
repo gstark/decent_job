@@ -4,7 +4,7 @@ require "date"
 
 module DecentJob
   class ConcurrencyRule
-    Resolved = Data.define(:scope, :kind, :value, :total_limit, :enqueue_limit, :perform_limit, :enqueue_throttle, :perform_throttle)
+    Resolved = Data.define(:scope, :kind, :value, :total_limit, :enqueue_limit, :enqueue_limit_configured, :perform_limit, :enqueue_throttle, :perform_throttle)
     KEY_TYPES = [String, Symbol, Numeric, Date, Time, TrueClass, FalseClass].freeze
 
     def initialize(label: nil, apply_label: false, key: nil, total_limit: nil, enqueue_limit: nil, perform_limit: nil, enqueue_throttle: nil, perform_throttle: nil)
@@ -37,6 +37,8 @@ module DecentJob
           raise TypeError, "Concurrency key must be a scalar; was a #{key.class}"
         end
         blank_key = key.nil? || key == false || (key.is_a?(String) && key.strip.empty?)
+        return nil if blank_key && @key.respond_to?(:call)
+
         kind, value = blank_key ? ["all", nil] : ["key", key.to_s.dup.freeze]
       end
 
@@ -51,6 +53,7 @@ module DecentJob
         value: value,
         total_limit: (resolve_limit(job, :total_limit, @limits[0]) if use_total),
         enqueue_limit: enqueue_limit,
+        enqueue_limit_configured: !@limits[1].nil?,
         perform_limit: perform_limit,
         enqueue_throttle: (resolve_throttle(job, :enqueue_throttle, @throttles[0]) if enqueue),
         perform_throttle: (resolve_throttle(job, :perform_throttle, @throttles[1]) if perform)

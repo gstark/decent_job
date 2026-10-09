@@ -448,9 +448,15 @@ The first PgBouncer run exposed a fixture that assigned retrying jobs to a separ
 
 A6, P10, I1's library settings, and I2 are implemented with evidence in the parity tracker and configuration map. This closes the three demonstrated global-control gaps. Benchmarks and the final library parity audit remain open; dashboard work remains deferred.
 
+### Final library parity audit checkpoint
+
+Reviewed all 80 library requirements against GoodJob `ad4be5c2`, using its source and applicable RSpec examples as evidence for DecentJob Minitest specs. Added persistent adapter, concurrency, batch deserialization, scheduler, PostgreSQL-clock, and extracted-package coverage; fixed demonstrated mismatches. The user selected PostgreSQL clock authority over Ruby-only test-time travel. Duplicate-array inserted counts and strict queue recipe validation are explicit adaptations.
+
+See [the audit report](library-parity-audit.md) for reference-to-spec mapping, validation commands/results, and limitations. Library checklist rows are now reconciled with evidence; dashboard requirements remain deferred. This audit does not claim that GoodJob’s full suite was executed or that benchmark/native-platform verification is complete.
+
 ### Remaining slices
 
-1. Compatibility: benchmark and final library parity audit.
+1. Performance: benchmarks remain open. Native Linux systemd/abstract-socket and remote CI verification also remain open.
 2. Deferred at the user's request: dashboard, including authenticated job actions, histories, batches, schedules, processes and metrics.
 
 Each slice requires behavior specs before implementation, real PostgreSQL verification, and independent review. Completion of one slice does not imply completion of the full rebuild.

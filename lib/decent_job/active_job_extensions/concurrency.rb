@@ -84,12 +84,12 @@ module DecentJob
       end
 
       def decent_job_concurrency_key
-        return @decent_job_concurrency_key if defined?(@decent_job_concurrency_key)
+        return @decent_job_concurrency_key if @decent_job_concurrency_key
 
         deserialize_arguments_if_needed
         configuration = self.class.decent_job_concurrency_config
-        key = configuration.fetch(:key, self.class.name) unless configuration.empty?
-        @decent_job_concurrency_key = ConcurrencyRule.new(key: key).resolve(self, stage: :metadata).value
+        key = configuration.fetch(:key, self.class.name)
+        ConcurrencyRule.new(key: key).resolve(self, stage: :metadata)&.value
       end
 
       def decent_job_resolved_concurrency_rules(stage: nil)
@@ -103,9 +103,11 @@ module DecentJob
       end
 
       def serialize
+        key = decent_job_concurrency_key
+        keys = decent_job_resolved_concurrency_rules(stage: :metadata).select { |rule| rule.kind == "key" }.map(&:value)
         super.merge(
-          "decent_job_concurrency_key" => decent_job_concurrency_key,
-          "decent_job_concurrency_keys" => decent_job_resolved_concurrency_rules(stage: :metadata).select { |rule| rule.kind == "key" }.map(&:value).uniq
+          "decent_job_concurrency_key" => key,
+          "decent_job_concurrency_keys" => [key, *keys].compact.uniq
         )
       end
 
@@ -118,6 +120,11 @@ module DecentJob
 
       def _decent_job_concurrency_before_enqueue
         @decent_job_enqueue_concurrency_enabled = self.class.queue_adapter.is_a?(Adapter)
+        return if Current.execution&.fetch(:job_id, nil) == job_id
+
+        if @decent_job_enqueue_concurrency_enabled && !self.class.decent_job_concurrency_config.empty?
+          @decent_job_concurrency_key ||= decent_job_concurrency_key
+        end
       end
     end
   end

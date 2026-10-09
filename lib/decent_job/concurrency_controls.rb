@@ -51,7 +51,7 @@ module DecentJob
       end
       limit = rule.enqueue_limit || rule.total_limit
       if limit
-        performing_filter = rule.enqueue_limit ? "AND NOT (#{ConcurrencyClaims::EXECUTION_LOCKED_SQL})" : ""
+        performing_filter = rule.enqueue_limit_configured ? "AND NOT (#{ConcurrencyClaims::EXECUTION_LOCKED_SQL})" : ""
         count = connection.exec_params("SELECT count(*) FROM decent_jobs WHERE #{scope} AND state IN ('ready', 'running') #{performing_filter}", [rule.value]).getvalue(0, 0).to_i
         if count >= limit
           rejection_event("limit", job, rule, limit, count)

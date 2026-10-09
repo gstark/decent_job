@@ -62,7 +62,11 @@ Workers check for ready work at startup. With a positive cache limit, they also 
 
 If the application's clock is ahead of PostgreSQL, an apparently due deadline can produce an empty claim. The worker backs off for half a second before retrying that deadline. It does not bypass PostgreSQL's due-time check.
 
+This clock policy also applies to `DecentJob.perform_inline` and adapter inline execution in every lock mode. GoodJob's reference specs advance Ruby time to execute future jobs; DecentJob deliberately requires PostgreSQL time to reach the scheduled instant. Ruby-only `travel_to` or Timecop changes cannot advance eligibility. The conformance specs verify both this difference and jobs becoming due as real time passes.
+
 Notifications target pools that accept the named queue, including exclusion and ordered queue expressions. Counts request bounded execution capacity. A fanout hint wakes every matching pool. Empty legacy notifications wake all pools. PostgreSQL can coalesce notifications, so neither counts nor cache entries represent an exact job inventory.
+
+`Worker#wake(scheduled_at: ...)` accepts a Time, numeric epoch, ISO 8601 string, or one JSON-encoded ISO 8601 string, as in the reference scheduler specs. Nested JSON encoding, non-time JSON values, and malformed timestamps are reported through the thread error handler without scheduling work.
 
 Embedded async enqueue sends local scheduling hints after transaction commit even when PostgreSQL notifications are disabled globally or for the job. Rollbacks do not schedule local work. External workers require polling, an existing cached deadline, or another wakeup to discover changes whose notifications were suppressed or missed.
 

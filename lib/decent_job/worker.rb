@@ -331,7 +331,9 @@ module DecentJob
         value = state[:scheduled_at]
         state[:scheduled_at] = case value
         when Time then value
-        when String then Time.iso8601(value)
+        when String
+          value = JSON.parse(value, max_nesting: 1) if value.lstrip.start_with?('"')
+          Time.iso8601(value)
         when Numeric
           raise ArgumentError, "notification scheduled_at must be finite and real" unless value.real? && value.finite?
           Time.at(value)
@@ -340,7 +342,7 @@ module DecentJob
         end
       end
       state
-    rescue RangeError, TypeError => error
+    rescue JSON::ParserError, RangeError, TypeError => error
       raise ArgumentError, error.message
     end
 

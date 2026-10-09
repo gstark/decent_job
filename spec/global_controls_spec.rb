@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "minitest/mock"
 require "spec_helper"
 require "support/jobs"
 require "timeout"
@@ -108,6 +109,21 @@ describe "global inline execution" do
     _(RecordingJob.events.pop(true)).must_equal "waited"
     _(RecordingJob.events.pop(true)).must_equal "became due"
     _(DecentJob::Store.new(database).find(future.provider_job_id).fetch("state")).must_equal "succeeded"
+  end
+
+  # GoodJob ad4be5c2 spec/lib/good_job_spec.rb:173 advances Ruby's clock.
+  # DecentJob deliberately keeps PostgreSQL as the due-time authority.
+  it "keeps future jobs pending when only the Ruby test clock advances" do
+    now = Time.now
+    future = RecordingJob.set(wait_until: now + 300).perform_later("future")
+    Time.stub(:now, now + 360) do
+      %i[advisory skiplocked hybrid].each do |strategy|
+        DecentJob.configuration.lock_strategy = strategy
+        _(DecentJob.perform_inline).must_equal 0
+      end
+    end
+    _(RecordingJob.events).must_be_empty
+    _(DecentJob::Store.new(database).find(future.provider_job_id).fetch("state")).must_equal "ready"
   end
 
   it "applies a finite limit to attempts of the same retrying job" do

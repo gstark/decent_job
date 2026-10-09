@@ -27,7 +27,7 @@ module DecentJob
       )
     end
 
-    def enqueue_all(jobs, attributes: nil)
+    def enqueue_all(jobs, attributes: nil, skip_duplicates: false)
       return [] if jobs.empty?
 
       ids = nil
@@ -49,7 +49,7 @@ module DecentJob
           result = connection.exec_params(<<~SQL, params)
             INSERT INTO decent_jobs (id, active_job_id, queue_name, job_class, priority, payload, scheduled_at, labels, concurrency_keys, batch_id, batch_callback_id, cron_key, cron_at)
             VALUES #{values.join(", ")}
-            ON CONFLICT (cron_key, cron_at) WHERE cron_key IS NOT NULL AND cron_at IS NOT NULL DO NOTHING
+            ON CONFLICT #{"(cron_key, cron_at) WHERE cron_key IS NOT NULL AND cron_at IS NOT NULL" unless skip_duplicates} DO NOTHING
             RETURNING #{block_given? ? "*" : "id"}
           SQL
           result.each do |row|

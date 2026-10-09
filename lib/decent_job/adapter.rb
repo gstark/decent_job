@@ -46,18 +46,19 @@ module DecentJob
     end
 
     def enqueue_at(job, timestamp)
-      job.scheduled_at = Time.at(timestamp).utc
+      job.scheduled_at = Time.at(timestamp).utc unless timestamp.nil?
       enqueue_job(job, scheduled_at: timestamp)
     end
 
     def enqueue_all(jobs, callbacks: true)
+      jobs = jobs.uniq
       if Bulk.capture(jobs, queue_adapter: self)
         jobs.each { |job| job.successfully_enqueued = true }
         return jobs.size
       end
 
       controlled, plain = jobs.partition { |job| job.respond_to?(:decent_job_resolved_concurrency_rules) }
-      count = persist(plain)
+      count = persist(plain, skip_duplicates: true)
       controlled.each do |job|
         if callbacks
           job.enqueue
@@ -253,18 +254,21 @@ module DecentJob
       job.enqueue_error = error
     end
 
-    def persist(jobs, attributes: nil, dispatch: true, &block)
+    def persist(jobs, attributes: nil, dispatch: true, skip_duplicates: false, &block)
       return 0 if jobs.empty?
 
+      # Cron capture also flushes through bulk enqueue, but only its occurrence
+      # constraint may reject silently. Other uniqueness failures must escape.
+      skip_duplicates = false if CronEntry.context_for(database)
       ids = begin
-        store.enqueue_all(jobs, attributes: attributes, &block)
+        store.enqueue_all(jobs, attributes: attributes, skip_duplicates: skip_duplicates, &block)
       rescue PG::Error => error
         raise ActiveJob::EnqueueError, error.message
       end
       jobs.zip(ids).each do |job, id|
         job.provider_job_id = id
         job.successfully_enqueued = !id.nil?
-        job.enqueue_error = ActiveJob::EnqueueError.new("cron occurrence already enqueued") unless id
+        job.enqueue_error = id ? nil : ActiveJob::EnqueueError.new("job or cron occurrence already enqueued")
       end
       ids = ids.compact
       after_enqueue(ids) if dispatch

@@ -110,7 +110,7 @@ module DecentJob
       end
     end
 
-    def members(id, callbacks: false, ids: nil)
+    def members(id, callbacks: false, ids: nil, deserialize_arguments: true)
       return [] if ids && ids.empty?
 
       column = callbacks ? "batch_callback_id" : "batch_id"
@@ -121,7 +121,7 @@ module DecentJob
         connection.exec_params("SELECT payload FROM decent_jobs WHERE #{column} = $1 #{filter} ORDER BY created_at, id", params).map do |row|
           Current.with(database: @database) do
             ActiveJob::Base.deserialize(JSON.parse(row.fetch("payload"))).tap do |job|
-              job.send(:deserialize_arguments_if_needed)
+              job.send(:deserialize_arguments_if_needed) if deserialize_arguments
             end
           end
         end
@@ -132,7 +132,9 @@ module DecentJob
       @database.transaction do |connection|
         rows = connection.exec_params("SELECT * FROM decent_jobs WHERE batch_id = $1 AND state = 'discarded' AND NOT (#{FORCE_DISCARD_LOCKED_SQL}) ORDER BY id", [id]).to_a
         retries = rows.map { |row| prepare_retry(row) }
-        jobs = retries.flat_map { |prepared| prepared.fetch(:buffer).active_jobs }
+        jobs = retries.flat_map do |prepared|
+          prepared.fetch(:buffer).active_jobs.reject { |job| job.job_id == prepared.fetch(:context).fetch(:job_id) }
+        end
         jobs.each { |job| validate_adapter(job.class) }
         lock_scopes(jobs)
         encoded_ids = PG::TextEncoder::Array.new.encode(rows.map { |row| row.fetch("id") })
@@ -144,7 +146,7 @@ module DecentJob
 
           job = prepared[:job]
           if job
-            Store.new(@database).reschedule(job, prepared.fetch(:context))
+            Store.new(@database).reschedule(job, prepared.fetch(:context), payload: prepared.fetch(:payload))
             # The discarded attempt is now deliberately retried. Its completion
             # request may have arrived while this generation was being opened.
             connection.exec_params("DELETE FROM decent_job_batch_updates WHERE batch_id = $1 AND job_id = $2 AND discarded", [id, previous.fetch("id")])
@@ -248,46 +250,10 @@ module DecentJob
     end
 
     def prepare_retry(row)
-      context = {database: @database, job_id: row.fetch("active_job_id"), id: row.fetch("id"), execution_id: row.fetch("execution_id"),
-                 batch_id: row["batch_id"], batch_callback_id: row["batch_callback_id"], manual_retry: true}
-      buffer = Bulk::Buffer.new
-      retried_job = nil
-      Current.with(context) do
-        job = deserialize_retry_job(JSON.parse(row.fetch("payload")))
-        validate_adapter(job.class)
-        job.executions = (job.executions || 0) + 1
-        payload = nil
-        current_thread = Thread.current
-        subscriber = lambda do |_name, _start, _finish, _id, event|
-          if Thread.current == current_thread && event[:job].equal?(job) && job.successfully_enqueued?
-            # retry_job restores queue, priority and schedule when it returns.
-            # Preserve the callback-modified values before that restoration.
-            payload = job.serialize
-          end
-        end
-        Batch.within_thread(database: @database) do
-          ActiveSupport::Notifications.subscribed(subscriber, /\Aenqueue(?:_at)?\.active_job\z/) do
-            buffer.capture { I18n.with_locale(job.locale) { job.retry_job(wait: 0, error: retry_error(row)) } }
-          end
-          buffer.prepare
-        end
-        retried_job = deserialize_retry_job(payload) if payload && buffer.active_jobs.include?(job)
-      end
-      {row: row, context: context, buffer: buffer, job: retried_job}
-    end
-
-    def deserialize_retry_job(payload)
-      ActiveJob::Base.deserialize(payload).tap { |job| job.send(:deserialize_arguments_if_needed) }
-    end
-
-    def retry_error(row)
-      details = JSON.parse(row.fetch("error") || "{}")
-      klass = details.fetch("class").constantize
-      raise TypeError, "Stored error is not an exception" unless klass <= Exception
-
-      klass.new(details["message"]).tap { |error| error.set_backtrace(details["backtrace"]) }
-    rescue
-      StandardError.new([details&.fetch("class", nil), details&.fetch("message", nil)].compact.join(": "))
+      record = Job.from_attributes(Store.new(@database).decode(row), database: @database)
+      JobRetry.new(record).prepare.merge(row: row)
+    rescue Job::AdapterMismatchError => error
+      raise ArgumentError, error.message
     end
 
     def normalize_attributes(attributes)

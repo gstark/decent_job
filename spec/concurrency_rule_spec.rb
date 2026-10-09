@@ -50,7 +50,18 @@ describe DecentJob::ConcurrencyRule do
     job = ConcurrencyRuleJob.new
 
     _(DecentJob::ConcurrencyRule.new(key: nil).resolve(job).scope).must_equal "all"
-    _(DecentJob::ConcurrencyRule.new(key: -> {}).resolve(job).scope).must_equal "all"
+  end
+
+  # GoodJob ad4be5c2, Concurrency::Rule#evaluate/#resolve_key. These callable
+  # cases extend the reference's legacy nil-key examples to its Rule behavior.
+  [nil, false, "", "  "].each do |key|
+    it "skips a rule whose dynamic key resolves to #{key.inspect}" do
+      rule = DecentJob::ConcurrencyRule.new(key: -> { key }, total_limit: 0)
+
+      [:metadata, :enqueue, :perform].each do |stage|
+        _(rule.resolve(ConcurrencyRuleJob.new, stage: stage)).must_be_nil
+      end
+    end
   end
 
   [false, "", "  "].each do |key|
@@ -213,5 +224,63 @@ describe DecentJob::ConcurrencyRule do
     _(resolved.value).must_be :frozen?
     _(resolved.scope).must_be :frozen?
     _(resolved.enqueue_throttle).must_be :frozen?
+  end
+end
+
+class ConcurrencyKeyJob < ActiveJob::Base
+  include DecentJob::ActiveJobExtensions::Concurrency
+end
+
+describe "legacy concurrency key resolution" do
+  before do
+    ConcurrencyKeyJob.decent_job_concurrency_config = {}
+    ConcurrencyKeyJob.queue_adapter = DecentJob::Adapter.new(execution_mode: :external)
+  end
+
+  # GoodJob ad4be5c2 concurrency_spec.rb, "when no key is specified".
+  it "uses the class name without any legacy configuration" do
+    _(ConcurrencyKeyJob.new.decent_job_concurrency_key).must_equal "ConcurrencyKeyJob"
+  end
+
+  # Source-derived regression: GoodJob's getter does not cache; its last
+  # before_enqueue callback captures the initial key for retry retention.
+  [nil, "first"].each do |initial|
+    it "resolves a previously read #{initial.inspect} key again before initial enqueue" do
+      ConcurrencyKeyJob.decent_job_control_concurrency_with(key: -> { arguments.first }, total_limit: 1)
+      job = ConcurrencyKeyJob.new(initial)
+      _(job.decent_job_concurrency_key).must_equal initial if initial
+      _(job.decent_job_concurrency_key).must_be_nil unless initial
+      job.arguments = ["second"]
+
+      _(job.decent_job_concurrency_key).must_equal "second"
+    end
+  end
+
+  it "captures the current legacy key at initial enqueue and serializes it for retries" do
+    ConcurrencyKeyJob.decent_job_control_concurrency_with(key: -> { arguments.first }, total_limit: 1)
+    job = ConcurrencyKeyJob.new("first")
+    _(job.decent_job_concurrency_key).must_equal "first"
+    job.arguments = ["second"]
+    captured = DecentJob::Bulk.capture { job.enqueue }
+    job.arguments = ["third"]
+
+    _(captured).must_equal [job]
+    _(job.decent_job_concurrency_key).must_equal "second"
+    _(ConcurrencyKeyJob.deserialize(job.serialize).decent_job_concurrency_key).must_equal "second"
+  end
+
+  # GoodJob ad4be5c2 Concurrency#_good_job_concurrency_before_enqueue returns
+  # before key evaluation for a retry of the current job, including a nil key.
+  it "does not deserialize unavailable arguments to prepare a retry's nil legacy key" do
+    ConcurrencyKeyJob.decent_job_control_concurrency_with(key: nil, total_limit: 1)
+    payload = ConcurrencyKeyJob.new("original").serialize
+    payload["arguments"] = [{"_aj_serialized" => "RemovedConcurrencyArgumentSerializer"}]
+    job = ConcurrencyKeyJob.deserialize(payload)
+    captured = DecentJob::Current.with(job_id: job.job_id) do
+      DecentJob::Bulk.capture { job.enqueue }
+    end
+
+    _(captured).must_equal [job]
+    _(job.successfully_enqueued?).must_equal true
   end
 end

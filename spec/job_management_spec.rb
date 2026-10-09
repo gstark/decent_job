@@ -427,7 +427,9 @@ describe "job management callbacks and transactions" do
       DecentJob::Bulk.capture(existing)
       child = ManagementChildJob.perform_later
     end
-    ManagementChildJob.decent_job_control_concurrency_with(key: -> { raise "metadata failed" }, enqueue_limit: 1)
+    # Rule metadata resolves after bulk capture; legacy keys resolve in the
+    # initial enqueue callback, before provisional success can be recorded.
+    ManagementChildJob.decent_job_concurrency_rule(key: -> { raise "metadata failed" }, enqueue_limit: 1)
     _(proc { job.retry_job }).must_raise RuntimeError
     _(child.successfully_enqueued?).must_equal false
     _(child.provider_job_id).must_be_nil
