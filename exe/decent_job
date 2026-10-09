@@ -3,6 +3,8 @@
 
 require "decent_job/cli"
 
+DecentJob::CLI.within_exe = true
+
 cli = DecentJob::CLI.new
 status = cli.run(ARGV)
 $stdout.flush

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "active_support/tagged_logging"
 require "json"
 require "logger"
 
@@ -59,7 +60,7 @@ module DecentJob
       @enable_listen_notify = ENV.fetch("DECENT_JOB_ENABLE_LISTEN_NOTIFY", "true") != "false"
       @enable_pauses = ENV.fetch("DECENT_JOB_ENABLE_PAUSES", "false") == "true"
       @shutdown_timeout = Float(ENV.fetch("DECENT_JOB_SHUTDOWN_TIMEOUT", "30"))
-      @default_logger = Logger.new($stdout)
+      @default_logger = ActiveSupport::TaggedLogging.new(ActiveSupport::Logger.new($stdout))
     end
 
     attr_writer :execution_mode, :logger, :on_thread_error

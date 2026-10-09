@@ -33,6 +33,7 @@ require "decent_job/interrupted_error"
 require "decent_job/job"
 require "decent_job/job_retry"
 require "decent_job/lifecycle_hooks"
+require "decent_job/log_subscriber"
 require "decent_job/notifier"
 require "decent_job/pauses"
 require "decent_job/performer"
@@ -72,6 +73,14 @@ module DecentJob
 
   class << self
     attr_reader :configuration
+
+    def logger
+      configuration.logger
+    end
+
+    def logger=(logger)
+      configuration.logger = logger
+    end
 
     def configure
       with_runtime_transition(:configuring) do
@@ -384,6 +393,8 @@ module DecentJob
     end
   end
 end
+
+DecentJob::LogSubscriber.attach_to(:decent_job)
 
 if defined?(Rails::Railtie)
   require "decent_job/railtie"

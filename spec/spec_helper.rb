@@ -10,6 +10,9 @@ $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
 require "decent_job" if File.exist?(File.expand_path("../lib/decent_job.rb", __dir__))
 
 ActiveJob::Base.logger = Logger.new(File::NULL)
+# Runtime events are covered with explicit capture sinks in logging specs.
+DecentJob::LogSubscriber.loggers.replace([Logger.new(File::NULL)])
+DecentJob::LogSubscriber.reset_logger
 
 module DatabaseSpec
   def before_setup

@@ -85,13 +85,24 @@ describe "CLI health probes and systemd lifecycle" do
     end
   end
 
+  def await_started(output, error)
+    lines = []
+    Timeout.timeout(8) do
+      while (line = output.gets)
+        lines << line
+        return lines.join if line.include?("DecentJob started. Send SIGINT or SIGTERM to stop.")
+      end
+      flunk "CLI failed to boot. stdout: #{lines.join.inspect}; stderr: #{error.read}"
+    end
+  rescue Timeout::Error
+    stderr = error.read_nonblock(4096, exception: false)
+    flunk "CLI did not boot within 8 seconds. stdout: #{lines.join.inspect}; stderr: #{stderr.inspect}"
+  end
+
   def await_boot(output, error)
-    line = Timeout.timeout(8) { output.gets }
-    _(line).must_include "DecentJob started", "CLI did not boot: #{line.inspect}"
+    startup_output = await_started(output, error)
     await { response("/status/connected").code == "200" }
-  rescue Minitest::Assertion
-    flunk "CLI failed to boot: #{error.read}" if line.nil?
-    raise
+    startup_output
   end
 
   it "keeps probes and watchdog alive while SIGTERM drains a job" do
@@ -100,7 +111,8 @@ describe "CLI health probes and systemd lifecycle" do
     finished = File.join(@directory, "finished")
     DecentJob::Store.new(database).enqueue_all([HealthServicesJob.new(started, release, finished)])
     run_cli do |process, output, error|
-      await_boot(output, error)
+      startup_output = await_boot(output, error)
+      _(startup_output.scan("[DecentJob] Pinging systemd watchdog every").size).must_equal 1
       await_notification("READY=1")
       await { File.exist?(started) }
       _(%w[/ /status /status/started /status/connected].map { |path| response(path).code }).must_equal %w[200 200 200 200]
@@ -147,7 +159,7 @@ describe "CLI health probes and systemd lifecycle" do
     @environment["DECENT_JOB_HEALTH_CONFIG_PORT"] = configured_port.to_s
     @environment["DECENT_JOB_HEALTH_CUSTOM_APP"] = "true"
     run_cli("--probe-port", cli_port.to_s) do |process, output, error|
-      _(Timeout.timeout(8) { output.gets }).must_include "DecentJob started"
+      await_started(output, error)
       result = response("/custom?value=two", port: cli_port)
       _(result.code).must_equal "207"
       _(result.body.b).must_equal "GET /custom?value=two café".b

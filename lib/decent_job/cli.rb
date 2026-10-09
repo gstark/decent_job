@@ -5,6 +5,15 @@ require "optparse"
 
 module DecentJob
   class CLI
+    class << self
+      attr_accessor :within_exe, :log_to_stdout
+      alias_method :within_exe?, :within_exe
+
+      def log_to_stdout?
+        log_to_stdout.nil? ? within_exe? : log_to_stdout
+      end
+    end
+
     attr_reader :shutdown_timed_out
 
     def initialize(stdout: $stdout, stderr: $stderr)
@@ -46,6 +55,7 @@ module DecentJob
       rescue ArgumentError => error
         raise OptionParser::InvalidArgument, error.message
       end
+      set_up_logging
       if %w[cleanup_preserved_jobs cleanup].include?(command)
         total = DecentJob.cleanup_preserved_jobs(**cleanup_options)
         @stdout.puts "Deleted #{total} preserved records (jobs, executions, and batches)."
@@ -63,6 +73,25 @@ module DecentJob
     rescue LoadError, StandardError => error
       @stderr.puts "Error: #{error.message}"
       1
+    end
+
+    def set_up_logging
+      return unless self.class.log_to_stdout?
+
+      @stdout.sync = true if @stdout.respond_to?(:sync=)
+      destinations = LogSubscriber.loggers
+      return if destinations.any? { |logger| logger_outputs_to_stdout?(logger) }
+
+      destinations << ActiveSupport::TaggedLogging.new(ActiveSupport::Logger.new(@stdout))
+      LogSubscriber.reset_logger
+    end
+
+    def logger_outputs_to_stdout?(logger)
+      if logger.is_a?(ActiveSupport::BroadcastLogger)
+        logger.broadcasts.any? { |destination| logger_outputs_to_stdout?(destination) }
+      else
+        ActiveSupport::Logger.logger_outputs_to?(logger, @stdout)
+      end
     end
 
     def option_parser(options, applications)

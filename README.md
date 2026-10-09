@@ -111,6 +111,8 @@ Per-job notification controls and transactional publication are described in [no
 
 Use `DecentJob.stats` and `DecentJob.idle?` to inspect registered workers in the current process. Jobs can use `DecentJob.current_thread_shutting_down?` for cooperative shutdown. See [worker activity and thread controls](docs/worker-observability.md) for counters, timestamps, and `--lower-thread-priority` configuration.
 
+Set `DecentJob.logger` to choose the default logging destination, or use `DecentJob::LogSubscriber.loggers` for multiple destinations with separate severity levels. See [instrumentation and logging](docs/instrumentation.md) for tags, CLI stdout controls, currently emitted events, and remaining event coverage.
+
 ## Embedded execution and tests
 
 Use `execution_mode = :async_all` to start background workers on the first enqueue in a standalone process. The `async` and `async_server` modes start embedded workers only in detected web servers. Rails starts eligible adapters after application boot. See [Rails integration](docs/rails-integration.md) for configuration, reloading, and transaction deferral. Call `DecentJob.shutdown(timeout: 30)` to stop registered workers and cron managers with one shared deadline. Enqueues after global shutdown remain persisted until an explicit start or restart reopens execution. `DecentJob.start` starts the default worker for jobs already in the database; `DecentJob.restart(timeout: 30)` resumes registered owners. Use `adapter.restart(timeout: 30)` for an explicitly stopped adapter. See [lifecycle and restart](docs/lifecycle.md).

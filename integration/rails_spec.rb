@@ -69,6 +69,26 @@ describe "Rails 8.1 host integration" do
     _(result.fetch("custom_logger")).must_equal true
   end
 
+  it "updates an already-used default subscriber to the Rails logger and later replacements" do
+    result = run_host("logging", early_load: true)
+    _(result.fetch("active_record_loaded")).must_equal false
+    _(result.fetch("logger")).must_equal true
+    _(result.fetch("host_messages")).must_equal 1
+    _(result.fetch("host_messages_after")).must_equal 1
+    _(result.fetch("explicit_messages_after")).must_equal 0
+    _(result.fetch("replacement_messages")).must_equal 1
+  end
+
+  it "preserves explicit subscriber destinations through Rails boot and logger replacement" do
+    result = run_host("logging_explicit", early_load: true)
+    _(result.fetch("logger")).must_equal true
+    _(result.fetch("host_messages")).must_equal 0
+    _(result.fetch("host_messages_after")).must_equal 0
+    _(result.fetch("explicit_messages")).must_equal 1
+    _(result.fetch("explicit_messages_after")).must_equal 2
+    _(result.fetch("replacement_messages")).must_equal 0
+  end
+
   it "starts an early adapter after host boot and executes existing jobs in a server" do
     result = run_host("boot", mode: "async_server", server: true, backlog: "server backlog")
     _(result.fetch("events")).must_include ["early", false, false]

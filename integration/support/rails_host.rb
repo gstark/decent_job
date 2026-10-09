@@ -15,6 +15,15 @@ HOST_OPTIONS = JSON.parse(ENV.fetch("HOST_CONNECTION"), symbolize_names: true)
 HOST_SCENARIO = ENV.fetch("HOST_SCENARIO")
 HOST_EVENTS = []
 HOST_ROOT = ENV.fetch("HOST_ROOT")
+HOST_LOG = StringIO.new
+HOST_EXPLICIT_LOG = StringIO.new
+
+if HOST_SCENARIO == "logging"
+  DecentJob::LogSubscriber.logger
+elsif HOST_SCENARIO == "logging_explicit"
+  DecentJob::LogSubscriber.loggers.replace([Logger.new(HOST_EXPLICIT_LOG)])
+  DecentJob::LogSubscriber.reset_logger
+end
 
 module Rails
   class Server; end if ENV["HOST_SERVER"] == "true"
@@ -39,7 +48,7 @@ class DecentJobHostApplication < Rails::Application
   config.eager_load = false
   config.enable_reloading = true
   config.secret_key_base = "host integration test secret" * 4
-  config.logger = Logger.new(StringIO.new)
+  config.logger = Logger.new(HOST_LOG)
   config.active_support.deprecation = :stderr
   config.active_support.isolation_level = ENV.fetch("HOST_ISOLATION", "thread").to_sym
   config.active_job.queue_adapter = :decent_job
@@ -99,6 +108,16 @@ result = {events: HOST_EVENTS, mode: RailsHostJob.queue_adapter.execution_mode,
           active_record_loaded: defined?(ActiveRecord::Base) ? true : false}
 
 case HOST_SCENARIO
+when "logging", "logging_explicit"
+  DecentJob.cleanup_preserved_jobs(older_than: 0)
+  result[:host_messages] = HOST_LOG.string.scan("destroyed 0 preserved").size
+  result[:explicit_messages] = HOST_EXPLICIT_LOG.string.scan("destroyed 0 preserved").size
+  replacement = StringIO.new
+  DecentJob.logger = Logger.new(replacement)
+  DecentJob.cleanup_preserved_jobs(older_than: 0)
+  result[:host_messages_after] = HOST_LOG.string.scan("destroyed 0 preserved").size
+  result[:explicit_messages_after] = HOST_EXPLICIT_LOG.string.scan("destroyed 0 preserved").size
+  result[:replacement_messages] = replacement.string.scan("destroyed 0 preserved").size
 when "boot", "custom_logger", "cron_boot"
   result[:started] = DecentJob.started?
   result[:async] = RailsHostJob.queue_adapter.execute_async?
