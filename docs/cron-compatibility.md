@@ -1,6 +1,6 @@
 # Cron compatibility
 
-Recurring-job execution remains in progress. The schedule parser accepts numeric and natural-language expressions; it does not yet enqueue recurring jobs.
+Automatic recurring execution remains in progress. The schedule parser accepts numeric and natural-language expressions. [Cron entries](recurring-jobs.md) add callable schedules, persistent controls, and deduplicated enqueue; scheduler lifecycle and restart catch-up remain unfinished.
 
 ## Numeric schedules
 
@@ -8,7 +8,7 @@ Recurring-job execution remains in progress. The schedule parser accepts numeric
 
 Supported expressions include five-field cron and six-field cron with seconds; lists, ranges, steps, month and weekday names; the yearly, annually, monthly, weekly, daily, midnight, noon, and hourly aliases; negative and last month days; nth and last weekdays with `#`; alternating weeks with `%`; and `&` to require both day fields to match. Week numbering follows et-orbi 1.4.0's Monday, December 31, 2018 reference.
 
-An expression may end with an IANA timezone or a numeric offset. Without one, scheduling uses the process's local timezone. Matching preserves the reference's day-of-month/day-of-week OR semantics and its range-expansion conventions. Search advances through calendar fields and stops with `ArgumentError` if no occurrence is reached within its bounded search.
+An expression may end with an IANA timezone or a numeric offset. Without one, scheduling uses a recognized `TZ` environment setting first, then ActiveSupport's thread-local `Time.zone`, then Ruby's native local timezone. Recognized settings include IANA names, `Z`, and supported numeric offsets. This priority applies to calendar jumps as well as matching. Matching preserves the reference's day-of-month/day-of-week OR semantics and its range-expansion conventions. Search advances through calendar fields and stops with `ArgumentError` if no occurrence is reached within its bounded search.
 
 ## Natural-language schedules
 
@@ -49,7 +49,7 @@ raabro 1.4.0 must also be installed for these scripts. The generators regenerate
 DecentJob does not preserve these reference defects:
 
 - Zero steps and zero weekday moduli are rejected during parsing, rather than failing with division errors.
-- Numeric offsets retain their sign, including `-00:30`. Valid offsets beyond eleven hours, such as `+14:00`, work. Unknown timezone suffixes are rejected instead of resolving a recognized prefix.
+- Numeric offsets in expressions and `TZ` retain their sign, including `-00:30`. Valid offsets beyond eleven hours, such as `+14:00`, work. Unknown expression timezone suffixes are rejected instead of resolving a recognized prefix.
 - A skipped midnight does not cause an otherwise valid occurrence later that day to disappear. For example, `0 1 * * 0 America/Havana` includes March 8, 2026 at 01:00 local time; the pinned reference skips that Sunday when searching from March 6. Calendar jumps also handle ambiguous month boundaries, half-hour rollbacks in Lord Howe, and historical transitions ending at a non-hour boundary.
 
-These corrections have explicit specs and are separate from the saved matching-reference cases. Full recurring-job parity also requires callable entries, durable deduplication, enable/disable overrides, manager lifecycle, and restart catch-up.
+These corrections have explicit specs and are separate from the saved matching-reference cases. Full recurring-job parity still requires manager lifecycle and restart catch-up.

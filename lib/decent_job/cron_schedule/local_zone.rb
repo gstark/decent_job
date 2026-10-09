@@ -2,14 +2,25 @@
 
 module DecentJob
   class CronSchedule
-    # Uses native local-time conversion when TZ is a POSIX rule or the host's
-    # timezone is configured outside ENV. Neither path changes process state.
+    # Resolve implicit zones without changing process state. Native conversion
+    # remains the fallback for POSIX rules and host timezone configuration.
     class LocalZone
+      def self.offset
+        match = /\A([+-])([01]?\d|2[0-3])(?::?([0-5]\d))?\z/.match(ENV["TZ"].to_s)
+        return unless match
+
+        (match[2].to_i * 3600 + match[3].to_i * 60) * ((match[1] == "-") ? -1 : 1)
+      end
+
       def self.timezone
         name = ENV["TZ"]&.delete_prefix(":")
-        TZInfo::Timezone.get(name) if name && !name.empty?
-      rescue TZInfo::InvalidTimezoneIdentifier
-        nil
+        name = "UTC" if name == "Z"
+        environment_timezone = begin
+          TZInfo::Timezone.get(name) if name && !name.empty?
+        rescue TZInfo::InvalidTimezoneIdentifier
+          nil
+        end
+        environment_timezone || (Time.zone&.tzinfo if Time.respond_to?(:zone))
       end
 
       def self.at(wall)

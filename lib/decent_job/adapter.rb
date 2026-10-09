@@ -24,6 +24,7 @@ module DecentJob
         return job.provider_job_id
       end
       ConcurrencyControls.new(database).enqueue(job) { persist([job]) }
+      raise ActiveJob::EnqueueError, "cron occurrence already enqueued" unless job.provider_job_id
       job.provider_job_id
     end
 
@@ -69,6 +70,8 @@ module DecentJob
     rescue ConcurrencyControls::AdmissionRejected => error
       job.enqueue_error = ActiveJob::EnqueueError.new(error.message)
     rescue ActiveJob::EnqueueError => error
+      raise if CronEntry.context_for(database) && error.cause.is_a?(PG::Error)
+
       job.enqueue_error = error
     end
 
@@ -82,10 +85,12 @@ module DecentJob
       end
       jobs.zip(ids).each do |job, id|
         job.provider_job_id = id
-        job.successfully_enqueued = true
+        job.successfully_enqueued = !id.nil?
+        job.enqueue_error = ActiveJob::EnqueueError.new("cron occurrence already enqueued") unless id
       end
+      ids = ids.compact
       if @execution_mode == :inline
-        database.after_commit { InlineBuffer.perform(database, ids) }
+        database.after_commit { CronEntry.with_context(nil) { InlineBuffer.perform(database, ids) } }
       elsif @execution_mode == :async
         database.after_commit { start_async&.wake }
       end

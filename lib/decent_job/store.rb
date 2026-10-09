@@ -15,10 +15,12 @@ module DecentJob
       return [] if jobs.empty?
 
       ids = jobs.map { SecureRandom.uuid }
+      accepted_ids = {}
       @database.transaction do |connection|
         jobs.zip(ids).each_slice(500) do |entries|
           params = []
           values = entries.map do |job, id|
+            cron = CronEntry.context_for(@database) || {}
             batch = Batch.context_for(@database, job: job) || {}
             offset = params.size
             payload = job.serialize.merge("provider_job_id" => id)
@@ -26,17 +28,20 @@ module DecentJob
               JSON.generate(payload), (job.scheduled_at || Time.now).utc.iso8601(6),
               PG::TextEncoder::Array.new.encode(payload.fetch("decent_job_labels", [])),
               PG::TextEncoder::Array.new.encode(payload.fetch("decent_job_concurrency_keys", [])),
-              batch[:batch_id], batch[:batch_callback_id]])
-            "(#{(1..11).map { |index| "$#{offset + index}" }.join(", ")})"
+              batch[:batch_id], batch[:batch_callback_id], cron[:key]&.to_s, cron[:at]&.getutc&.iso8601(6)])
+            "(#{(1..13).map { |index| "$#{offset + index}" }.join(", ")})"
           end
-          connection.exec_params(<<~SQL, params)
-            INSERT INTO decent_jobs (id, active_job_id, queue_name, job_class, priority, payload, scheduled_at, labels, concurrency_keys, batch_id, batch_callback_id)
+          result = connection.exec_params(<<~SQL, params)
+            INSERT INTO decent_jobs (id, active_job_id, queue_name, job_class, priority, payload, scheduled_at, labels, concurrency_keys, batch_id, batch_callback_id, cron_key, cron_at)
             VALUES #{values.join(", ")}
+            ON CONFLICT (cron_key, cron_at) WHERE cron_key IS NOT NULL AND cron_at IS NOT NULL DO NOTHING
+            RETURNING id
           SQL
+          result.each { |row| accepted_ids[row.fetch("id")] = true }
         end
         notify(connection)
       end
-      ids
+      ids.map { |id| id if accepted_ids[id] }
     end
 
     def find(id)

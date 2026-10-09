@@ -47,14 +47,16 @@ Batch verification: 301 specs, 1,081 assertions; Standard and gem build passed. 
 - [x] Implement numeric cron expressions, extended day syntax, aliases, zones, and bounded calendar search without another runtime dependency.
 - [x] Record pinned-reference conformance fixtures, including DST gaps/folds and deliberate corrections to invalid-input handling.
 - [x] Add natural-language schedule translation with pinned-reference conformance fixtures.
-- [ ] Add callable schedule definitions with validation and display metadata.
-- [ ] Persist cron key/time and enable/disable overrides; deduplicate scheduled enqueue across processes in the same transaction as job insertion.
+- [x] Add callable schedule definitions with validation and display metadata.
+- [x] Persist cron key/time and enable/disable overrides; deduplicate scheduled enqueue across processes in the same transaction as job insertion.
 - [ ] Add independent cron start/stop, per-entry error isolation, clock-drift handling, and graceful restart catch-up.
 - [ ] Integrate configuration, worker/application lifecycle, CLI controls, documentation, and independent reviews.
 
 Numeric parser verification: 469 specs, 1,361 assertions across the full suite; Standard, gem build, and unpacked parser boot passed. Independent spec-compliance and code-quality reviews approved the numeric module. Saved fixtures cover 88 schedules/start times, three ranges, and 23 invalid expressions. Seeded differential checks of 1,000 and 3,000 field combinations matched the pinned reference; additional timezone probes verified the documented corrections. This completes the parser foundation, not recurring-job execution. See cron-compatibility.md for the contract and remaining scope.
 
-Natural parser verification: 702 specs, 1,974 assertions across the full suite; Standard, gem build, and unpacked natural-parser boot passed. Independent spec-compliance and code-quality reviews approved the implementation after correcting capitalized-name composition. Saved fixtures cover 170 phrases, including 137 accepted schedules with five occurrences each. The reproducible differential script matched 9,795 expressions; independent review checked another 7,471 combinations without mismatches. Runtime dependencies remain Active Job and pg. Callable entries and recurring execution remain open.
+Natural parser verification: 702 specs, 1,974 assertions across the full suite; Standard, gem build, and unpacked natural-parser boot passed. Independent spec-compliance and code-quality reviews approved the implementation after correcting capitalized-name composition. Saved fixtures cover 170 phrases, including 137 accepted schedules with five occurrences each. The reproducible differential script matched 9,795 expressions; independent review checked another 7,471 combinations without mismatches. Runtime dependencies remained Active Job and pg. That checkpoint left callable entries and recurring execution open.
+
+Cron-entry verification: 765 specs, 2,186 assertions across the full suite; Standard and gem build passed. An unpacked gem installed migrations 1–5 and passed enqueue, deduplication, persistent override, and execution checks. Independent reviews approved definitions, callable schedules/options/classes, transaction-scoped metadata, cross-process uniqueness, history, and enable/disable overrides. Tests cover nested rollback cleanup, default-locale serialization, inline/async child isolation, unrelated database errors, ordered concurrency locks, and ActiveSupport/ENV timezone precedence with DST folds. C1–C3 are complete; automatic scheduling, independent start/stop, and restart catch-up remain open. See recurring-jobs.md for the current API.
 
 ### Remaining slices
 

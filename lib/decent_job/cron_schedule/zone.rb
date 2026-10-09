@@ -21,13 +21,15 @@ module DecentJob
       end
 
       def local(time)
-        return time.getlocal if @local
-        return time.getlocal(@offset) if @offset
-        @timezone.to_local(time)
+        offset = @local ? LocalZone.offset : @offset
+        return time.getlocal(offset) if offset
+        timezone = @local ? LocalZone.timezone : @timezone
+        timezone ? timezone.to_local(time) : time.getlocal
       end
 
       def at(year, month, day = 1, hour = 0)
-        return Time.new(year, month, day, hour, 0, 0, @offset) if @offset
+        offset = @local ? LocalZone.offset : @offset
+        return Time.new(year, month, day, hour, 0, 0, offset) if offset
         wall = Time.utc(year, month, day, hour)
         timezone = @local ? LocalZone.timezone : @timezone
         return LocalZone.at(wall) unless timezone

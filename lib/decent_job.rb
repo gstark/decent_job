@@ -3,6 +3,7 @@
 require "active_job"
 require "decent_job/active_job_extensions/batches"
 require "decent_job/active_job_extensions/concurrency"
+require "decent_job/active_job_extensions/cron"
 require "decent_job/active_job_extensions/labels"
 require "decent_job/adapter"
 require "decent_job/batch"
@@ -12,6 +13,8 @@ require "decent_job/claim"
 require "decent_job/concurrency_controls"
 require "decent_job/concurrency_rule"
 require "decent_job/configuration"
+require "decent_job/cron_entry"
+require "decent_job/cron_store"
 require "decent_job/current"
 require "decent_job/database"
 require "decent_job/inline_buffer"
@@ -24,6 +27,8 @@ require "decent_job/worker"
 
 ActiveJob::QueueAdapters.autoload :DecentJobAdapter, "active_job/queue_adapters/decent_job_adapter"
 ActiveJob::Base.include DecentJob::ActiveJobExtensions::Batches
+ActiveJob::Base.include DecentJob::ActiveJobExtensions::Cron
+ActiveJob.singleton_class.prepend DecentJob::ActiveJobExtensions::CronBulk
 
 module DecentJob
   VERSION = "0.1.0"

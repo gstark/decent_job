@@ -41,9 +41,12 @@ module DecentJob
       includes?(@months, local.month) && day_matches?(local) && includes?(@hours, local.hour) && includes?(@minutes, local.min) && includes?(@seconds, local.sec)
     end
 
-    def next_at(after: Time.now)
-      source = after.to_time
-      original_wall = source.getlocal.strftime("%F|%T")
+    def next_at(after: nil)
+      source = (after || Time.now).to_time
+      # Default searches originate in the implicit local zone before applying
+      # the expression's zone; explicit origins retain their input semantics.
+      origin = after ? source.getlocal : Zone.new(nil).local(source)
+      original_wall = origin.strftime("%F|%T")
       original_zone = @zone.local(source).strftime("%z|%Z")
       cursor = Time.at(source.to_i + 1).utc
       2048.times do

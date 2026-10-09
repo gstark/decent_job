@@ -2,11 +2,13 @@
 
 A PostgreSQL backend for Active Job with two direct runtime dependencies: `activejob` and `pg`.
 
-The current implementation supports persistent jobs, delayed execution, priorities, queue pools, bulk capture, batches, labels, concurrency limits and throttles, persistent pauses, retries, discards, execution history, inline and async execution, and external workers. It uses session advisory locks, LISTEN/NOTIFY, and polling.
+The current implementation supports persistent jobs, delayed execution, priorities, queue pools, bulk capture, batches, labels, concurrency limits and throttles, persistent pauses, cron definitions and deduplicated enqueue, retries, discards, execution history, inline and async execution, and external workers. It uses session advisory locks, LISTEN/NOTIFY, and polling.
 
-This is an early implementation. Full GoodJob parity remains the project goal. Recurring schedules, the dashboard, and several operational features are still planned. See [the parity checklist](docs/parity.md) and [implementation plan](docs/implementation-plan.md).
+This is an early implementation. Full GoodJob parity remains the project goal. Automatic recurring execution, the dashboard, and several operational features are still planned. See [the parity checklist](docs/parity.md) and [implementation plan](docs/implementation-plan.md).
 
 Numeric and natural-language cron parsing are implemented as a foundation for recurring schedules. Supported expressions, reference comparisons, and timezone corrections are documented in [cron compatibility](docs/cron-compatibility.md).
+
+[Recurring job definitions](docs/recurring-jobs.md) support callable schedules and arguments, persistent enable/disable overrides, history, and enqueue deduplication across processes. Configuring an entry does not yet start a scheduler.
 
 ## Install and run
 

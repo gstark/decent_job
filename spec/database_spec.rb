@@ -165,4 +165,65 @@ describe "database connections" do
     }.must_raise DecentJob::TransactionAborted
     _(events).must_be_empty
   end
+  it "runs rollback callbacks from committed savepoints when their outer transaction rolls back" do
+    events = []
+    _ {
+      database.transaction do
+        database.after_rollback { events << :outer }
+        database.transaction { database.after_rollback { events << :nested } }
+        database.after_rollback { events << :last }
+        _(events).must_equal []
+        raise "abort outer"
+      end
+    }.must_raise RuntimeError
+    _(events).must_equal [:outer, :nested, :last]
+  end
+
+  it "runs only a failed savepoint's rollback callbacks while leaving the outer transaction usable" do
+    events = []
+    database.transaction do |connection|
+      database.after_rollback { events << :outer_rollback }
+      _ {
+        database.transaction do
+          database.after_rollback { events << :nested_rollback }
+          database.after_commit { events << :nested_commit }
+          raise "abort nested"
+        end
+      }.must_raise RuntimeError
+      _(events).must_equal [:nested_rollback]
+      _(connection.exec("SELECT 1").getvalue(0, 0)).must_equal "1"
+      database.after_commit { events << :outer_commit }
+    end
+    _(events).must_equal [:nested_rollback, :outer_commit]
+  end
+
+  it "drops rollback callbacks on commit and does not invoke them outside a transaction" do
+    events = []
+    database.after_rollback { events << :outside }
+    database.transaction do
+      database.after_rollback { events << :outer }
+      database.transaction { database.after_rollback { events << :nested } }
+    end
+    _(events).must_equal []
+  end
+
+  it "runs rollback callbacks when a transaction exits without raising" do
+    events = []
+    database.transaction do
+      database.after_rollback { events << :rolled_back }
+      break
+    end
+    _(events).must_equal [:rolled_back]
+  end
+
+  it "does not run rollback callbacks when an after-commit callback raises" do
+    events = []
+    _ {
+      database.transaction do
+        database.after_rollback { events << :rolled_back }
+        database.after_commit { raise "already committed" }
+      end
+    }.must_raise RuntimeError
+    _(events).must_equal []
+  end
 end

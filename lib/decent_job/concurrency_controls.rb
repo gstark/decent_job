@@ -25,6 +25,19 @@ module DecentJob
       end
     end
 
+    def lock_scopes(jobs)
+      scopes = jobs.flat_map do |job|
+        next [] unless job.respond_to?(:decent_job_resolved_concurrency_rules)
+        next [] if job.respond_to?(:decent_job_enqueue_concurrency_enabled?) && !job.decent_job_enqueue_concurrency_enabled?
+        job.decent_job_resolved_concurrency_rules(stage: :metadata).map(&:scope)
+      end
+      @database.with_connection do |connection|
+        scopes.uniq.sort.each do |scope|
+          connection.exec_params("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || '.decent_job.concurrency.' || $1, 0))", [scope])
+        end
+      end
+    end
+
     private
 
     def check_enqueue(connection, rule)

@@ -48,7 +48,7 @@ module DecentJob
         savepoint = "decent_job_#{Thread.current.object_id}_#{rand(1 << 32)}"
         connection.exec(nested ? "SAVEPOINT #{savepoint}" : "BEGIN")
         frames = @mutex.synchronize { @transaction_callbacks[Thread.current] ||= [] }
-        callbacks = []
+        callbacks = {commit: [], rollback: []}
         frames << callbacks
         committed = false
         begin
@@ -69,10 +69,13 @@ module DecentJob
           end
           if committed
             if frames.empty?
-              callbacks.each(&:call)
+              callbacks[:commit].each(&:call)
             else
-              frames.last.concat(callbacks)
+              frames.last[:commit].concat(callbacks[:commit])
+              frames.last[:rollback].concat(callbacks[:rollback])
             end
+          else
+            callbacks[:rollback].each(&:call)
           end
         end
       end
@@ -81,10 +84,17 @@ module DecentJob
     def after_commit(&block)
       frames = @mutex.synchronize { @transaction_callbacks[Thread.current] }
       if frames && !frames.empty?
-        frames.last << block
+        frames.last[:commit] << block
       else
         block.call
       end
+    end
+
+    # Savepoint commits retain these callbacks until the outer transaction ends.
+    # Without an active transaction there is no rollback to observe.
+    def after_rollback(&block)
+      frames = @mutex.synchronize { @transaction_callbacks[Thread.current] }
+      frames.last[:rollback] << block if frames && !frames.empty?
     end
 
     # An independently owned connection for LISTEN and other session state.
