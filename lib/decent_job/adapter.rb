@@ -8,6 +8,7 @@ module DecentJob
       @execution_mode = execution_mode
       @worker_mutex = Mutex.new
       @stopping = false
+      @lifecycle_revision = 0
       DecentJob.register_adapter(self)
     end
 
@@ -15,7 +16,25 @@ module DecentJob
       @execution_mode = :external if Configuration::ASYNC_MODES.include?(execution_mode)
       @worker_mutex = Mutex.new
       @worker = nil
-      @stopping = false
+      @stopping = !!@retired
+      @lifecycle_revision = 0
+    end
+
+    # Reset retires adapters permanently; a new adapter chooses a fresh pool.
+    def retire
+      @worker_mutex.synchronize do
+        @retired = true
+        @stopping = true
+        @lifecycle_revision += 1
+      end
+    end
+
+    # CLI reconfiguration preserves adapter ownership and its explicit stop flag.
+    def reset_worker
+      @worker_mutex.synchronize do
+        @worker = nil
+        @lifecycle_revision += 1
+      end
     end
 
     def database
@@ -84,29 +103,42 @@ module DecentJob
     end
 
     def shutdown(timeout: nil, force: false)
-      if !timeout.nil? && (!timeout.is_a?(Numeric) || !timeout.finite? || timeout.negative?)
-        raise ArgumentError, "timeout must be a finite nonnegative number"
+      deadline = ResourceShutdown.deadline(timeout)
+      _revision, handles = begin_shutdown
+      ResourceShutdown.wait_all(handles, deadline: deadline, force: force)
+    end
+
+    def restart(timeout: nil, force: false)
+      deadline = ResourceShutdown.deadline(timeout)
+      return false if @worker_mutex.synchronize { @retired }
+      revision, handles = begin_shutdown
+      return false unless ResourceShutdown.wait_all(handles, deadline: deadline, force: force)
+
+      @worker_mutex.synchronize do
+        return false if @retired || revision != @lifecycle_revision
+        DecentJob.synchronize_resource_start do
+          return false if DecentJob.stopping?
+          return false unless handles.map(&:restart).all?
+          @lifecycle_revision += 1
+          @stopping = false
+          DecentJob.locally_resume_worker(@worker, database: @database)
+        end
       end
-      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout if timeout
-      worker = @worker_mutex.synchronize do
+      start_async
+      self
+    end
+
+    def begin_shutdown
+      @worker_mutex.synchronize do
+        @lifecycle_revision += 1
         @stopping = true
-        @worker
+        DecentJob.runtime_mutex.synchronize do
+          DecentJob.locally_stop_worker(@worker)
+          handles = @database ? DecentJob.begin_cron_shutdown(database: @database) : []
+          handles.concat(ResourceShutdown.capture_all([@worker])) if @worker
+          [@lifecycle_revision, handles]
+        end
       end
-      # Signal both resources, then drain both within the same deadline, even
-      # when an owned thread's fatal exception makes shutdown raise.
-      failure = nil
-      attempt_shutdown = lambda do |&operation|
-        operation.call
-      rescue Exception => error # standard:disable Lint/RescueException
-        failure ||= error
-        false
-      end
-      attempt_shutdown.call { DecentJob.stop_cron(database: @database, timeout: 0) } if @database
-      attempt_shutdown.call { worker.shutdown(timeout: 0) } if worker
-      cron_stopped = !@database || attempt_shutdown.call { DecentJob.stop_cron(database: @database, timeout: remaining_time(deadline), force: force) }
-      worker_stopped = !worker || attempt_shutdown.call { worker.shutdown(timeout: remaining_time(deadline), force: force) }
-      raise failure if failure
-      cron_stopped && worker_stopped
     end
 
     def after_enqueue(ids)
@@ -150,10 +182,13 @@ module DecentJob
       return unless DecentJob.async_ready? && execute_async?
       return unless @database || DecentJob.configuration.database_url
 
+      return if @worker_mutex.synchronize { @stopping }
+      connection_pool = @database || DecentJob.database(automatic: true)
+      return unless connection_pool
       worker = @worker_mutex.synchronize do
         return if @stopping
-        connection_pool = database
-        DecentJob.synchronize_resource_start do
+        DecentJob.synchronize_resource_start(automatic: true) do
+          @database ||= connection_pool
           @worker ||= Worker.new(database: connection_pool, **DecentJob.configuration.worker_options)
           DecentJob.start_worker(@worker)
         end
@@ -163,10 +198,6 @@ module DecentJob
     end
 
     private
-
-    def remaining_time(deadline)
-      deadline && [deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC), 0].max
-    end
 
     def enqueue_without_callbacks(job)
       job.successfully_enqueued = false

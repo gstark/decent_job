@@ -153,10 +153,10 @@ describe "supervisor fork safety" do
       original_register.call(**options, &block)
     end
     worker = DecentJob::Worker.new(database: database, max_threads: 1, enable_listen_notify: false)
-    original_shutdown = worker.method(:shutdown)
-    worker.define_singleton_method(:shutdown) do |**options|
+    original_shutdown = worker.method(:begin_shutdown)
+    worker.define_singleton_method(:begin_shutdown) do
       release << true
-      original_shutdown.call(**options)
+      original_shutdown.call
     end
     DecentJob::ProcessTracker.stub(:new, tracker) do
       DecentJob.start_worker(worker)

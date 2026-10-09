@@ -199,7 +199,7 @@ describe "runtime thread priority update ordering" do
     reader, writer = IO.pipe
     pid = nil
     worker = DecentJob::Worker.new(database: Object.new)
-    worker.define_singleton_method(:start) { self }
+    worker.define_singleton_method(:start) { |**| self }
     setter = worker.method(:lower_thread_priority=)
     worker.define_singleton_method(:lower_thread_priority=) do |value|
       DecentJob.with_prepared_fork do
@@ -247,7 +247,7 @@ describe "runtime thread priority update ordering" do
     constructor = DecentJob::Worker.method(:new)
     blocking_constructor = lambda do |**options|
       constructor.call(**options).tap do |worker|
-        worker.define_singleton_method(:start) { self }
+        worker.define_singleton_method(:start) { |**| self }
         constructed << worker
         release.pop
       end
@@ -280,7 +280,7 @@ describe "runtime thread priority update ordering" do
     release = Queue.new
     second_started = Queue.new
     worker = DecentJob::Worker.new(database: Object.new)
-    worker.define_singleton_method(:start) { self }
+    worker.define_singleton_method(:start) { |**| self }
     setter = worker.method(:lower_thread_priority=)
     worker.define_singleton_method(:lower_thread_priority=) do |value|
       DecentJob.stopping?

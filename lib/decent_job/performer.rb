@@ -4,7 +4,11 @@ module DecentJob
   class Performer
     Result = Data.define(:job_id, :state, :error, :unhandled_error, :error_event)
 
+    attr_reader :database
+
     def initialize(database: DecentJob.database, enable_pauses: DecentJob.configuration.enable_pauses, on_unhandled_exception: nil, process_tracker: nil, on_execution_start: nil)
+      @active_calls = 0
+      @activity_mutex = Mutex.new
       @on_execution_start = on_execution_start
       @database = database
       @on_unhandled_exception = on_unhandled_exception
@@ -12,11 +16,34 @@ module DecentJob
       @claim = Claim.new(database, enable_pauses: enable_pauses, process_tracker: process_tracker)
     end
 
+    def active?
+      @activity_mutex&.synchronize { @active_calls.positive? }
+    end
+
+    # Track maintenance and claim cleanup as well as registered execution;
+    # standalone calls may be active before any process monitor exists.
     def perform_one(queues: "*", job_id: nil, raise_errors: false, stopping: -> { false })
+      admitted = false
+      Thread.handle_interrupt(Object => :never) do
+        DecentJob.synchronize_resource_start(automatic: true, skip_during_fork: true) do
+          @activity_mutex.synchronize do
+            @active_calls += 1
+            admitted = true
+          end
+        end
+      end
+      return unless admitted
+
       BatchStore.new(@database).reconcile_pending
       ConcurrencyClaims.new(@database).recover
       @claim.with_next(queues: queues, job_id: job_id, stopping: stopping) do |row|
         execute(row, raise_errors: raise_errors, stopping: stopping)
+      end
+    ensure
+      if admitted
+        Thread.handle_interrupt(Object => :never) do
+          @activity_mutex.synchronize { @active_calls -= 1 }
+        end
       end
     end
 

@@ -11,22 +11,31 @@ module DecentJob
     end
 
     def register_adapter(adapter)
-      synchronize_resource_start { (@adapters ||= ObjectSpace::WeakMap.new)[adapter] = true }
+      registration = lambda do
+        raise ForkInProgress, "runtime is preparing to fork" if @forking
+        (@adapters ||= ObjectSpace::WeakMap.new)[adapter] = true
+        @runtime_transition == :resetting
+      end
+      retire = runtime_mutex.owned? ? registration.call : runtime_mutex.synchronize(&registration)
+      adapter.retire if retire
       adapter.start_async if @rails_ready && async_ready? && !runtime_mutex.owned?
     end
 
     def configure_rails(application, validate: true)
-      candidate = runtime_mutex.synchronize { @configuration.dup }
-      candidate.apply_rails_config(application.config.decent_job, environment: Rails.env.to_s, logger: Rails.logger)
-      # Cron validation can autoload jobs and create adapters. Run application
-      # code outside the registry lock and only after Rails installs autoloaders.
-      candidate.validate! if validate
-      runtime_mutex.synchronize do
-        if @database && candidate.database_url != @configuration.database_url
-          raise ArgumentError, "configure the Rails database_url before opening the database"
+      with_runtime_transition(:configuring) do
+        candidate = runtime_mutex.synchronize { @configuration.dup }
+        candidate.apply_rails_config(application.config.decent_job, environment: Rails.env.to_s, logger: Rails.logger)
+        # Cron validation can autoload jobs and create adapters. Run application
+        # code outside the registry lock and only after Rails installs autoloaders.
+        candidate.validate! if validate
+        runtime_mutex.synchronize do
+          if @database && candidate.database_url != @configuration.database_url
+            raise ArgumentError, "configure the Rails database_url before opening the database"
+          end
+          @configuration = candidate
+          @database&.resize(candidate.pool_size)
+          @lifecycle_revision = (@lifecycle_revision || 0) + 1
         end
-        @configuration = candidate
-        @database&.resize(candidate.pool_size)
       end
     end
 

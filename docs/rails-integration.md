@@ -30,6 +30,8 @@ Adapters created during Rails initialization wait until the framework is ready. 
 
 Standalone `async_all` starts workers on the first enqueue. Call `adapter.start_async` or `DecentJob.start` explicitly to process an existing queue. Use `DecentJob.shutdown(timeout: 30)` to drain library workers and cron managers. Jobs and cron callbacks run in the host reloader/executor context when available.
 
+Framework readiness does not reopen an explicitly stopped adapter. Use `adapter.restart(timeout: 30)` after shutdown, or `DecentJob.restart(timeout: 30)` for owners stopped by global shutdown. Adapters retired by `reset!` must be replaced. See [lifecycle and restart](lifecycle.md).
+
 ## Transactions
 
 Enable Active Job 8.1's supported transaction deferral on your base job:

@@ -228,9 +228,23 @@ Two real child-process cases interrupt Ruby and PostgreSQL work, retain ownershi
 
 The first final-suite run exposed an existing macOS supervisor-test cleanup error. An owned process group containing only unreaped zombies reproducibly returns `EPERM` when signaled; [Apple's signal implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sig.c) excludes zombies from group signaling. The spec-only cleanup guard tolerates this only after successful process inspection finds no live group members. Live-process permission errors and failed inspections still propagate. The isolated supervisor suite and the full same-seed rerun passed after that correction. W6 is implemented; W1 and the remaining W8 audit, instrumentation, other lock strategies, dashboard features, and final parity verification remain open.
 
+### Concurrent lifecycle and explicit restart
+
+- [x] Audit worker, cron, adapter, and global start/stop/restart against GoodJob capsule behavior. Keep DecentJob's explicit `start` semantics for directly owned workers; automatic wakeups, enqueue callbacks, and framework readiness must not reopen a stopped owner. Document the API adaptation instead of adding a duplicate capsule wrapper.
+- [x] Capture the resources and run identity for each shutdown once. Separate the brief stop transition from draining so global/adapter operations signal all selected resources before waiting, retain one deadline, and never stop or force a replacement run through a later registry lookup. Do not hold lifecycle/registry locks while joining threads or calling application code.
+- [x] Add explicit worker, adapter, and runtime restart operations, and audit cron restart. Restart must drain the selected old run before starting a new one, report incomplete drain, and respect a concurrent newer shutdown. Concurrent starts/restarts must create only one owned run; inspection must remain safe throughout transitions.
+- [x] Protect reset and configuration/fork lifecycle boundaries against concurrent startup. Reset must not close a database while owned jobs or callbacks are still unwinding, including calls from an owned thread. Preserve fatal-error propagation after sibling drain and preserve standalone/manual resource ownership.
+- [x] Add deterministic race specs, stopped-owner enqueue cases, independent producer/consumer execution, and real process restart/drain checks. Verify resource registration, connection closure, tracker identity, metrics reset, cron behavior, Rails readiness, and fork resets. Complete independent reviews, full/host suites, and packaged operation before closing W1.
+
+The reference capsule groups execution resources; DecentJob exposes its worker, optional cron manager, adapter, and runtime lifecycle directly. Explicit `start` remains a permitted restart entry point where already documented. The safety requirement is that implicit activity cannot restart a stopped owner, and an old operation cannot act on a newer run. W8 remains open for the subsequent utility-resource audit unless this slice provides direct evidence for every remaining requirement.
+
+The lifecycle implementation captures each selected run before draining, uses one monotonic deadline, and gives newer stop operations precedence over pending restart. Configuration validation and callbacks run outside the registry lock. Reset protects standalone execution from its first maintenance query through claim cleanup, and permanently retires old adapters. CLI replacement preserves explicit adapter and database-specific cron stops. Shared cron ownership and the explicit startup APIs are documented in [lifecycle operations](lifecycle.md).
+
+Lifecycle verification: the final PostgreSQL suite passed 1,376 specs and 5,492 assertions, seed 17336. Rails integration passed 14 cases and 81 assertions, seed 19125. The four optional WEBrick cases skipped under Bundler passed separately with 17 assertions, seed 49980. Standard, gem build, whitespace checks, and independent spec/quality reviews passed. The unpacked gem verified adapter and global restart, stopped-owner isolation, queued-job recovery, and released checkouts without loading Rails or Active Record. Real process specs verify fresh process UUIDs, reset metrics, one execution per job, and complete drain. No migrations or runtime dependencies were added. W1 is implemented; the remaining W8 utility audit, instrumentation, other lock strategies, dashboard features, and final parity verification remain open.
+
 ### Remaining slices
 
-1. Operations: remaining worker lifecycle, instrumentation, and statistics refinements.
+1. Operations: remaining runtime utility audit, instrumentation, and statistics refinements.
 2. Dashboard: authenticated job actions, histories, batches, schedules, processes and metrics.
 3. Compatibility: additional lock strategies, PgBouncer, benchmark and final parity audit.
 

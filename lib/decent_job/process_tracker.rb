@@ -9,7 +9,7 @@ module DecentJob
   # Registration leases own one monitor and its dedicated PostgreSQL session.
   # No SQL or application state callbacks execute under the registration mutex.
   class ProcessTracker
-    attr_reader :process_id
+    attr_reader :database, :process_id
 
     def initialize(database:, advisory_lock_heartbeat: DecentJob.configuration.advisory_lock_heartbeat,
       process_heartbeat_interval: DecentJob.configuration.process_heartbeat_interval,

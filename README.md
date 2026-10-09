@@ -111,7 +111,7 @@ Use `DecentJob.stats` and `DecentJob.idle?` to inspect registered workers in the
 
 ## Embedded execution and tests
 
-Use `execution_mode = :async_all` to start background workers on the first enqueue in a standalone process. The `async` and `async_server` modes start embedded workers only in detected web servers. Rails starts eligible adapters after application boot. See [Rails integration](docs/rails-integration.md) for configuration, reloading, and transaction deferral. Call `DecentJob.shutdown(timeout: 30)` to stop registered workers and cron managers with one shared deadline. Enqueues after global shutdown remain persisted until `DecentJob.start` or `reset!` reopens the lifecycle. `DecentJob.start` also starts workers for jobs already in the database.
+Use `execution_mode = :async_all` to start background workers on the first enqueue in a standalone process. The `async` and `async_server` modes start embedded workers only in detected web servers. Rails starts eligible adapters after application boot. See [Rails integration](docs/rails-integration.md) for configuration, reloading, and transaction deferral. Call `DecentJob.shutdown(timeout: 30)` to stop registered workers and cron managers with one shared deadline. Enqueues after global shutdown remain persisted until an explicit start or restart reopens execution. `DecentJob.start` starts the default worker for jobs already in the database; `DecentJob.restart(timeout: 30)` resumes registered owners. Use `adapter.restart(timeout: 30)` for an explicitly stopped adapter. See [lifecycle and restart](docs/lifecycle.md).
 
 Use `execution_mode = :inline` to run due jobs before enqueue returns. Future jobs stay persisted. Inline mode records and propagates unhandled job errors; handled retries and discards retain Active Job behavior. Nested inline jobs and immediate retries drain iteratively.
 
@@ -264,7 +264,7 @@ end
 
 An exception or nonlocal block exit rolls back the transaction. Nested transactions use savepoints. Inline and async execution wait until the outer transaction commits. Use the transaction API rather than issuing manual BEGIN/COMMIT statements on pooled connections.
 
-A separate Active Record connection does not share this transaction. The adapter exposes an after-commit preference, but dedicated Rails transaction integration is still planned. Do not assume an Active Record rollback also rolls back a job inserted through a separate pg connection.
+A separate Active Record connection does not share this transaction. In Rails, set `self.enqueue_after_transaction_commit = true` on your base job to defer enqueues until commit; rollback drops deferred jobs. This does not make the application transaction and job insertion atomic. See [Rails transaction integration](docs/rails-integration.md#transactions).
 
 Execution is **at least once**. A process can die after an external side effect and before recording success, so jobs must tolerate retries. PostgreSQL releases session locks when it detects a disconnected worker. A replacement records the abandoned attempt as interrupted. During network partitions, an old job can continue external work even after losing its database session; database ownership checks cannot fence those external effects.
 

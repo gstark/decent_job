@@ -4,6 +4,7 @@ require "decent_job/cleaner"
 require "decent_job/cleanup_tracker"
 require "decent_job/performer"
 require "decent_job/queue_selection"
+require "decent_job/resource_shutdown"
 require "decent_job/scheduler_cache"
 require "decent_job/stats"
 require "decent_job/thread_status"
@@ -12,6 +13,8 @@ module DecentJob
   # Each execution thread owns its database checkout for the entire job. The
   # notification listener uses its own connection and only hints workers to poll.
   class Worker
+    attr_reader :database
+
     def initialize(database:, queues: "*", max_threads: 5, poll_interval: 10, max_cache: 10_000, enable_listen_notify: true, on_thread_error: DecentJob.configuration.on_thread_error,
       lower_thread_priority: DecentJob.configuration.lower_thread_priority,
       advisory_lock_heartbeat: DecentJob.configuration.advisory_lock_heartbeat,
@@ -43,6 +46,7 @@ module DecentJob
       self.lower_thread_priority = lower_thread_priority
       @condition = ConditionVariable.new
       @stopping = true
+      @lifecycle_revision = 0
       @threads = []
       @execution_threads = []
       @executing_job_ids = {}
@@ -51,12 +55,15 @@ module DecentJob
       reset_stats
     end
 
-    def start
-      DecentJob.synchronize_resource_start do
+    def start(expected_revision: nil, automatic: false)
+      DecentJob.synchronize_resource_start(automatic: automatic) do
         @mutex.synchronize do
+          return false if automatic && @stopping && @lifecycle_revision.positive?
+          return false if expected_revision && expected_revision != @lifecycle_revision
           return self if @threads.any?(&:alive?) || (@process_tracker && !@process_tracker.shutdown?)
 
           @stopping = false
+          @lifecycle_revision += 1
           @executing_job_ids = {}
           @interrupted_job_ids = []
           @interrupted_threads = {}
@@ -131,38 +138,53 @@ module DecentJob
 
     # Without force, a timeout leaves jobs running; callers may wait again later.
     def shutdown(timeout: nil, force: false)
-      if !timeout.nil? && (!timeout.is_a?(Numeric) || !timeout.finite? || timeout.negative?)
-        raise ArgumentError, "timeout must be a finite nonnegative number"
-      end
-      deadline = monotonic_time + timeout if timeout
-      threads, tracker, interruption, failure = @mutex.synchronize do
+      deadline = ResourceShutdown.deadline(timeout)
+      begin_shutdown.wait(deadline: deadline, force: force)
+    end
+
+    def restart(timeout: nil, force: false)
+      deadline = ResourceShutdown.deadline(timeout)
+      handle = begin_shutdown
+      handle.wait(deadline: deadline, force: force) ? handle.restart : false
+    end
+
+    # Internal lifecycle protocol: signal only, with no joins or user callbacks.
+    def begin_shutdown
+      @mutex.synchronize do
+        @lifecycle_revision += 1
         @stopping = true
         @caches.each(&:clear)
         @condition.broadcast
         @listener_writer&.write_nonblock(".", exception: false)
-        [@threads.dup, @process_tracker,
-          {threads: @execution_threads.dup, job_ids: @executing_job_ids,
-           interrupted_threads: @interrupted_threads, interrupted_job_ids: @interrupted_job_ids}, @failure]
+        @process_tracker&.stop
+        ResourceShutdown.new(self, @lifecycle_revision,
+          [@threads.dup, @process_tracker,
+            {threads: @execution_threads.dup, job_ids: @executing_job_ids,
+             interrupted_threads: @interrupted_threads, interrupted_job_ids: @interrupted_job_ids}, @failure])
       end
+    end
+
+    private def drain_shutdown(snapshot, deadline:, force:)
+      threads, tracker, interruption, failure = snapshot
       tracker&.stop
       # A fatal task can make join raise; finish draining every owned thread.
       threads.each do |thread|
         next if thread == Thread.current
 
-        remaining = deadline && [deadline - monotonic_time, 0].max
+        remaining = ResourceShutdown.remaining(deadline)
         begin
           thread.join(remaining)
         rescue Exception => error # standard:disable Lint/RescueException
           failure ||= error
         end
       end
-      remaining = deadline && [deadline - monotonic_time, 0].max
+      remaining = ResourceShutdown.remaining(deadline)
       begin
         monitor_stopped = tracker.nil? || (!threads.include?(Thread.current) && tracker.join(remaining))
       rescue Exception => error # standard:disable Lint/RescueException
         failure ||= error
       end
-      interrupt_executions(**interruption) if force && deadline && monotonic_time >= deadline
+      interrupt_executions(**interruption) if force && deadline && ResourceShutdown.remaining(deadline).zero?
       failure = @mutex.synchronize { @failure if @process_tracker.equal?(tracker) } || failure
       raise failure if failure
       threads.none?(&:alive?) && monitor_stopped
@@ -174,7 +196,7 @@ module DecentJob
     end
 
     def process_id
-      @process_tracker&.process_id
+      @mutex.synchronize { @process_tracker&.process_id }
     end
 
     def stats

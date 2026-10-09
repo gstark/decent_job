@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "decent_job/resource_shutdown"
+
 module DecentJob
   # Each entry owns a timer and two delivery threads, plus a catchup thread when
   # enabled. A single pending slot bounds backlog memory and isolates slow entries.
@@ -19,16 +21,20 @@ module DecentJob
       @threads = []
       @interrupted_threads = {}
       @stopping = true
+      @lifecycle_revision = 0
       start if start_on_initialize
     end
 
-    def start
-      DecentJob.synchronize_resource_start do
+    def start(expected_revision: nil, automatic: false)
+      DecentJob.synchronize_resource_start(automatic: automatic) do
         @mutex.synchronize do
+          return false if automatic && @stopping && @lifecycle_revision.positive?
+          return false if expected_revision && expected_revision != @lifecycle_revision
           return self if !@stopping || @threads.any?(&:alive?)
 
           @stopping = false
-          @interrupted_threads.clear
+          @lifecycle_revision += 1
+          @interrupted_threads = {}
           started_at = Time.now
           zone = Time.zone
           @threads = cron_entries.flat_map do |entry|
@@ -55,30 +61,36 @@ module DecentJob
     end
 
     def shutdown(timeout: nil, force: false)
-      if !timeout.nil? && (!timeout.is_a?(Numeric) || !timeout.finite? || timeout.negative?)
-        raise ArgumentError, "timeout must be a finite nonnegative number"
-      end
-      deadline = monotonic_time + timeout if timeout
-      threads = @mutex.synchronize do
+      deadline = ResourceShutdown.deadline(timeout)
+      begin_shutdown.wait(deadline: deadline, force: force)
+    end
+
+    def begin_shutdown
+      @mutex.synchronize do
+        @lifecycle_revision += 1
         @stopping = true
         @condition.broadcast
-        @threads.dup
+        ResourceShutdown.new(self, @lifecycle_revision, [@threads.dup, @interrupted_threads])
       end
+    end
+
+    private def drain_shutdown(snapshot, deadline:, force:)
+      threads, interrupted_threads = snapshot
       # Fatal callbacks must not prevent sibling deliveries from draining.
       failure = nil
       threads.each do |thread|
         next if thread == Thread.current
         begin
-          thread.join(deadline && [deadline - monotonic_time, 0].max)
+          thread.join(ResourceShutdown.remaining(deadline))
         rescue Exception => error # standard:disable Lint/RescueException
           failure ||= error
         end
       end
-      if force && deadline && monotonic_time >= deadline
+      if force && deadline && ResourceShutdown.remaining(deadline).zero?
         targets = @mutex.synchronize do
           threads.select do |thread|
-            next false if thread == Thread.current || !thread.alive? || @interrupted_threads.key?(thread)
-            @interrupted_threads[thread] = true
+            next false if thread == Thread.current || !thread.alive? || interrupted_threads.key?(thread)
+            interrupted_threads[thread] = true
           end
         end
         targets.each(&:kill)
@@ -87,8 +99,10 @@ module DecentJob
       threads.none?(&:alive?)
     end
 
-    def restart(timeout: nil)
-      shutdown(timeout: timeout) ? start : false
+    def restart(timeout: nil, force: false)
+      deadline = ResourceShutdown.deadline(timeout)
+      handle = begin_shutdown
+      handle.wait(deadline: deadline, force: force) ? handle.restart : false
     end
 
     private

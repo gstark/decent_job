@@ -3,6 +3,7 @@
 require "decent_job/cli"
 require "spec_helper"
 require "stringio"
+require "timeout"
 
 describe "host configuration" do
   before { DecentJob.reset! }
@@ -120,5 +121,35 @@ describe "host configuration" do
     DecentJob.configuration.database_url = nil
     DecentJob.finish_rails_initialization!
     _(adapter.async_started?).must_equal false
+  end
+
+  it "excludes reset and startup while Rails configuration is resolving application options" do
+    entered = Queue.new
+    release = Queue.new
+    host = Module.new
+    host.define_singleton_method(:env) { "test" }
+    host.define_singleton_method(:logger) { nil }
+    Object.const_set(:Rails, host)
+    options = {max_threads: 2}
+    options.define_singleton_method(:each) do |&block|
+      DecentJob.stats
+      entered << true
+      release.pop
+      super(&block)
+    end
+    application = Struct.new(:config).new(Struct.new(:decent_job).new(options))
+    configuring = Thread.new { DecentJob.configure_rails(application) }
+    Timeout.timeout(3) { entered.pop }
+    _ { DecentJob.reset! }.must_raise DecentJob::LifecycleInProgress
+    owner = DecentJob::CronManager.new
+    _ { owner.start }.must_raise DecentJob::LifecycleInProgress
+    release << true
+    configuring.value
+    _(DecentJob.configuration.max_threads).must_equal 2
+  ensure
+    release << true if release
+    configuring&.join(3)
+    owner&.shutdown
+    Object.send(:remove_const, :Rails) if Object.const_defined?(:Rails)
   end
 end
