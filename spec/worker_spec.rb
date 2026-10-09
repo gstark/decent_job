@@ -196,4 +196,9 @@ describe DecentJob::Worker do
       _ { DecentJob::Worker.new(database: database, poll_interval: interval) }.must_raise ArgumentError
     end
   end
+  it "rejects false timeout before stopping worker threads" do
+    worker = start_worker(max_threads: 1, enable_listen_notify: false)
+    _ { worker.shutdown(timeout: false) }.must_raise ArgumentError
+    _(worker.running?).must_equal true
+  end
 end

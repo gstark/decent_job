@@ -100,12 +100,34 @@ module DecentJob
       value = cron.respond_to?(:call) ? cron.call(previously_at || last_job_at) : cron
       return value if cron.respond_to?(:call) && value.is_a?(Time)
 
-      CronSchedule.parse(value)&.next_at(after: after)
+      parsed = CronSchedule.parse(value)
+      occurrence = parsed&.next_at(after: after)
+      # A clock change inside a callable expression must not move its chain
+      # behind the preceding intended occurrence. Keep the default zone-aware
+      # calculation for ordinary scheduling and forward clock changes.
+      if !after && previously_at && occurrence && occurrence <= previously_at
+        occurrence = parsed.next_at(after: previously_at)
+      end
+      occurrence
     end
 
     def within(period, previously_at: nil)
-      value = cron.respond_to?(:call) ? cron.call(previously_at || last_job_at) : cron
-      CronSchedule.parse(value)&.within(period) || []
+      each_within(period, previously_at: previously_at || (last_job_at if cron.respond_to?(:call))).to_a
+    end
+
+    def each_within(period, previously_at: (last_job_at if cron.respond_to?(:call)))
+      return enum_for(__method__, period, previously_at: previously_at) unless block_given?
+
+      value = cron.respond_to?(:call) ? cron.call(previously_at) : cron
+      parsed = CronSchedule.parse(value)
+      return unless parsed
+
+      cursor = period.begin
+      loop do
+        cursor = parsed.next_at(after: cursor)
+        break if cursor >= period.end
+        yield cursor
+      end
     end
 
     def enabled_by_default?

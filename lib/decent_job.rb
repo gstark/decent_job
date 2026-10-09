@@ -14,6 +14,7 @@ require "decent_job/concurrency_controls"
 require "decent_job/concurrency_rule"
 require "decent_job/configuration"
 require "decent_job/cron_entry"
+require "decent_job/cron_manager"
 require "decent_job/cron_store"
 require "decent_job/current"
 require "decent_job/database"
@@ -35,6 +36,9 @@ module DecentJob
   MUTEX = Mutex.new
   @configuration = Configuration.new
   @workers = []
+  @cron_managers = {}
+  @cron_stopped_databases = {}
+  @cron_stopping = false
   @stopping = false
 
   class << self
@@ -78,27 +82,77 @@ module DecentJob
 
     def start
       connection_pool = database
-      MUTEX.synchronize do
+      worker = MUTEX.synchronize do
         @stopping = false
+        @cron_stopping = false
+        @cron_stopped_databases.delete(connection_pool)
         register_exit_hook
         @worker ||= Worker.new(database: connection_pool, **@configuration.worker_options)
         @workers << @worker unless @workers.include?(@worker)
         @worker.start
       end
+      start_cron(database: connection_pool, automatic: true) if @configuration.enable_cron
+      worker
+    end
+
+    def cron_managers
+      MUTEX.synchronize { @cron_managers.values.dup }
+    end
+
+    def cron_running?
+      cron_managers.any?(&:running?)
+    end
+
+    def start_cron(database: nil, automatic: false)
+      connection_pool = database || self.database
+      # Resolve configuration outside the registry lock: constant loading and
+      # adapter lookup may call back into DecentJob.
+      entries = @configuration.cron_entries(database: connection_pool)
+      entries.each do |entry|
+        klass = entry.job_class
+        klass = klass.constantize if klass.is_a?(String)
+        next unless klass.is_a?(Class) && klass <= ActiveJob::Base
+        adapter = klass.queue_adapter
+        unless adapter.is_a?(Adapter) && adapter.database.equal?(connection_pool)
+          raise ArgumentError, "Cron jobs must use a DecentJob adapter with the cron entry database"
+        end
+      end
+      MUTEX.synchronize do
+        return if automatic && (@stopping || @cron_stopping || @cron_stopped_databases[connection_pool])
+        unless automatic
+          @cron_stopping = false
+          @cron_stopped_databases.delete(connection_pool)
+        end
+        register_exit_hook
+        manager = @cron_managers[connection_pool] ||= CronManager.new(entries, **@configuration.cron_manager_options)
+        # start only allocates owned threads; application callbacks run later on
+        # those threads, never synchronously while the registry lock is held.
+        manager.start
+      end
+    end
+
+    def stop_cron(timeout: nil, database: nil)
+      validate_timeout!(timeout)
+      managers = MUTEX.synchronize do
+        if database
+          @cron_stopped_databases[database] = true
+          [@cron_managers[database]].compact
+        else
+          @cron_stopping = true
+          @cron_managers.values.dup
+        end
+      end
+      stop_resources(managers, timeout: timeout)
     end
 
     def shutdown(timeout: nil)
-      workers = MUTEX.synchronize do
+      validate_timeout!(timeout)
+      resources = MUTEX.synchronize do
         @stopping = true
-        @workers.dup
+        @cron_stopping = true
+        @cron_managers.values + @workers
       end
-      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout if timeout
-      workers.each { |worker| worker.shutdown(timeout: 0) }
-      results = workers.map do |worker|
-        remaining = deadline && [deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC), 0].max
-        worker.shutdown(timeout: remaining)
-      end
-      results.all?
+      stop_resources(resources, timeout: timeout)
     end
 
     def start_worker(worker)
@@ -115,6 +169,9 @@ module DecentJob
       MUTEX.synchronize do
         @worker = nil
         @workers = []
+        @cron_managers = {}
+        @cron_stopped_databases = {}
+        @cron_stopping = false
         @stopping = false
         @database&.close
         @database = nil
@@ -131,6 +188,21 @@ module DecentJob
     end
 
     private
+
+    def validate_timeout!(timeout)
+      if !timeout.nil? && (!timeout.is_a?(Numeric) || !timeout.finite? || timeout.negative?)
+        raise ArgumentError, "timeout must be a finite nonnegative number"
+      end
+    end
+
+    def stop_resources(resources, timeout:)
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout if timeout
+      resources.each { |resource| resource.shutdown(timeout: 0) }
+      resources.map do |resource|
+        remaining = deadline && [deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC), 0].max
+        resource.shutdown(timeout: remaining)
+      end.all?
+    end
 
     def register_exit_hook
       return if @exit_hook_registered

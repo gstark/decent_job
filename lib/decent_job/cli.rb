@@ -63,6 +63,8 @@ module DecentJob
         parser.on("--max-threads N", Integer, "Default threads per queue pool") { |value| options[:max_threads] = value }
         parser.on("--poll-interval N", Float, "Polling interval in seconds") { |value| options[:poll_interval] = value }
         parser.on("--shutdown-timeout N", Float, "Time allowed for running jobs to finish") { |value| options[:shutdown_timeout] = value }
+        parser.on("--[no-]enable-cron", "Enable recurring jobs") { |value| options[:enable_cron] = value }
+        parser.on("--cron-graceful-restart-period N", Float, "Replay missed recurring jobs from this many seconds ago") { |value| options[:cron_graceful_restart_period] = value }
         parser.on("--[no-]listen-notify", "Enable PostgreSQL notification wakeups") { |value| options[:enable_listen_notify] = value }
         parser.on("-h", "--help", "Print help") { options[:command] = "help" }
         parser.on("-v", "--version", "Print version") { options[:command] = "version" }
@@ -83,7 +85,7 @@ module DecentJob
       shutdown_attempted = true
       @shutdown_timed_out = !DecentJob.shutdown(timeout: DecentJob.configuration.shutdown_timeout)
       if @shutdown_timed_out
-        @stderr.puts "Error: shutdown timed out; jobs are still running."
+        @stderr.puts "Error: shutdown timed out; jobs or cron callbacks are still running."
         1
       else
         @stdout.puts "DecentJob stopped."

@@ -6,9 +6,11 @@ require "logger"
 module DecentJob
   class Configuration
     attr_accessor :database_url, :execution_mode, :queues, :max_threads,
-      :poll_interval, :enable_listen_notify, :shutdown_timeout, :logger, :on_thread_error, :enable_pauses, :cron
+      :poll_interval, :enable_listen_notify, :shutdown_timeout, :logger, :on_thread_error, :enable_pauses, :cron, :enable_cron, :cron_graceful_restart_period
 
     def initialize
+      @enable_cron = ENV.fetch("DECENT_JOB_ENABLE_CRON", "false") == "true"
+      @cron_graceful_restart_period = Float(ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]) if ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]
       @cron = JSON.parse(ENV.fetch("DECENT_JOB_CRON", "{}"), symbolize_names: true)
       @database_url = ENV["DECENT_JOB_DATABASE_URL"] || ENV["DATABASE_URL"]
       @execution_mode = ENV.fetch("DECENT_JOB_EXECUTION_MODE", "external").to_sym
@@ -28,23 +30,37 @@ module DecentJob
       raise ArgumentError, "poll_interval must be positive" unless @poll_interval.is_a?(Numeric) && @poll_interval.positive? && @poll_interval.finite?
       raise ArgumentError, "shutdown_timeout must be nonnegative" unless @shutdown_timeout.is_a?(Numeric) && @shutdown_timeout >= 0 && @shutdown_timeout.finite?
       raise ArgumentError, "on_thread_error must be callable" unless @on_thread_error.respond_to?(:call)
+      raise ArgumentError, "enable_cron must be true or false" unless [true, false].include?(@enable_cron)
+      period = @cron_graceful_restart_period
+      if !period.nil? && (!period.is_a?(Numeric) || !period.finite? || !period.positive?)
+        raise ArgumentError, "cron_graceful_restart_period must be a finite positive number or nil"
+      end
       cron_entries
       self
     end
 
-    def cron_entries
+    def cron_entries(database: nil)
       raise ArgumentError, "cron must be a Hash" unless @cron.is_a?(Hash)
 
       @cron.map do |key, attributes|
         raise ArgumentError, "cron entry #{key} must be a Hash" unless attributes.is_a?(Hash)
-        entry = CronEntry.new(attributes.merge(key: key))
+        entry = CronEntry.new(attributes.merge(key: key), database: database)
         raise ArgumentError, "invalid cron entry #{key}: #{entry.errors.inspect}" unless entry.valid?
         entry
       end
     end
 
     def pool_size
-      QueueSelection.pools(@queues, default_threads: @max_threads).sum { |pool| pool.fetch(:threads) } + 2
+      cron_connections = if @enable_cron
+        @cron.size * (@cron_graceful_restart_period ? 4 : 3)
+      else
+        0
+      end
+      QueueSelection.pools(@queues, default_threads: @max_threads).sum { |pool| pool.fetch(:threads) } + 2 + cron_connections
+    end
+
+    def cron_manager_options
+      {graceful_restart_period: @cron_graceful_restart_period, on_thread_error: @on_thread_error}
     end
 
     def worker_options

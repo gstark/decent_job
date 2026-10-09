@@ -49,20 +49,21 @@ Batch verification: 301 specs, 1,081 assertions; Standard and gem build passed. 
 - [x] Add natural-language schedule translation with pinned-reference conformance fixtures.
 - [x] Add callable schedule definitions with validation and display metadata.
 - [x] Persist cron key/time and enable/disable overrides; deduplicate scheduled enqueue across processes in the same transaction as job insertion.
-- [ ] Add independent cron start/stop, per-entry error isolation, clock-drift handling, and graceful restart catch-up.
-- [ ] Integrate configuration, worker/application lifecycle, CLI controls, documentation, and independent reviews.
+- [x] Add independent cron start/stop, per-entry error isolation, clock-drift handling, and graceful restart catch-up.
+- [x] Integrate configuration, worker/application lifecycle, CLI controls, documentation, and independent reviews.
 
 Numeric parser verification: 469 specs, 1,361 assertions across the full suite; Standard, gem build, and unpacked parser boot passed. Independent spec-compliance and code-quality reviews approved the numeric module. Saved fixtures cover 88 schedules/start times, three ranges, and 23 invalid expressions. Seeded differential checks of 1,000 and 3,000 field combinations matched the pinned reference; additional timezone probes verified the documented corrections. This completes the parser foundation, not recurring-job execution. See cron-compatibility.md for the contract and remaining scope.
 
 Natural parser verification: 702 specs, 1,974 assertions across the full suite; Standard, gem build, and unpacked natural-parser boot passed. Independent spec-compliance and code-quality reviews approved the implementation after correcting capitalized-name composition. Saved fixtures cover 170 phrases, including 137 accepted schedules with five occurrences each. The reproducible differential script matched 9,795 expressions; independent review checked another 7,471 combinations without mismatches. Runtime dependencies remained Active Job and pg. That checkpoint left callable entries and recurring execution open.
 
-Cron-entry verification: 765 specs, 2,186 assertions across the full suite; Standard and gem build passed. An unpacked gem installed migrations 1–5 and passed enqueue, deduplication, persistent override, and execution checks. Independent reviews approved definitions, callable schedules/options/classes, transaction-scoped metadata, cross-process uniqueness, history, and enable/disable overrides. Tests cover nested rollback cleanup, default-locale serialization, inline/async child isolation, unrelated database errors, ordered concurrency locks, and ActiveSupport/ENV timezone precedence with DST folds. C1–C3 are complete; automatic scheduling, independent start/stop, and restart catch-up remain open. See recurring-jobs.md for the current API.
+Cron-entry verification: 765 specs, 2,186 assertions across the full suite; Standard and gem build passed. An unpacked gem installed migrations 1–5 and passed enqueue, deduplication, persistent override, and execution checks. Independent reviews approved definitions, callable schedules/options/classes, transaction-scoped metadata, cross-process uniqueness, history, and enable/disable overrides. Tests cover nested rollback cleanup, default-locale serialization, inline/async child isolation, unrelated database errors, ordered concurrency locks, and ActiveSupport/ENV timezone precedence with DST folds. At that checkpoint, C1–C3 were complete; automatic scheduling, independent start/stop, and restart catch-up remained open. See recurring-jobs.md for the current API.
+
+Scheduler verification: 807 specs, 2,351 assertions across the full suite; Standard, gem build, and whitespace checks passed. An unpacked gem installed its schema, started automatic cron alongside a worker, executed a recurring job, retained its history, and shut down cleanly. Independent spec-compliance and code-quality reviews approved C4/C5 after regressions for clock rollback during scheduling and enable checks, and invalid timeout handling. Process specs cover two competing CLI schedulers, configuration overrides, restart catch-up excluding future records, and a blocked callback exhausting the shutdown deadline. The scheduler uses bounded threads and pending work per entry; docs explain resource sizing and lifecycle ownership. Full GoodJob parity remains open beyond this completed recurring-jobs slice.
 
 ### Remaining slices
 
-1. Recurring schedules: cron parsing, timezone/DST behavior, deduplicated enqueue, persistent enable/disable controls, and restart catch-up.
-2. Operations: retention, process heartbeats, supervisor, systemd, Rails integration.
-3. Dashboard: authenticated job actions, histories, batches, schedules, processes and metrics.
-4. Compatibility: additional lock strategies, PgBouncer, full scheduling grammar, benchmark and parity audit.
+1. Operations: job management, retention, process heartbeats, supervisor, systemd, Rails integration.
+2. Dashboard: authenticated job actions, histories, batches, schedules, processes and metrics.
+3. Compatibility: additional lock strategies, PgBouncer, benchmark and final parity audit.
 
 Each slice requires behavior specs before implementation, real PostgreSQL verification, and independent review. Completion of one slice does not imply completion of the full rebuild.

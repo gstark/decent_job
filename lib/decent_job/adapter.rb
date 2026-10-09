@@ -9,6 +9,7 @@ module DecentJob
       @database = database
       @execution_mode = execution_mode
       @worker_mutex = Mutex.new
+      @stopping = false
     end
 
     def database
@@ -57,11 +58,26 @@ module DecentJob
     end
 
     def shutdown(timeout: nil)
-      worker = @worker_mutex.synchronize { @worker }
-      !worker || worker.shutdown(timeout: timeout)
+      if !timeout.nil? && (!timeout.is_a?(Numeric) || !timeout.finite? || timeout.negative?)
+        raise ArgumentError, "timeout must be a finite nonnegative number"
+      end
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout if timeout
+      worker = @worker_mutex.synchronize do
+        @stopping = true
+        @worker
+      end
+      DecentJob.stop_cron(database: @database, timeout: 0) if @database
+      worker&.shutdown(timeout: 0)
+      cron_stopped = !@database || DecentJob.stop_cron(database: @database, timeout: remaining_time(deadline))
+      worker_stopped = !worker || worker.shutdown(timeout: remaining_time(deadline))
+      cron_stopped && worker_stopped
     end
 
     private
+
+    def remaining_time(deadline)
+      deadline && [deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC), 0].max
+    end
 
     def enqueue_without_callbacks(job)
       job.successfully_enqueued = false
@@ -102,10 +118,13 @@ module DecentJob
     end
 
     def start_async
-      @worker_mutex.synchronize do
+      worker = @worker_mutex.synchronize do
+        return if @stopping
         @worker ||= Worker.new(database: database, **DecentJob.configuration.worker_options)
         DecentJob.start_worker(@worker)
       end
+      DecentJob.start_cron(database: database, automatic: true) if worker && DecentJob.configuration.enable_cron
+      worker
     end
   end
 end

@@ -1,6 +1,6 @@
 # Cron compatibility
 
-Automatic recurring execution remains in progress. The schedule parser accepts numeric and natural-language expressions. [Cron entries](recurring-jobs.md) add callable schedules, persistent controls, and deduplicated enqueue; scheduler lifecycle and restart catch-up remain unfinished.
+The schedule parser accepts numeric and natural-language expressions. [Recurring jobs](recurring-jobs.md) add callable schedules, persistent controls, deduplicated enqueue, independent scheduler lifecycle, and restart catch-up.
 
 ## Numeric schedules
 
@@ -52,4 +52,4 @@ DecentJob does not preserve these reference defects:
 - Numeric offsets in expressions and `TZ` retain their sign, including `-00:30`. Valid offsets beyond eleven hours, such as `+14:00`, work. Unknown expression timezone suffixes are rejected instead of resolving a recognized prefix.
 - A skipped midnight does not cause an otherwise valid occurrence later that day to disappear. For example, `0 1 * * 0 America/Havana` includes March 8, 2026 at 01:00 local time; the pinned reference skips that Sunday when searching from March 6. Calendar jumps also handle ambiguous month boundaries, half-hour rollbacks in Lord Howe, and historical transitions ending at a non-hour boundary.
 
-These corrections have explicit specs and are separate from the saved matching-reference cases. Full recurring-job parity still requires manager lifecycle and restart catch-up.
+These corrections have explicit specs and are separate from the saved matching-reference cases. Scheduler behavior and resource limits are documented in [recurring jobs](recurring-jobs.md).

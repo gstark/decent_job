@@ -56,7 +56,7 @@ module DecentJob
 
     # A timeout leaves running jobs alone; callers may wait again later.
     def shutdown(timeout: nil)
-      if timeout && (!timeout.is_a?(Numeric) || !timeout.finite? || timeout.negative?)
+      if !timeout.nil? && (!timeout.is_a?(Numeric) || !timeout.finite? || timeout.negative?)
         raise ArgumentError, "timeout must be a finite nonnegative number"
       end
       deadline = monotonic_time + timeout if timeout

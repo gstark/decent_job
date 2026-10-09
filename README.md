@@ -2,13 +2,13 @@
 
 A PostgreSQL backend for Active Job with two direct runtime dependencies: `activejob` and `pg`.
 
-The current implementation supports persistent jobs, delayed execution, priorities, queue pools, bulk capture, batches, labels, concurrency limits and throttles, persistent pauses, cron definitions and deduplicated enqueue, retries, discards, execution history, inline and async execution, and external workers. It uses session advisory locks, LISTEN/NOTIFY, and polling.
+The current implementation supports persistent jobs, delayed execution, priorities, queue pools, bulk capture, batches, labels, concurrency limits and throttles, persistent pauses, recurring schedules with restart catch-up, retries, discards, execution history, inline and async execution, and external workers. It uses session advisory locks, LISTEN/NOTIFY, and polling.
 
-This is an early implementation. Full GoodJob parity remains the project goal. Automatic recurring execution, the dashboard, and several operational features are still planned. See [the parity checklist](docs/parity.md) and [implementation plan](docs/implementation-plan.md).
+This is an early implementation. Full GoodJob parity remains the project goal. The dashboard and several operational features are still planned. See [the parity checklist](docs/parity.md) and [implementation plan](docs/implementation-plan.md).
 
 Numeric and natural-language cron parsing are implemented as a foundation for recurring schedules. Supported expressions, reference comparisons, and timezone corrections are documented in [cron compatibility](docs/cron-compatibility.md).
 
-[Recurring job definitions](docs/recurring-jobs.md) support callable schedules and arguments, persistent enable/disable overrides, history, and enqueue deduplication across processes. Configuring an entry does not yet start a scheduler.
+[Recurring jobs](docs/recurring-jobs.md) support callable schedules and arguments, persistent enable/disable overrides, history, and enqueue deduplication across processes. Set `config.enable_cron = true` to start configured schedules with workers, or call `DecentJob.start_cron` independently.
 
 ## Install and run
 
@@ -93,15 +93,15 @@ Queue expressions:
 
 Smaller priority numbers run first. Equal priorities use scheduled time and job ID. Running jobs are not preempted.
 
-The default database pool reserves one connection per execution thread plus two for application operations. The listener has an additional dedicated connection. Account separately for connections used by application code, especially Active Record.
+The default database pool reserves one connection per execution thread plus two for application operations. Automatic cron adds three per configured entry, or four when restart catch-up is enabled. The listener has an additional dedicated connection. Account separately for connections used by application code, especially Active Record. See [recurring jobs](docs/recurring-jobs.md) for scheduler thread costs and explicit pool sizing.
 
 ## Embedded execution and tests
 
-Use `execution_mode = :async` to start background workers on the first enqueue. Call `DecentJob.shutdown(timeout: 30)` to stop both explicit and adapter-started workers. Enqueues after global shutdown remain persisted until `DecentJob.start` or `reset!` reopens the lifecycle. `DecentJob.start` also starts workers for jobs already in the database.
+Use `execution_mode = :async` to start background workers on the first enqueue. Call `DecentJob.shutdown(timeout: 30)` to stop registered workers and cron managers with one shared deadline. Enqueues after global shutdown remain persisted until `DecentJob.start` or `reset!` reopens the lifecycle. `DecentJob.start` also starts workers for jobs already in the database.
 
 Use `execution_mode = :inline` to run due jobs before enqueue returns. Future jobs stay persisted. Inline mode records and propagates unhandled job errors; handled retries and discards retain Active Job behavior. Nested inline jobs and immediate retries drain iteratively.
 
-`DecentJob.perform_inline(queues: "*", limit: 1000)` drains currently due jobs explicitly. It returns the number of attempted executions. `DecentJob.reset!` drains workers, closes the global pool, and resets configuration. Existing adapter objects should be replaced after a reset.
+`DecentJob.perform_inline(queues: "*", limit: 1000)` drains currently due jobs explicitly. It returns the number of attempted executions. `DecentJob.reset!` drains workers and cron callbacks, closes the global pool, and resets configuration. Existing adapter objects should be replaced after a reset.
 
 For isolated instances:
 
