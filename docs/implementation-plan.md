@@ -337,9 +337,9 @@ Four real CLI cases verify the default creation order, scheduled-order override,
 - [x] Audit and harden advisory claims against same-session reentry, ambiguous acquisition failures, missing or finished candidates, and connection loss. Verify nested public execution in a separate process.
 - [x] Add SKIP LOCKED and hybrid ownership, with configuration and persisted mode metadata. Update execution, recovery, management, cleanup, batches, and concurrency claims together so each recognizes live owners from every supported mode.
 - [x] Verify mixed-mode workers in separate processes, including crash recovery, retries, force-discard, and rolling configuration changes.
-- [ ] Verify PgBouncer transaction pooling with session-dependent features configured appropriately, and document the supported connection topology.
+- [x] Verify PgBouncer transaction pooling with session-dependent features configured appropriately, and document the supported connection topology.
 
-Advisory hardening was the first checkpoint. All three modes now have ownership and recovery coverage on direct PostgreSQL connections. PgBouncer transaction pooling remains a separate verification step.
+Advisory hardening was the first checkpoint. All three modes now have ownership and recovery coverage on direct PostgreSQL connections. The PgBouncer checkpoint below verifies the transaction-pooling configuration.
 
 ### Advisory ownership checkpoint
 
@@ -363,10 +363,22 @@ Fifteen real CLI process cases exercise all nine ordered owner/contender mode pa
 
 Lock-mode verification: `bundle exec rake` passed 1,667 specs and 7,243 assertions, seed 59860. Rails integration passed 22 cases and 140 assertions, seed 6645. The four optional WEBrick cases skipped under Bundler passed separately with 17 assertions, seed 19419. Independent spec and quality reviews, Standard, whitespace checks, gem build, and unpacked-gem execution passed. The package verified migration 011, pre-upgrade advisory fallback, every mode on the same performer, candidate-limit behavior, attempt history, cleared ownership, and the two direct runtime dependencies without Rails or Active Record. P5 through P8 are implemented. PgBouncer transaction pooling, aggregate statistics, the remaining configuration audit, benchmarks, and final library parity verification stay open. Dashboard work remains deferred.
 
+### PgBouncer transaction-pooling checkpoint
+
+Verify the reference's four-setting topology: `lock_strategy = :skiplocked`, `enable_listen_notify = false`, `advisory_lock_heartbeat = false`, and a positive `poll_interval`. All DecentJob database clients may use one transaction-pooled endpoint under these settings. Retain direct PostgreSQL or session pooling for advisory/hybrid execution and session-dependent features. A separate listener URL would add an API that the reference does not require, so this checkpoint uses polling instead.
+
+- [x] Add a real PgBouncer fixture in `integration/support/pgbouncer.rb` and Minitest specs in `integration/pgbouncer/pgbouncer_spec.rb`. Start an owned subprocess with private socket/config files and an isolated PostgreSQL database, and tear down every client/process/database. Require an installed PgBouncer executable when this suite is explicitly invoked. Do not add a runtime gem dependency or silently ignore startup parameters.
+- [x] Prove transaction pooling is active and force server reuse between clients. Verify transactions/savepoints, immediate and scheduled jobs, Active Job retries, bulk and batch callbacks, concurrency limits, management and cleanup. Check that no advisory session ownership remains after operations.
+- [x] Exercise polling workers in separate Ruby processes through the proxy, including exclusive execution, heartbeat refresh, graceful drain, and crashed-owner recovery. Use synchronization and persisted observations rather than assuming a fixed backend PID proves pool safety.
+- [x] Add `rake spec:pgbouncer`, keep Rails and database suites sequential, and add a CI step that installs and invokes PgBouncer. Document the four settings, schema/migration requirements, server-side search-path configuration, recovery timing, and unsupported session features in `docs/pgbouncer.md`.
+- [x] Fix any demonstrated incompatibility with a failing Minitest spec first. Complete independent spec and quality reviews, run the PgBouncer suite and full PostgreSQL/Rails suites, lint, optional WEBrick, and built-gem checks before declaring support. Preserve the dashboard deferral.
+
+PgBouncer verification: the independent transaction-pooling suite passed 12 specs and 103 assertions, seed 64072, on PgBouncer 1.26.0 and PostgreSQL 17.9 with Ruby 3.4.10. The full PostgreSQL suite passed 1,667 specs and 7,243 assertions, seed 49186. Rails integration passed 22 cases and 140 assertions, seed 25143. The four optional WEBrick cases passed separately with 17 assertions, seed 43667. Independent spec and quality reviews, Standard, whitespace checks, gem build, and unpacked-gem execution passed. The package verified migration, persisted claims, retry history, released process/job ownership, and absence of retained advisory locks through the proxy without Rails or Active Record. No production code or runtime dependencies changed. The CI workflow now installs and tests PgBouncer sequentially; remote CI has not run. Aggregate statistics, remaining configuration, benchmarks, and the final library parity audit remain open. Dashboard work remains deferred.
+
 ### Remaining slices
 
 1. Operations: aggregate statistics and remaining configuration audit.
-2. Compatibility: PgBouncer, benchmark and final library parity audit.
+2. Compatibility: benchmark and final library parity audit.
 3. Deferred at the user's request: dashboard, including authenticated job actions, histories, batches, schedules, processes and metrics.
 
 Each slice requires behavior specs before implementation, real PostgreSQL verification, and independent review. Completion of one slice does not imply completion of the full rebuild.

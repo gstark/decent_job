@@ -274,7 +274,7 @@ A separate Active Record connection does not share this transaction. In Rails, s
 
 Execution is **at least once**. A process can die after an external side effect and before recording success, so jobs must tolerate retries. PostgreSQL releases session locks when it detects a disconnected worker. A replacement records the abandoned attempt as interrupted. During network partitions, an old job can continue external work even after losing its database session; database ownership checks cannot fence those external effects.
 
-Advisory and hybrid execution require direct PostgreSQL connections or session pooling. SKIP LOCKED avoids session advisory job locks; PgBouncer transaction-pooling verification remains open. See [lock strategies](docs/locking.md) for configuration, migration, mixed workers, and recovery. Nested claims skip jobs already owned by the caller. Stop workers before forking and construct fresh database instances in child processes.
+Advisory and hybrid execution require direct PostgreSQL connections or session pooling. SKIP LOCKED supports [PgBouncer transaction pooling](docs/pgbouncer.md) with LISTEN and advisory heartbeats disabled and polling enabled. See [lock strategies](docs/locking.md) for configuration, migration, mixed workers, and recovery. Nested claims skip jobs already owned by the caller. Stop workers before forking and construct fresh database instances in child processes.
 
 Unhandled job errors are retained as discarded jobs by default. Configure `handled_exceptions` and `retry_on_unhandled_error` to control backend error handling. The opt-in `ActiveJobExtensions::InterruptErrors` module exposes interrupted attempts to Active Job retry/discard handlers; see [execution errors and recovery](docs/execution-recovery.md). [Execution history and timing](docs/execution-history.md) describes attempt snapshots, durations, and latency. Inspect records and attempt histories with:
 
@@ -305,5 +305,7 @@ gem build decent_job.gemspec
 ```
 
 All tests use Minitest spec syntax. Database specs create and remove uniquely named schemas in the test database; the account needs schema-creation permission. Separate-connection specs exercise competing workers. Process specs cover SIGTERM/SIGINT, shutdown deadlines, and SIGKILL recovery. No production job database should be used for tests.
+
+The separate PgBouncer suite starts an isolated transaction pool and requires the `pgbouncer` executable plus a test account that can create databases. Run `bundle exec rake spec:pgbouncer` sequentially with the other database suites. See [PgBouncer setup and verification](docs/pgbouncer.md).
 
 GoodJob is the behavioral reference, pinned at `ad4be5c2`. This gem has its own API and tables and does not consume existing GoodJob records.

@@ -44,6 +44,8 @@ DecentJob's execution-state storage belongs to one process. A child discards inh
 
 Pooled connections use the same isolation boundary. Nested calls in one context reuse their checkout. Under fiber isolation, two interleaved fibers use separate sessions and separate transaction callbacks, even when they run on the same Ruby thread. One fiber's commit cannot dispatch another fiber's callbacks or commit its work.
 
+These connection counts describe clients. With [PgBouncer transaction pooling](pgbouncer.md), timestamp monitors and pooled clients share PostgreSQL server sessions between transactions. LISTEN and advisory heartbeat ownership require direct connections or session pooling.
+
 The configured pool size bounds all pooled sessions. Size it for concurrent execution contexts, including application enqueues and cron callbacks. Listener and monitor sessions are additional to that limit. Ownership cleanup after interruption or pool exhaustion can briefly open an independent connection for each affected claim. Changing the isolation setting while resources are live is unsupported; configure it before checkouts or scoped work begin.
 
 The process monitor owns its dedicated session. Registration, inspection, and job cleanup do not operate on that connection from another thread. Heartbeat state callbacks run inside the host executor, outside registration locks. Renewal remains independent of the pooled checkouts used by jobs and cron. Interrupted pooled sessions remain owned until application cleanup unwinds, then are retired as described in [forced shutdown](shutdown.md).

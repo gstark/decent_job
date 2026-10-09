@@ -50,4 +50,4 @@ Migration 011 adds nullable `lock_type` metadata without rewriting existing jobs
 
 Deploy the ownership-aware implementation to every worker before enabling mixed strategies. Earlier DecentJob builds did not check persisted SKIP LOCKED ownership and cannot safely share that mode's jobs. This is not compatibility with GoodJob's tables or workers.
 
-Advisory and hybrid execution require direct PostgreSQL connections or session pooling. SKIP LOCKED execution avoids session advisory job locks, but PgBouncer transaction-pooling support still requires separate verification of LISTEN/NOTIFY, process heartbeat, and the remaining operations. Do not treat selecting SKIP LOCKED alone as verified PgBouncer support.
+Advisory and hybrid execution require direct PostgreSQL connections or session pooling. SKIP LOCKED supports PgBouncer transaction pooling with LISTEN and advisory heartbeats disabled and a positive polling interval. Migration 011 must be installed before switching to that endpoint. See [PgBouncer configuration and verification](pgbouncer.md) for all required settings, schema configuration, and connection limits.
