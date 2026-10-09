@@ -67,17 +67,29 @@ DecentJob.perform_all_later(job_a, job_b)
 
 ### Requirements
 
-- [ ] Instance attributes: `job_id`, `queue_name`, `priority`, `arguments`, `executions`, `exception_executions`, `scheduled_at`, `enqueued_at`, `provider_job_id`, `successfully_enqueued?`, `enqueue_error`.
-- [ ] `serialize` and `deserialize` must use the Active Job payload keys. Native payloads must not need any Active Job code to run.
-- [ ] Add `DecentJob::Arguments`. It must encode the same types as `ActiveJob::Arguments`, with the same `_aj_*` markers. Batch properties that are already stored must stay readable.
-- [ ] `Arguments` must have a custom serializer registry. A GlobalID serializer must activate only when `GlobalID` is loaded.
-- [ ] Durations are numeric seconds. Any object with `to_f`, such as `ActiveSupport::Duration`, is also accepted.
-- [ ] Callbacks: `before`, `after`, and `around` for `enqueue` and `perform`. Each callback can take `if:` and `unless:`.
-- [ ] `retry_on` must support `wait:` (number, proc, or `:polynomially_longer`), `attempts:` (integer or `:unlimited`), `queue:`, `priority:`, `jitter:`, and a block for the exhausted case.
-- [ ] `discard_on` and `rescue_from` must match Active Job semantics, including the order of the handlers.
-- [ ] Class settings must inherit to subclasses without ActiveSupport.
-- [ ] `perform_later` must return the job on success. It must return `false` when the enqueue fails, and set `enqueue_error`.
-- [ ] `perform_now` must run the callbacks and the retry handlers, as in Active Job.
+- [x] Instance attributes: `job_id`, `queue_name`, `priority`, `arguments`, `executions`, `exception_executions`, `scheduled_at`, `enqueued_at`, `provider_job_id`, `successfully_enqueued?`, `enqueue_error`.
+- [x] `serialize` and `deserialize` must use the Active Job payload keys. Native payloads must not need any Active Job code to run.
+- [x] Add `DecentJob::Arguments`. It must encode the same types as `ActiveJob::Arguments`, with the same `_aj_*` markers. Batch properties that are already stored must stay readable.
+- [x] `Arguments` must have a custom serializer registry. A GlobalID serializer must activate only when `GlobalID` is loaded.
+- [x] Durations are numeric seconds. Any object with `to_f`, such as `ActiveSupport::Duration`, is also accepted. `retry_on wait:` uses `to_i`, as Active Job does.
+- [x] Callbacks: `before`, `after`, and `around` for `enqueue` and `perform`. Each callback can take `if:` and `unless:`.
+- [x] `retry_on` must support `wait:` (number, proc, or `:polynomially_longer`), `attempts:` (integer or `:unlimited`), `queue:`, `priority:`, `jitter:`, and a block for the exhausted case.
+- [x] `discard_on` and `rescue_from` must match Active Job semantics, including the order of the handlers.
+- [x] Class settings must inherit to subclasses without ActiveSupport.
+- [x] `perform_later` must return the job on success. It must return `false` when the enqueue fails, and set `enqueue_error`.
+- [x] `perform_now` must run the callbacks and the retry handlers, as in Active Job.
+
+Phase 2 verification: 1,848 runs, 8,655 assertions, 0 failures, 4 skips. Standard passed. The GlobalID argument spec was added after that run and passes on its own.
+
+### Phase 2 notes
+
+- Files: `lib/decent_job/arguments.rb`, `lib/decent_job/base.rb`, `lib/decent_job/base/callbacks.rb`, `lib/decent_job/base/exceptions.rb`.
+- Native values store our serializer names, for example `DecentJob::Arguments::SymbolSerializer`. Reading also accepts the `ActiveJob::Serializers::*` names. Active Job cannot read the native names, and nothing needs it to.
+- `ActiveSupport::Duration`, `TimeWithZone`, `HashWithIndifferentAccess`, and GlobalID values are encoded only when the host loads those classes.
+- `perform_now` records how a handled error ended in `job.decent_job_outcome`: `[:retried, error]`, `[:discarded, error]`, or `[:retry_stopped, error]`. Phase 3 builds `Outcome` from it.
+- Native jobs without their own `queue_adapter` share `DecentJob.default_adapter`. `reset!` clears it.
+- The engine `Adapter` already stores native jobs, because it only duck-types the job. A spec covers this. Running stored native jobs needs Phase 3.
+- Not included: `locale`, `timezone`, `report:` on `retry_on` and `discard_on`, and object callback filters.
 
 ## Phase 3: engine uses job integrations
 

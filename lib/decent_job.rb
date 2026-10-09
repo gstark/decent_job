@@ -14,6 +14,7 @@ require "decent_job/active_job_extensions/interrupt_errors"
 require "decent_job/active_job_extensions/labels"
 require "decent_job/active_job_extensions/notify_options"
 require "decent_job/adapter"
+require "decent_job/base"
 require "decent_job/batch"
 require "decent_job/batch_store"
 require "decent_job/bulk"
@@ -383,6 +384,8 @@ module DecentJob
           @database = nil
           @configuration = Configuration.new
         end
+        # Adapter.new takes the runtime lock, so clear outside it.
+        @default_adapter_mutex.synchronize { @default_adapter = nil }
         raise failure if failure
         true
       end
