@@ -45,3 +45,39 @@ An operator can force-discard a job while its body is still running. That ends t
 Migration 008 adds the snapshot and duration columns. It preserves existing attempts with unknown values. A job's current start time is recovered from its existing current attempt where possible; a pending retry cancelled before it starts does not inherit its previous attempt's runtime. Historical payloads, schedules, and monotonic durations cannot be reconstructed reliably from the current job.
 
 Metrics that need missing data return `nil`. History is subject to the configured [record preservation and cleanup](record-preservation.md) policy. Retained attempts can be inspected even when their job class is no longer available, because reading an execution snapshot does not deserialize or run the job.
+
+## Aggregate statistics
+
+`ExecutionMetrics` reads retained attempts without loading job classes or serialized arguments:
+
+```ruby
+metrics = DecentJob::ExecutionMetrics.new
+summary = metrics.summary
+by_class = metrics.grouped_by(:job_class)
+by_queue = metrics.grouped_by(:queue_name)
+
+metrics.summary(
+  from: Time.iso8601("2026-10-01T00:00:00Z"),
+  to: Time.iso8601("2026-10-02T00:00:00Z"),
+  queue_name: "default"
+)
+```
+
+Pass `database:` to the constructor for an explicit database. Otherwise it captures the current execution database or the global database. Each method runs one aggregate SQL query over attempt snapshots and returns fresh symbol-keyed hashes. `summary` returns one hash; `grouped_by` returns an array, sorted by the grouping field with unknown names last. Grouping accepts `:job_class`, `:queue_name`, or their exact strings.
+
+Each result contains:
+
+| Keys | Meaning |
+| --- | --- |
+| `jobs_count`, `executions_count` | Distinct retained jobs and number of attempts |
+| `avg_queue`, `min_queue`, `max_queue` | Queue wait in seconds |
+| `avg_execution`, `min_execution`, `max_execution` | Measured monotonic runtime in seconds |
+| `avg_total`, `min_total`, `max_total` | Queue plus runtime, calculated for each attempt before aggregation |
+
+Grouped results also include the selected `job_class` or `queue_name`. Names come from execution snapshots, so renaming, rescheduling, or changing the current job does not rewrite old groups. One job can appear in several groups if its attempts used different queues or classes; adding grouped job counts can therefore exceed the overall distinct count.
+
+Both methods accept `from:`, `to:`, `job_class:`, and `queue_name:`. Bounds apply to the snapshotted scheduled time, with an inclusive start and exclusive end. Use Time values, including Active Support times with zones; nil means unbounded. Equal bounds produce an empty range. Reversed bounds or invalid types raise `ArgumentError`. Class and queue filters accept exact strings or nil; nil leaves that filter unrestricted. Without time bounds, attempts with unknown historical schedules remain in the counts.
+
+Running and interrupted attempts contribute to counts and to any known queue latency. Unknown values are excluded independently from each measurement. For example, an attempt with an unknown schedule but a measured duration contributes to execution averages, but not queue or total averages. A known zero duration remains zero. Negative queue differences caused by wall-clock adjustments remain visible.
+
+An empty summary has zero counts and nil measurements; empty grouping returns `[]`. Jobs that have never started have no attempt and contribute nothing. Preservation and cleanup can remove history, so these queries describe retained records rather than lifetime totals. Dashboard charts and histograms remain deferred.

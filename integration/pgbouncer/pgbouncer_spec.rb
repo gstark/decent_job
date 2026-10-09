@@ -224,6 +224,23 @@ describe "PgBouncer transaction pooling" do
     _(3.times.map { PgBouncerRecordingJob.events.pop(true) }).must_equal %w[immediate retry scheduled]
   end
 
+  it "aggregates retained retry attempts through the transaction pool" do
+    ordinary = PgBouncerRecordingJob.set(queue: "metrics").perform_later("ordinary")
+    retrying = PgBouncerRetryJob.set(queue: "metrics").perform_later("retry")
+    3.times { @performer.perform_one }
+    metrics = DecentJob::ExecutionMetrics.new(database: database)
+    summary = metrics.summary(queue_name: "metrics")
+    _(summary.values_at(:jobs_count, :executions_count)).must_equal [2, 3]
+    attempts = [ordinary, retrying].flat_map { |job| DecentJob::Execution.for_job(job.provider_job_id, database: database) }
+    _(summary.fetch(:avg_execution)).must_be_close_to attempts.sum(&:runtime_latency) / attempts.size, 0.000001
+    _(summary.fetch(:avg_total)).must_be_close_to attempts.sum(&:total_latency) / attempts.size, 0.000001
+    grouped = metrics.grouped_by(:job_class, queue_name: "metrics")
+    _(grouped.map { |row| row.values_at(:job_class, :jobs_count, :executions_count) }).must_equal [
+      ["PgBouncerRecordingJob", 1, 1], ["PgBouncerRetryJob", 1, 2]
+    ]
+    _(metrics.summary(queue_name: "missing").fetch(:avg_execution)).must_be_nil
+  end
+
   it "persists bulk members and dispatches each batch callback once" do
     batch = DecentJob::Batch.enqueue(database: database, on_success: PgBouncerCallbackJob, on_finish: PgBouncerCallbackJob) do
       DecentJob::Bulk.enqueue { 3.times { |index| PgBouncerRecordingJob.perform_later(index) } }
@@ -315,6 +332,9 @@ describe "PgBouncer transaction pooling" do
     stop_worker(contender)
     stop_worker(owner)
     _(@store.executions(job.provider_job_id).map { |attempt| attempt.fetch("state") }).must_equal ["succeeded"]
+    metrics = DecentJob::ExecutionMetrics.new(database: database)
+    _(metrics.summary.values_at(:jobs_count, :executions_count)).must_equal [2, 2]
+    _(metrics.grouped_by(:queue_name).map { |row| row.values_at(:queue_name, :executions_count) }).must_equal [["other", 1], ["owner", 1]]
     _(DecentJob::ProcessRecord.all(database: database)).must_be_empty
     _(records("error")).must_be_empty
   end

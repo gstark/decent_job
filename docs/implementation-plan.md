@@ -375,9 +375,24 @@ Verify the reference's four-setting topology: `lock_strategy = :skiplocked`, `en
 
 PgBouncer verification: the independent transaction-pooling suite passed 12 specs and 103 assertions, seed 64072, on PgBouncer 1.26.0 and PostgreSQL 17.9 with Ruby 3.4.10. The full PostgreSQL suite passed 1,667 specs and 7,243 assertions, seed 49186. Rails integration passed 22 cases and 140 assertions, seed 25143. The four optional WEBrick cases passed separately with 17 assertions, seed 43667. Independent spec and quality reviews, Standard, whitespace checks, gem build, and unpacked-gem execution passed. The package verified migration, persisted claims, retry history, released process/job ownership, and absence of retained advisory locks through the proxy without Rails or Active Record. No production code or runtime dependencies changed. The CI workflow now installs and tests PgBouncer sequentially; remote CI has not run. Aggregate statistics, remaining configuration, benchmarks, and the final library parity audit remain open. Dashboard work remains deferred.
 
+### Aggregate execution statistics checkpoint
+
+Add `DecentJob::ExecutionMetrics.new(database: nil)` with `summary(from: nil, to: nil, job_class: nil, queue_name: nil)` and `grouped_by(:job_class or :queue_name, **filters)`. Default database resolution follows `Execution.find`: explicit database, current execution database, then global. Each call returns fresh symbol-keyed hashes from a single parameterized SELECT over retained execution snapshots. Grouped queries return an array ordered by the grouping field, with the unknown group last.
+
+Results contain `jobs_count`, `executions_count`, and `avg_queue`, `min_queue`, `max_queue`, `avg_execution`, `min_execution`, `max_execution`, `avg_total`, `min_total`, `max_total`, all in seconds. Counts include running and interrupted attempts; distinct `job_id` counts jobs once within each result. Queue latency is `started_at - scheduled_at`; execution latency is stored monotonic duration; total is their sum per attempt. SQL NULLs are excluded independently from each aggregate. Empty summaries have zero counts and nil measurements; empty grouping returns an empty array. Pending jobs with no attempts contribute nothing. Preserve negative wall-clock queue differences and unknown historical/interrupted runtimes.
+
+Optional bounds are Time values, inclusive `from` and exclusive `to`, applied to the execution snapshot's `scheduled_at`, as in the pinned reference. Nil means unbounded; equal bounds describe an empty interval; reversed or invalid bounds raise ArgumentError. Class and queue filters accept exact strings or nil. Group identifiers accept only the two named strings/symbols. Values are SQL parameters and identifiers are whitelisted. No Active Record, class loading, new runtime dependencies, or dashboard chart/range UI.
+
+- [x] Write real PostgreSQL Minitest specs for empty data, retries/distinct jobs, unequal null samples, zero durations, negative queue differences, historical snapshots, live attempts, both groups including null metadata, all filters, half-open bounds and timezone offsets, validation, database selection, detached results, and matching Execution instance values.
+- [x] Add `lib/decent_job/execution_metrics.rb`, load it from `lib/decent_job.rb`, and implement aggregate SQL without loading attempts into Ruby or joining mutable job data. Add an index only if representative query evidence demonstrates a need; no migration is planned for this slice.
+- [x] Add independent integration evidence through actual job execution and PgBouncer, document the API and retention semantics in `docs/execution-history.md`, and keep chart presentation deferred under D11.
+- [x] Complete independent spec and quality reviews, focused and full PostgreSQL/Rails/PgBouncer suites, optional WEBrick, Standard, build and unpacked-gem checks. Record I4's completed library behavior separately from deferred dashboard presentation.
+
+Aggregate-statistics verification: `bundle exec rake` passed 1,683 specs and 7,344 assertions, seed 57212. PgBouncer integration passed 13 cases and 111 assertions, seed 8423; Rails integration passed 22 cases and 140 assertions, seed 24136. The four optional WEBrick cases passed separately with 17 assertions, seed 23702. Independent spec and quality reviews, Standard, whitespace checks, gem build, and unpacked-gem execution passed. The package verified real retry summaries, grouping, filters, current-execution database selection, and numeric agreement with individual executions without Rails or Active Record. No migration or runtime dependency was added. I4 is implemented for the library; dashboard presentation remains deferred under D10/D11. Configuration review, benchmarks, and the final library parity audit remain open.
+
 ### Remaining slices
 
-1. Operations: aggregate statistics and remaining configuration audit.
+1. Operations: remaining configuration audit.
 2. Compatibility: benchmark and final library parity audit.
 3. Deferred at the user's request: dashboard, including authenticated job actions, histories, batches, schedules, processes and metrics.
 
