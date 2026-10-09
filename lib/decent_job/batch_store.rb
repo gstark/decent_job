@@ -120,7 +120,7 @@ module DecentJob
       @database.with_connection do |connection|
         connection.exec_params("SELECT payload FROM decent_jobs WHERE #{column} = $1 #{filter} ORDER BY created_at, id", params).map do |row|
           Current.with(database: @database) do
-            ActiveJob::Base.deserialize(JSON.parse(row.fetch("payload"))).tap do |job|
+            Integrations.deserialize(JSON.parse(row.fetch("payload"))).tap do |job|
               job.send(:deserialize_arguments_if_needed) if deserialize_arguments
             end
           end
@@ -133,7 +133,7 @@ module DecentJob
         rows = connection.exec_params("SELECT * FROM decent_jobs WHERE batch_id = $1 AND state = 'discarded' AND NOT (#{FORCE_DISCARD_LOCKED_SQL}) ORDER BY id", [id]).to_a
         retries = rows.map { |row| prepare_retry(row) }
         jobs = retries.flat_map do |prepared|
-          prepared.fetch(:buffer).active_jobs.reject { |job| job.job_id == prepared.fetch(:context).fetch(:job_id) }
+          prepared.fetch(:buffer).jobs.reject { |job| job.job_id == prepared.fetch(:context).fetch(:job_id) }
         end
         jobs.each { |job| validate_adapter(job.class) }
         lock_scopes(jobs)
@@ -271,7 +271,7 @@ module DecentJob
     end
 
     def validate_adapter(klass)
-      unless klass <= ActiveJob::Base && klass.queue_adapter.is_a?(Adapter) && klass.queue_adapter.database.equal?(@database)
+      unless Integrations.job_class?(klass) && klass.queue_adapter.is_a?(Adapter) && klass.queue_adapter.database.equal?(@database)
         raise ArgumentError, "Batch jobs must use a DecentJob adapter with the batch's database"
       end
     end
@@ -311,16 +311,16 @@ module DecentJob
           pairs.each { |_, job| job.enqueue }
         end
         buffer.prepare
-        buffer.active_jobs.each do |job|
+        buffer.jobs.each do |job|
           unless job.queue_adapter.is_a?(Adapter) && job.queue_adapter.database.equal?(@database)
             raise ArgumentError, "Batch jobs must use a DecentJob adapter with the batch's database"
           end
         end
-        lock_scopes(buffer.active_jobs)
+        lock_scopes(buffer.jobs)
         Bulk.with_buffer(nil) do
           buffer.enqueue
           pairs.each do |event, job|
-            next unless buffer.active_jobs.include?(job)
+            next unless buffer.jobs.include?(job)
             next unless job.provider_job_id && job.successfully_enqueued?
             connection.exec_params(<<~SQL, [id, event.fetch("generation"), event.fetch("event"), job.provider_job_id])
               UPDATE decent_job_batch_events SET job_id = $4, dispatched_at = clock_timestamp()

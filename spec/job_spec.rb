@@ -56,7 +56,7 @@ describe DecentJob::Job do
     _(job.status).must_equal :queued
     _(job.queued?).must_equal true
     _(job.created_at).must_be_kind_of Time
-    _(job.active_job.arguments).must_equal ["hello"]
+    _(job.job_instance.arguments).must_equal ["hello"]
     _(job.executions).must_equal []
     @performer.perform_one
     _(job.reload).must_equal job
@@ -109,7 +109,7 @@ describe DecentJob::Job do
     _(result.provider_job_id).must_equal aj.provider_job_id
     _(job.reload.status).must_equal :queued
     _(job.executions.size).must_equal 1
-    _(job.active_job.executions).must_equal 1
+    _(job.job_instance.executions).must_equal 1
     @performer.perform_one
     _(job.reload.executions.size).must_equal 2
     job.destroy_job
@@ -234,7 +234,7 @@ describe DecentJob::Job do
     _(first.payload.fetch("arguments")).must_equal ["first"]
     first.discard_job("discard original")
     _(first.reload.discarded?).must_equal true
-    _(first.active_job.arguments).must_equal ["first"]
+    _(first.job_instance.arguments).must_equal ["first"]
     _(second.reload.queued?).must_equal true
   end
 

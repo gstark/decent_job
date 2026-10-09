@@ -42,44 +42,46 @@ module DecentJob
     end
 
     def enqueue(job)
-      enqueue_job(job)
+      raising_integration_errors(job) { enqueue_job(job) }
     end
 
     def enqueue_at(job, timestamp)
       job.scheduled_at = Time.at(timestamp).utc unless timestamp.nil?
-      enqueue_job(job, scheduled_at: timestamp)
+      raising_integration_errors(job) { enqueue_job(job, scheduled_at: timestamp) }
     end
 
     def enqueue_all(jobs, callbacks: true)
-      jobs = jobs.uniq
-      if Bulk.capture(jobs, queue_adapter: self)
-        jobs.each { |job| job.successfully_enqueued = true }
-        return jobs.size
-      end
-
-      controlled, plain = jobs.partition { |job| job.respond_to?(:decent_job_resolved_concurrency_rules) }
-      count = persist(plain, skip_duplicates: true)
-      controlled.each do |job|
-        if callbacks
-          job.enqueue
-        else
-          enqueue_without_callbacks(job)
+      raising_integration_errors(jobs.first) do
+        jobs = jobs.uniq
+        if Bulk.capture(jobs, queue_adapter: self)
+          jobs.each { |job| job.successfully_enqueued = true }
+          return jobs.size
         end
-        count += 1 if job.successfully_enqueued?
+
+        controlled, plain = jobs.partition { |job| job.respond_to?(:decent_job_resolved_concurrency_rules) }
+        count = persist(plain, skip_duplicates: true)
+        controlled.each do |job|
+          if callbacks
+            job.enqueue
+          else
+            enqueue_without_callbacks(job)
+          end
+          count += 1 if job.successfully_enqueued?
+        end
+        count
       end
-      count
     end
 
     def enqueue_after_transaction_commit?
       true
     end
 
-    def stopping?(active_job = nil)
+    def stopping?(job_instance = nil)
       context = Current.execution
       context = nil unless context && !context[:manual_retry] && context[:database].equal?(database)
       return :stopping if @worker_mutex.synchronize { @stopping } || DecentJob.stopping? || context&.fetch(:stopping, nil)&.call
 
-      matching = context && (!active_job || active_job.job_id == context[:job_id])
+      matching = context && (!job_instance || job_instance.job_id == context[:job_id])
       if matching && context[:execution_id]
         finished = database.with_connection do |connection|
           connection.exec_params("SELECT 1 FROM decent_job_executions WHERE id = $1 AND job_id = $2 AND finished_at IS NOT NULL", [context[:execution_id], context[:id]]).ntuples.positive?
@@ -87,7 +89,7 @@ module DecentJob
         return :force_discarded if finished
       end
       return false unless DecentJob.configuration.enable_pauses
-      return Pauses.new(database).paused?(active_job: active_job) if active_job
+      return Pauses.new(database).paused?(job_instance: job_instance) if job_instance
       return false unless matching && context[:id]
 
       row = store.find(context[:id])
@@ -161,16 +163,7 @@ module DecentJob
     # Management retries supply their callback-prepared payload so unavailable
     # arguments do not need to deserialize again under the persistence locks.
     def reschedule(job, context, payload: nil, attributes: nil, scheduled_at: nil)
-      attempted = store.enqueue_attributes(job, id: context.fetch(:id), payload: payload)
-      if attributes
-        attempted = attributes.merge(attempted.slice("payload", "queue_name", "priority", "labels", "concurrency_keys", "scheduled_at"))
-          .merge("state" => "ready", "finished_at" => nil, "performed_at" => nil, "error_event" => "retried")
-      end
-      instrument_enqueue(job, scheduled_at: scheduled_at, attributes: attempted) do |event, prepared|
-        store.reschedule(job, context, payload: prepared.fetch("payload")) { |row| event[:job] = Job.from_attributes(row, database: database) }
-        event[:accepted] = true
-      end
-      job.provider_job_id
+      raising_integration_errors(job) { reschedule_job(job, context, payload: payload, attributes: attributes, scheduled_at: scheduled_at) }
     end
 
     def execution_mode
@@ -216,6 +209,19 @@ module DecentJob
 
     private
 
+    def reschedule_job(job, context, payload:, attributes:, scheduled_at:)
+      attempted = store.enqueue_attributes(job, id: context.fetch(:id), payload: payload)
+      if attributes
+        attempted = attributes.merge(attempted.slice("payload", "queue_name", "priority", "labels", "concurrency_keys", "scheduled_at"))
+          .merge("state" => "ready", "finished_at" => nil, "performed_at" => nil, "error_event" => "retried")
+      end
+      instrument_enqueue(job, scheduled_at: scheduled_at, attributes: attempted) do |event, prepared|
+        store.reschedule(job, context, payload: prepared.fetch("payload")) { |row| event[:job] = Job.from_attributes(row, database: database) }
+        event[:accepted] = true
+      end
+      job.provider_job_id
+    end
+
     def enqueue_job(job, scheduled_at: nil)
       return if Bulk.capture(job, queue_adapter: self, callbacks_run: true)
 
@@ -231,13 +237,13 @@ module DecentJob
         end
         after_enqueue([job.provider_job_id]) if job.provider_job_id
       end
-      raise ActiveJob::EnqueueError, "cron occurrence already enqueued" unless job.provider_job_id
+      raise EnqueueError, "cron occurrence already enqueued" unless job.provider_job_id
       job.provider_job_id
     end
 
     def instrument_enqueue(job, scheduled_at:, attributes: nil)
       attributes ||= store.enqueue_attributes(job)
-      payload = {active_job: job, scheduled_at: scheduled_at, create_with_advisory_lock: false,
+      payload = {job_instance: job, scheduled_at: scheduled_at, create_with_advisory_lock: false,
                  job: Job.from_attributes(attributes, database: database), accepted: false}
       Instrumentation.instrument("enqueue_job.decent_job", payload, database: database) { yield payload, attributes }
     end
@@ -245,13 +251,13 @@ module DecentJob
     def enqueue_without_callbacks(job)
       job.successfully_enqueued = false
       job.enqueue_error = nil
-      enqueue(job)
+      enqueue_job(job)
     rescue ConcurrencyControls::AdmissionRejected => error
-      job.enqueue_error = ActiveJob::EnqueueError.new(error.message)
-    rescue ActiveJob::EnqueueError => error
+      job.enqueue_error = Integrations.for_job(job).enqueue_error(EnqueueError.new(error.message))
+    rescue EnqueueError => error
       raise if CronEntry.context_for(database) && error.cause.is_a?(PG::Error)
 
-      job.enqueue_error = error
+      job.enqueue_error = Integrations.for_job(job).enqueue_error(error)
     end
 
     def persist(jobs, attributes: nil, dispatch: true, skip_duplicates: false, &block)
@@ -263,16 +269,27 @@ module DecentJob
       ids = begin
         store.enqueue_all(jobs, attributes: attributes, skip_duplicates: skip_duplicates, &block)
       rescue PG::Error => error
-        raise ActiveJob::EnqueueError, error.message
+        raise EnqueueError, error.message
       end
       jobs.zip(ids).each do |job, id|
         job.provider_job_id = id
         job.successfully_enqueued = !id.nil?
-        job.enqueue_error = id ? nil : ActiveJob::EnqueueError.new("job or cron occurrence already enqueued")
+        job.enqueue_error = id ? nil : Integrations.for_job(job).enqueue_error(EnqueueError.new("job or cron occurrence already enqueued"))
       end
       ids = ids.compact
       after_enqueue(ids) if dispatch
       ids.size
+    end
+
+    # Enqueue callers see the integration's error class, keeping the cause.
+    def raising_integration_errors(job)
+      yield
+    rescue EnqueueError => error
+      integration = Integrations.for_class(job.class)
+      translated = integration ? integration.enqueue_error(error) : error
+      raise error if translated.equal?(error)
+
+      raise translated, cause: error.cause
     end
 
     def store

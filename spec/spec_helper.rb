@@ -7,7 +7,7 @@ require "pg"
 require "securerandom"
 
 $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
-require "decent_job" if File.exist?(File.expand_path("../lib/decent_job.rb", __dir__))
+require "decent_job/active_job"
 
 ActiveJob::Base.logger = Logger.new(File::NULL)
 # Runtime events are covered with explicit capture sinks in logging specs.

@@ -6,6 +6,9 @@ require "minitest/mock"
 require "timeout"
 
 describe "daemon and idle CLI lifecycle" do
+  # Async specs elsewhere can leave stopped workers registered. CLI
+  # configuration drains registered workers, which these specs count.
+  before { DecentJob.reset! }
   after { DecentJob.reset! }
 
   def cli

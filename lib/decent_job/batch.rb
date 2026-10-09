@@ -5,8 +5,6 @@ require "decent_job/bulk"
 
 module DecentJob
   class Batch
-    include GlobalID::Identification
-
     ATTRIBUTES = %i[description on_finish on_success on_discard callback_queue_name callback_priority].freeze
     TIMESTAMPS = %i[created_at updated_at enqueued_at jobs_finished_at finished_at discarded_at].freeze
 
@@ -92,9 +90,9 @@ module DecentJob
           batches.zip(rows).each { |batch, row| batch.instance_variable_set(:@row, row) }
           store.locked(batches.map(&:id)) do
             buffers = pairs.map { |batch, jobs| batch.send(:prepare_members, jobs) }
-            batch_ids = member_batches(batches.zip(buffers.map(&:active_jobs))).transform_values(&:id)
-            existing_members = buffers.map { |buffer| buffer.active_jobs.select(&:provider_job_id) }
-            store.lock_scopes(buffers.flat_map(&:active_jobs))
+            batch_ids = member_batches(batches.zip(buffers.map(&:jobs))).transform_values(&:id)
+            existing_members = buffers.map { |buffer| buffer.jobs.select(&:provider_job_id) }
+            store.lock_scopes(buffers.flat_map(&:jobs))
             batches.each { |batch| store.open(batch.id) }
             combined = Bulk::Buffer.new
             buffers.each { |buffer| combined.append(buffer) }
@@ -197,8 +195,9 @@ module DecentJob
       self
     end
 
-    def to_global_id(options = {})
-      super({app: "decent-job"}.merge(options))
+    # The GlobalID string, written without the globalid gem for native jobs.
+    def decent_job_global_id
+      "gid://decent-job/#{self.class.name}/#{URI.encode_www_form_component(id)}"
     end
 
     def display_attributes
@@ -212,7 +211,7 @@ module DecentJob
       accepted = transaction do
         save_and_lock do
           buffer = prepare_members(jobs, &block)
-          store.lock_scopes(buffer.active_jobs)
+          store.lock_scopes(buffer.jobs)
           enqueue_buffer(buffer)
         end
       end
@@ -225,7 +224,7 @@ module DecentJob
       accepted = transaction do
         save_and_lock do
           buffer = prepare_members(jobs, &block)
-          store.lock_scopes(buffer.active_jobs)
+          store.lock_scopes(buffer.jobs)
           flush_members(buffer)
         end
       end
@@ -233,11 +232,11 @@ module DecentJob
       accepted
     end
 
-    def active_jobs
+    def job_instances
       persisted? ? store.members(id) : []
     end
 
-    def callback_active_jobs
+    def callback_job_instances
       persisted? ? store.members(id, callbacks: true) : []
     end
 
@@ -291,7 +290,7 @@ module DecentJob
 
     def validate_members(jobs)
       jobs.each do |job|
-        unless job.is_a?(ActiveJob::Base) && job.queue_adapter.is_a?(Adapter) && job.queue_adapter.database.equal?(database)
+        unless Integrations.job?(job) && job.queue_adapter.is_a?(Adapter) && job.queue_adapter.database.equal?(database)
           raise ArgumentError, "Batch jobs must use a DecentJob adapter with the batch database"
         end
       end
@@ -304,7 +303,7 @@ module DecentJob
         buffer.capture(&block) if block
         buffer.prepare
       end
-      validate_members(buffer.active_jobs)
+      validate_members(buffer.jobs)
       buffer
     end
 
@@ -322,12 +321,12 @@ module DecentJob
     end
 
     def flush_members(buffer)
-      existing = buffer.active_jobs.select(&:provider_job_id)
+      existing = buffer.jobs.select(&:provider_job_id)
       self.class.within_thread(batch_id: id, database: database) do
         Bulk.with_buffer(nil) { buffer.enqueue }
         store.attach(id, existing) unless existing.empty?
       end
-      buffer.active_jobs
+      buffer.jobs
     end
   end
 end

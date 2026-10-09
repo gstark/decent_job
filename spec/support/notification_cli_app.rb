@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "decent_job"
+require "decent_job/active_job"
 require "json"
 
 class NotificationProcessJob < ActiveJob::Base

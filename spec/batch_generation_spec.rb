@@ -66,20 +66,20 @@ describe "batch reopening during execution" do
     fail_while_reopening(batch, member)
 
     _(batch.reload.discarded?).must_equal true
-    _(batch.callback_active_jobs.map { |job| job.arguments.last.fetch(:event) }).must_equal [:discard]
+    _(batch.callback_job_instances.map { |job| job.arguments.last.fetch(:event) }).must_equal [:discard]
   end
 
   it "counts a callback failure committed while reopening is uncommitted" do
     batch = DecentJob::Batch.enqueue(database: database,
       on_finish: BatchGenerationFailingCallbackJob, on_discard: BatchGenerationCallbackJob)
-    callback = batch.callback_active_jobs.first
+    callback = batch.callback_job_instances.first
     batch.on_finish = nil
     batch.on_success = BatchGenerationCallbackJob
     fail_while_reopening(batch, callback)
 
     _(batch.reload.discarded?).must_equal true
     _(batch.finished?).must_equal false
-    _(batch.callback_active_jobs.map { |job| job.arguments.last.fetch(:event) }.sort).must_equal [:discard, :finish]
+    _(batch.callback_job_instances.map { |job| job.arguments.last.fetch(:event) }.sort).must_equal [:discard, :finish]
   end
 
   it "clears a concurrent failure if that member is then manually retried" do
@@ -89,7 +89,7 @@ describe "batch reopening during execution" do
 
     _(DecentJob::Store.new(database).find(member.provider_job_id).fetch("state")).must_equal "ready"
     _(batch.reload.discarded?).must_equal false
-    _(batch.callback_active_jobs).must_be_empty
+    _(batch.callback_job_instances).must_be_empty
   end
 
   it "ignores an earlier completed failure whose completion request is still pending" do
@@ -104,6 +104,6 @@ describe "batch reopening during execution" do
     batch.enqueue
 
     _(batch.reload.discarded?).must_equal false
-    _(batch.callback_active_jobs.map { |job| job.arguments.last.fetch(:event) }.sort).must_equal [:discard, :success]
+    _(batch.callback_job_instances.map { |job| job.arguments.last.fetch(:event) }.sort).must_equal [:discard, :success]
   end
 end

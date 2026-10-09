@@ -205,7 +205,7 @@ describe "transactional notification publication" do
     notifications
     _ {
       @store.reschedule(job, {id: job.provider_job_id, execution_id: SecureRandom.uuid})
-    }.must_raise ActiveJob::EnqueueError
+    }.must_raise DecentJob::EnqueueError
     _(notifications).must_equal []
   end
 

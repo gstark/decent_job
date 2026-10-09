@@ -10,15 +10,15 @@ module DecentJob
       ExecutionState[:bulk_buffer] = buffer
     end
 
-    def self.capture(active_jobs = nil, queue_adapter: nil, callbacks_run: false, &block)
-      raise ArgumentError, "Use either jobs or a block, not both" if block && active_jobs
+    def self.capture(jobs = nil, queue_adapter: nil, callbacks_run: false, &block)
+      raise ArgumentError, "Use either jobs or a block, not both" if block && jobs
 
       if block
         buffer = Buffer.new
         capture_block(buffer, &block)
-        buffer.active_jobs
+        buffer.jobs
       elsif current_buffer
-        current_buffer.add(active_jobs, queue_adapter: queue_adapter, callbacks_run: callbacks_run)
+        current_buffer.add(jobs, queue_adapter: queue_adapter, callbacks_run: callbacks_run)
         true
       end
     end
@@ -28,14 +28,14 @@ module DecentJob
 
       parent = current_buffer
       buffer = Buffer.new
-      jobs.flatten.each { |job| buffer.add(job, callbacks_run: job.is_a?(ActiveJob::Base) && job.successfully_enqueued?) }
+      jobs.flatten.each { |job| buffer.add(job, callbacks_run: Integrations.job?(job) && job.successfully_enqueued?) }
       capture_block(buffer, &block) if block
       if parent
         parent.append(buffer)
       else
         with_buffer(nil) { buffer.enqueue }
       end
-      buffer.active_jobs
+      buffer.jobs
     end
 
     def self.with_buffer(buffer)
@@ -53,27 +53,30 @@ module DecentJob
     class Buffer
       Entry = Data.define(:job, :adapter, :callbacks_run)
 
-      attr_reader :active_jobs
+      attr_reader :jobs
 
-      def initialize
+      # on_capture receives each job as the buffer accepts it.
+      def initialize(on_capture: nil)
         @entries = []
         @children = []
-        @active_jobs = []
+        @jobs = []
+        @on_capture = on_capture
       end
 
       def add(jobs, queue_adapter: nil, callbacks_run: false)
         entries = Array(jobs).map do |job|
-          raise ArgumentError, "Expected an ActiveJob::Base instance, got #{job.class}" unless job.is_a?(ActiveJob::Base)
+          raise ArgumentError, "Expected a job instance, got #{job.class}" unless Integrations.job?(job)
 
           Entry.new(job: job, adapter: queue_adapter || job.queue_adapter, callbacks_run: callbacks_run)
         end
         @entries.concat(entries)
-        @active_jobs.concat(entries.map(&:job))
+        @jobs.concat(entries.map(&:job))
+        entries.each { |entry| @on_capture&.call(entry.job) }
       end
 
       def append(buffer)
         @entries.concat(buffer.entries)
-        @active_jobs.concat(buffer.active_jobs)
+        @jobs.concat(buffer.jobs)
         @children << buffer
       end
 
@@ -108,7 +111,7 @@ module DecentJob
           end
         end
         @entries = prepared.entries
-        @active_jobs.replace(prepared.active_jobs)
+        @jobs.replace(prepared.jobs)
         self
       end
 
@@ -128,13 +131,13 @@ module DecentJob
       end
 
       def retain_accepted
-        @active_jobs.select! { |job| job.provider_job_id || job.successfully_enqueued? }
-        @active_jobs.uniq!
+        @jobs.select! { |job| job.provider_job_id || job.successfully_enqueued? }
+        @jobs.uniq!
         @children.each(&:retain_accepted)
       end
 
       def discard
-        @active_jobs.each { |job| job.successfully_enqueued = false unless job.provider_job_id }
+        @jobs.each { |job| job.successfully_enqueued = false unless job.provider_job_id }
         @children.each(&:discard)
       end
 

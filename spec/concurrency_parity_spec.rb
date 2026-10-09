@@ -56,7 +56,7 @@ describe "pinned concurrency behavior" do
     job = ConcurrencyParityJob.perform_later("default")
 
     _(job.decent_job_concurrency_key).must_equal "ConcurrencyParityJob"
-    _(DecentJob::Job.find(job.provider_job_id, database: database).active_job.decent_job_concurrency_key).must_equal "ConcurrencyParityJob"
+    _(DecentJob::Job.find(job.provider_job_id, database: database).job_instance.decent_job_concurrency_key).must_equal "ConcurrencyParityJob"
   end
 
   # Source-derived from GoodJob ad4be5c2 Job.enqueue_args:368 persisting the

@@ -109,10 +109,10 @@ describe "persistent pauses" do
   it "returns the reason that an Active Job is paused" do
     job = RecordingJob.new
     @pauses.pause(queue: "default")
-    _(@pauses.paused?(active_job: job)).must_equal :queue_name_paused
+    _(@pauses.paused?(job_instance: job)).must_equal :queue_name_paused
     @pauses.unpause(queue: "default")
     @pauses.pause(job_class: RecordingJob)
-    _(@pauses.paused?(active_job: job)).must_equal :job_class_paused
+    _(@pauses.paused?(job_instance: job)).must_equal :job_class_paused
   end
 
   it "filters a retry using its updated labels" do

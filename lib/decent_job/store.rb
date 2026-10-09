@@ -102,7 +102,7 @@ module DecentJob
             AND #{context[:manual_retry] ? "state = 'discarded'" : "finished_at IS NULL AND state IN ('ready', 'running')"}
           RETURNING *
         SQL
-        raise ActiveJob::EnqueueError, "execution ownership lost" unless result.cmd_tuples == 1
+        raise EnqueueError, "execution ownership lost" unless result.cmd_tuples == 1
         yield decode(result.first) if block_given?
         Notifier.notify_jobs(connection, [job])
         unless context[:manual_retry]

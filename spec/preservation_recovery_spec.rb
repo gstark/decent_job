@@ -42,7 +42,7 @@ describe "batch recovery after record deletion" do
         on_finish: PreservationRecoveryCallbackJob)
       reader, writer = IO.pipe
       code = <<~RUBY
-        require "decent_job"
+        require "decent_job/active_job"
         ActiveJob::Base.logger = Logger.new(File::NULL)
         DecentJob.logger = Logger.new(File::NULL)
         DecentJob.configure do |config|
@@ -79,14 +79,14 @@ describe "batch recovery after record deletion" do
       performer = DecentJob::Performer.new(database: database)
       _(performer.perform_one(job_id: SecureRandom.uuid)).must_be_nil
       _(batch.reload.jobs_finished?).must_equal true
-      callbacks = batch.callback_active_jobs
+      callbacks = batch.callback_job_instances
       _(callbacks.size).must_equal 2
       2.times { _(performer.perform_one.state).must_equal "succeeded" }
       2.times { _(performer.perform_one).must_be_nil }
       _(batch.reload.finished?).must_equal true
       _(batch.discarded?).must_equal fail_execution
       _(batch.succeeded?).must_equal !fail_execution
-      _(batch.callback_active_jobs).must_be_empty
+      _(batch.callback_job_instances).must_be_empty
       callbacks.each do |callback|
         _(store.find(callback.provider_job_id)).must_be_nil
         _(store.executions(callback.provider_job_id)).must_be_empty

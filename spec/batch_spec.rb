@@ -97,8 +97,8 @@ describe DecentJob::Batch do
     _(accepted.map { |job| job.arguments.first }).must_equal ["explicit", "captured"]
     _(batch.enqueued?).must_equal true
     _(batch.finished?).must_equal false
-    _(batch.active_jobs.map(&:provider_job_id).sort).must_equal accepted.map(&:provider_job_id).sort
-    _(batch.callback_active_jobs).must_equal []
+    _(batch.job_instances.map(&:provider_job_id).sort).must_equal accepted.map(&:provider_job_id).sort
+    _(batch.callback_job_instances).must_equal []
   end
 
   it "returns the batch from the class enqueue helper" do
@@ -106,7 +106,7 @@ describe DecentJob::Batch do
 
     _(batch).must_be_kind_of DecentJob::Batch
     _(batch.description).must_equal "Class helper"
-    _(batch.active_jobs.size).must_equal 1
+    _(batch.job_instances.size).must_equal 1
   end
 
   it "adds jobs without marking the batch enqueued" do
@@ -124,7 +124,7 @@ describe DecentJob::Batch do
     batch = DecentJob::Batch.new(database: database)
     batch.add([job])
 
-    _(batch.active_jobs.map(&:provider_job_id)).must_equal [job.provider_job_id]
+    _(batch.job_instances.map(&:provider_job_id)).must_equal [job.provider_job_id]
     database.with_connection { |connection| _(connection.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0)).must_equal "1" }
   end
 
@@ -132,12 +132,12 @@ describe DecentJob::Batch do
     batch = DecentJob::Batch.new(database: database)
     outer = DecentJob::Bulk.enqueue do
       batch.enqueue { BatchFacadeJob.perform_later("member") }
-      _(batch.active_jobs.size).must_equal 1
+      _(batch.job_instances.size).must_equal 1
       BatchFacadeJob.perform_later("outside")
     end
 
     _(outer.map { |job| job.arguments.first }).must_equal ["outside"]
-    _(batch.active_jobs.map { |job| job.arguments.first }).must_equal ["member"]
+    _(batch.job_instances.map { |job| job.arguments.first }).must_equal ["member"]
   end
 
   it "prepares controlled member callbacks once before admission" do
@@ -147,7 +147,7 @@ describe DecentJob::Batch do
 
     _(batch.enqueue(jobs)).must_equal [jobs.first]
     _(ControlledBatchFacadeJob.enqueue_events).must_equal jobs.map(&:job_id)
-    _(batch.active_jobs.size).must_equal 1
+    _(batch.job_instances.size).must_equal 1
   end
 
   it "rejects members from another adapter before saving the batch" do
@@ -208,8 +208,8 @@ describe DecentJob::Batch do
     result = DecentJob::Batch.enqueue_all([[first, [BatchFacadeJob.new("first")]], [second, [BatchFacadeJob.new("second")]]])
 
     _(result).must_equal [first, second]
-    _(first.active_jobs.map { |job| job.arguments.first }).must_equal ["first"]
-    _(second.active_jobs.map { |job| job.arguments.first }).must_equal ["second"]
+    _(first.job_instances.map { |job| job.arguments.first }).must_equal ["first"]
+    _(second.job_instances.map { |job| job.arguments.first }).must_equal ["second"]
   end
 
   it "inserts batch records and ordinary members with one statement each" do
@@ -231,7 +231,7 @@ describe DecentJob::Batch do
     _(inserts.count { |sql| sql.match?(/INSERT INTO decent_job_batches\b/) }).must_equal 1
     _(inserts.count { |sql| sql.match?(/INSERT INTO decent_jobs\b/) }).must_equal 1
     _(pairs.map { |batch, _| batch.properties.fetch(:sequence) }).must_equal [0, 1, 2]
-    _(pairs.map { |batch, _| batch.active_jobs.first.arguments.first }).must_equal ["member-0", "member-1", "member-2"]
+    _(pairs.map { |batch, _| batch.job_instances.first.arguments.first }).must_equal ["member-0", "member-1", "member-2"]
   end
 
   it "rejects a member assigned to more than one batch before writing records" do
@@ -265,8 +265,8 @@ describe DecentJob::Batch do
     DecentJob::Batch.enqueue_all([[empty, []], [ordinary, [BatchFacadeJob.new("ordinary")]], [controlled, controlled_jobs]])
 
     _(empty.succeeded?).must_equal true
-    _(ordinary.active_jobs.size).must_equal 1
-    _(controlled.active_jobs.map(&:provider_job_id)).must_equal [controlled_jobs.first.provider_job_id]
+    _(ordinary.job_instances.size).must_equal 1
+    _(controlled.job_instances.map(&:provider_job_id)).must_equal [controlled_jobs.first.provider_job_id]
     _(controlled_jobs.last.successfully_enqueued?).must_equal false
     _(ControlledBatchFacadeJob.enqueue_events).must_equal controlled_jobs.map(&:job_id)
   end
@@ -302,12 +302,12 @@ describe DecentJob::Batch do
     DecentJob::Performer.new(database: database).perform_one
 
     _(BatchFacadeJob.events.pop).must_equal batch.id
-    _(batch.active_jobs.size).must_equal 1
+    _(batch.job_instances.size).must_equal 1
   end
 
   it "retries discarded members while preserving their provider identifiers" do
     batch = DecentJob::Batch.enqueue([BatchFacadeRetryJob.new], database: database)
-    member_id = batch.active_jobs.first.provider_job_id
+    member_id = batch.job_instances.first.provider_job_id
     performer = DecentJob::Performer.new(database: database)
     _(performer.perform_one.state).must_equal "discarded"
     _(batch.reload.discarded?).must_equal true
@@ -315,7 +315,7 @@ describe DecentJob::Batch do
     batch.retry
 
     _(batch.discarded?).must_equal false
-    _(batch.active_jobs.first.provider_job_id).must_equal member_id
+    _(batch.job_instances.first.provider_job_id).must_equal member_id
     _(performer.perform_one.state).must_equal "succeeded"
     _(batch.reload.succeeded?).must_equal true
   end
@@ -351,7 +351,7 @@ describe DecentJob::Batch do
     batch = DecentJob::Batch.new(database: database, on_success: BatchFacadeUnlockedCallback)
 
     _(batch.enqueue([member])).must_equal [member]
-    _(batch.callback_active_jobs.size).must_equal 1
+    _(batch.callback_job_instances.size).must_equal 1
   end
 
   it "keeps a durable reconciliation request when inline execution fails after commit" do

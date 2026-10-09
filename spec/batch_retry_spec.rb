@@ -73,7 +73,7 @@ describe "manual batch retries" do
 
   it "runs retry enqueue callbacks once and persists their labels, arguments, queue, and priority" do
     batch = DecentJob::Batch.enqueue([BatchManualRetryJob.new("fail")], database: database)
-    member = batch.active_jobs.first
+    member = batch.job_instances.first
     _(@performer.perform_one.state).must_equal "discarded"
     BatchManualRetryJob.enqueue_events.clear
     batch.retry
@@ -84,15 +84,15 @@ describe "manual batch retries" do
     _(row.fetch("queue_name")).must_equal "manual"
     _(row.fetch("priority")).must_equal 7
     _(row.fetch("payload").fetch("executions")).must_equal 1
-    _(batch.active_jobs.first.arguments).must_equal ["retried", {attempt: 1}]
-    _(batch.active_jobs.first.provider_job_id).must_equal member.provider_job_id
+    _(batch.job_instances.first.arguments).must_equal ["retried", {attempt: 1}]
+    _(batch.job_instances.first.provider_job_id).must_equal member.provider_job_id
     _(@performer.perform_one.state).must_equal "succeeded"
     _(@store.executions(member.provider_job_id).map { |execution| execution.fetch("state") }).must_equal ["discarded", "succeeded"]
   end
 
   it "leaves an aborted retry discarded and excludes it from rescheduled identifiers" do
     batch = DecentJob::Batch.enqueue([BatchManualRetryJob.new("fail")], database: database)
-    member = batch.active_jobs.first
+    member = batch.job_instances.first
     @performer.perform_one
     original = @store.find(member.provider_job_id)
     BatchManualRetryJob.enqueue_events.clear
@@ -111,7 +111,7 @@ describe "manual batch retries" do
   it "preserves successful members while retrying discarded members" do
     batch = DecentJob::Batch.enqueue([BatchManualRetryJob.new("fail"), BatchManualSuccessfulJob.new], database: database)
     2.times { @performer.perform_one }
-    successful = batch.active_jobs.find { |job| job.is_a?(BatchManualSuccessfulJob) }
+    successful = batch.job_instances.find { |job| job.is_a?(BatchManualSuccessfulJob) }
     original = @store.find(successful.provider_job_id)
     retried = @batch_store.retry_members(batch.id)
 
@@ -181,7 +181,7 @@ describe "manual batch retries" do
   it "retries when the original error class is no longer defined" do
     batch = DecentJob::Batch.enqueue([BatchManualRetryJob.new("fail")], database: database)
     @performer.perform_one
-    member = batch.active_jobs.first
+    member = batch.job_instances.first
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET error = $2 WHERE id = $1", [member.provider_job_id, JSON.generate("class" => "RemovedBatchRetryError", "message" => "old failure")])
     end
@@ -196,7 +196,7 @@ describe "manual batch retries" do
 
   it "bypasses enqueue admission for the existing job and avoids enclosing bulk capture" do
     batch = DecentJob::Batch.enqueue([BatchManualRetryJob.new("fail")], database: database)
-    member = batch.active_jobs.first
+    member = batch.job_instances.first
     @performer.perform_one
     BatchManualRetryJob.decent_job_control_concurrency_with(total_limit: 0)
     captured = DecentJob::Bulk.capture { @batch_store.retry_members(batch.id) }
@@ -209,7 +209,7 @@ describe "manual batch retries" do
 
   it "rejects a changed queue adapter without losing the discarded record" do
     batch = DecentJob::Batch.enqueue([BatchManualRetryJob.new("fail")], database: database)
-    member = batch.active_jobs.first
+    member = batch.job_instances.first
     @performer.perform_one
     BatchManualRetryJob.queue_adapter = :test
 
@@ -230,7 +230,7 @@ describe "manual batch retries" do
 
   it "prepares callback-created bulk children before taking parent row locks" do
     batch = DecentJob::Batch.enqueue([BatchManualRetryJob.new("fail")], database: database)
-    member = batch.active_jobs.first
+    member = batch.job_instances.first
     @performer.perform_one
     BatchRetryChildJob.parent_id = member.provider_job_id
     child = BatchRetryChildJob.new
@@ -245,7 +245,7 @@ describe "manual batch retries" do
 
   it "validates all captured children before modifying discarded members" do
     batch = DecentJob::Batch.enqueue([BatchManualRetryJob.new("fail")], database: database)
-    member = batch.active_jobs.first
+    member = batch.job_instances.first
     @performer.perform_one
     BatchManualSuccessfulJob.queue_adapter = :test
     BatchManualRetryJob.retry_action = ->(_job) { @adapter.enqueue_all([BatchManualSuccessfulJob.new]) }
@@ -257,7 +257,7 @@ describe "manual batch retries" do
 
   it "rejects foreign callback child adapters before they can enqueue" do
     batch = DecentJob::Batch.enqueue([BatchManualRetryJob.new("fail")], database: database)
-    member = batch.active_jobs.first
+    member = batch.job_instances.first
     @performer.perform_one
     BatchManualSuccessfulJob.queue_adapter = :test
     BatchManualRetryJob.retry_action = ->(_job) { BatchManualSuccessfulJob.perform_later }
@@ -269,7 +269,7 @@ describe "manual batch retries" do
 
   it "does not overwrite a member changed during callback preparation" do
     batch = DecentJob::Batch.enqueue([BatchManualRetryJob.new("fail")], database: database)
-    member = batch.active_jobs.first
+    member = batch.job_instances.first
     @performer.perform_one
     BatchManualRetryJob.retry_action = lambda do |_job|
       connection = database.connect

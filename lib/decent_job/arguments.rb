@@ -3,6 +3,7 @@
 require "bigdecimal"
 require "date"
 require "time"
+require "uri"
 require "decent_job/support"
 
 module DecentJob
@@ -60,6 +61,11 @@ module DecentJob
     @serializers_by_name = {}
 
     class << self
+      # Serializes values no registered serializer handles. It responds to
+      # serialize(value) and deserialize(hash). The Active Job bridge sets it to
+      # ActiveJob::Serializers so application serializers keep working.
+      attr_accessor :fallback
+
       # Custom serializers respond to name, serialize?, serialize and
       # deserialize. Later serializers take precedence.
       def add_serializers(*serializers)
@@ -85,7 +91,7 @@ module DecentJob
         when nil, true, false, Integer, Float
           argument
         when String
-          argument.instance_of?(String) ? argument : serialize_object(argument, fallback: argument)
+          argument.instance_of?(String) ? argument : serialize_object(argument, fallback_value: argument)
         when Array
           argument.map { |item| serialize_argument(item) }
         when Hash
@@ -96,7 +102,9 @@ module DecentJob
             serialize_hash(argument).merge(marker => argument.keys.grep(Symbol).map(&:name))
           end
         else
-          if global_id?(argument)
+          if argument.respond_to?(:decent_job_global_id)
+            {GLOBALID_KEY => argument.decent_job_global_id}
+          elsif global_id?(argument)
             serialize_global_id(argument)
           else
             serialize_object(argument)
@@ -106,10 +114,16 @@ module DecentJob
 
       private
 
-      def serialize_object(argument, fallback: nil)
+      def serialize_object(argument, fallback_value: nil)
         serializer = @serializers.find { |candidate| candidate.serialize?(argument) }
         return serializer.serialize(argument) if serializer
-        return fallback if fallback
+
+        begin
+          return fallback.serialize(argument) if fallback
+        rescue => error
+          raise SerializationError, error.message unless fallback_value
+        end
+        return fallback_value if fallback_value
 
         raise SerializationError, "Unsupported argument type: #{argument.class.name}"
       end
@@ -136,19 +150,28 @@ module DecentJob
           argument.map { |item| deserialize_argument(item) }
         when Hash
           if argument.size == 1 && argument.key?(GLOBALID_KEY)
-            raise ArgumentError, "GlobalID is not loaded" unless defined?(::GlobalID::Locator)
-
-            ::GlobalID::Locator.locate(argument.fetch(GLOBALID_KEY))
+            locate(argument.fetch(GLOBALID_KEY))
           elsif argument.key?(OBJECT_KEY)
             name = argument.fetch(OBJECT_KEY)
-            serializer = @serializers_by_name[name] || raise(ArgumentError, "Serializer #{name} is not known")
-            serializer.deserialize(argument)
+            serializer = @serializers_by_name[name]
+            return serializer.deserialize(argument) if serializer
+            return fallback.deserialize(argument) if fallback
+
+            raise ArgumentError, "Serializer #{name} is not known"
           else
             deserialize_hash(argument)
           end
         else
           raise ArgumentError, "Can only deserialize primitive arguments: #{argument.inspect}"
         end
+      end
+
+      # Without GlobalID, find the record through its class's find method.
+      def locate(gid)
+        return ::GlobalID::Locator.locate(gid) if defined?(::GlobalID::Locator)
+
+        match = %r{\Agid://[^/]+/([^/]+)/([^/?]+)}.match(gid) || raise(ArgumentError, "Invalid GlobalID #{gid}")
+        Support.constantize(match[1]).find(URI.decode_www_form_component(match[2]))
       end
 
       def deserialize_hash(hash)

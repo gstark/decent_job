@@ -140,7 +140,7 @@ describe "skiplocked execution lifecycle" do
     it "excludes a live force-discarded #{strategy} batch member from retry and cleanup" do
       DecentJob.configuration.lock_strategy = strategy
       batch = DecentJob::Batch.enqueue([BlockingJob.new], database: database)
-      job = batch.active_jobs.first
+      job = batch.job_instances.first
       pool = database
       @threads = [Thread.new { DecentJob::Performer.new(database: pool).perform_one }]
       Timeout.timeout(5) { BlockingJob.started.pop }

@@ -32,7 +32,7 @@ module DecentJob
     def self.validate_jobs(jobs)
       database = current_context.fetch(:database)
       jobs.each do |job|
-        adapter = job.queue_adapter if job.is_a?(ActiveJob::Base)
+        adapter = job.queue_adapter if Integrations.job?(job)
         unless adapter.is_a?(Adapter) && adapter.database.equal?(database)
           raise ArgumentError, "Cron jobs must use a DecentJob adapter with the cron entry database"
         end
@@ -173,10 +173,10 @@ module DecentJob
             I18n.with_locale(I18n.default_locale) do
               buffer.capture { result = enqueue_definition }
               buffer.prepare
-              self.class.validate_jobs(buffer.active_jobs)
-              ConcurrencyControls.new(connection_pool).lock_scopes(buffer.active_jobs)
-              attempted = !buffer.active_jobs.empty?
-              pending = buffer.active_jobs.reject(&:provider_job_id)
+              self.class.validate_jobs(buffer.jobs)
+              ConcurrencyControls.new(connection_pool).lock_scopes(buffer.jobs)
+              attempted = !buffer.jobs.empty?
+              pending = buffer.jobs.reject(&:provider_job_id)
               connection_pool.after_rollback do
                 pending.each do |job|
                   job.provider_job_id = nil
@@ -188,12 +188,12 @@ module DecentJob
           end
         end
       end
-      if result.is_a?(ActiveJob::Base)
+      if Integrations.job?(result)
         result.successfully_enqueued? ? result : false
       elsif result == false
         false
       else
-        attempted ? buffer.active_jobs : nil
+        attempted ? buffer.jobs : nil
       end
     rescue
       buffer&.discard

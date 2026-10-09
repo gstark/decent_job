@@ -272,11 +272,11 @@ describe "job record preservation" do
     @performer.perform_one(job_id: job.provider_job_id)
     _(@store.find(job.provider_job_id)).must_be_nil
     _(batch.reload.discarded?).must_equal true
-    _(batch.callback_active_jobs.size).must_equal 2
+    _(batch.callback_job_instances.size).must_equal 2
     2.times { @performer.perform_one }
     _(PreservationCallbackJob.events.map(&:last).sort).must_equal %i[discard finish]
     _(batch.reload.finished?).must_equal true
-    _(batch.callback_active_jobs).must_be_empty
+    _(batch.callback_job_instances).must_be_empty
     batch.enqueue([PreservationJob.new])
     3.times { @performer.perform_one }
     _(batch.reload.succeeded?).must_equal true

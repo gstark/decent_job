@@ -87,7 +87,7 @@ describe "job notifications" do
     job = EventValueJob.perform_later(false)
     _(@events.map(&:name)).must_equal ["enqueue_job.decent_job", "perform_job.decent_job"]
     payload = events(:enqueue_job).first.payload
-    _(payload[:active_job]).must_be_same_as job
+    _(payload[:job_instance]).must_be_same_as job
     _(payload[:accepted]).must_equal true
     _(payload[:scheduled_at]).must_be_nil
     _(payload[:create_with_advisory_lock]).must_equal false
@@ -110,7 +110,7 @@ describe "job notifications" do
     end
     payload = events(:enqueue_job).last.payload
     _(payload[:accepted]).must_equal false
-    _(payload[:active_job].provider_job_id).must_be_nil
+    _(payload[:job_instance].provider_job_id).must_be_nil
     _(payload[:job].cron_key).must_equal "event"
     _(payload[:job].created_at).must_be_nil
   end
@@ -276,7 +276,7 @@ describe "job notifications" do
     end
     payload = events(:enqueue_job).last.payload
     _(payload[:accepted]).must_equal false
-    _(payload[:exception_object]).must_be_kind_of ActiveJob::EnqueueError
+    _(payload[:exception_object]).must_be_kind_of DecentJob::EnqueueError
     _(payload[:job].created_at).must_be_nil
     _(job.provider_job_id).must_equal previous_id
   end

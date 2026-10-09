@@ -256,7 +256,7 @@ Batch properties use Active Job serialization, including symbols, dates, and Glo
 
 To build a batch incrementally, use `Batch.new`, `add(jobs)` or an `add` block, then `enqueue`. Added jobs are persisted immediately, while finish/success callbacks wait until the batch is marked enqueued. `enqueue` accepts an array and a block together. The class method returns the batch; instance `enqueue` and `add` return accepted jobs. Existing jobs can be attached without inserting them again. A running job can access its batch through `batch` and `batch?`; ordinary jobs it enqueues do not automatically inherit membership.
 
-Calling `enqueue` again reopens the same batch. Calling `retry` reopens it and retries only discarded members still in storage, running their Active Job enqueue callbacks and preserving IDs and execution history. Old callback jobs are not manually retried. `active_jobs` and `callback_active_jobs` return associated deserialized jobs still in storage, including preserved completed jobs.
+Calling `enqueue` again reopens the same batch. Calling `retry` reopens it and retries only discarded members still in storage, running their Active Job enqueue callbacks and preserving IDs and execution history. Old callback jobs are not manually retried. `job_instances` and `callback_job_instances` return associated deserialized jobs still in storage, including preserved completed jobs.
 
 Create several new batches in one transaction with pairs of batches and job arrays:
 

@@ -76,7 +76,7 @@ describe "adapter stopping reasons" do
   [:individual, :batch].each do |kind|
     it "does not treat historical attempts as executing during #{kind} retry callbacks" do
       batch = DecentJob::Batch.enqueue([StoppingManualRetryJob.new], database: database) if kind == :batch
-      aj = batch ? batch.active_jobs.first : StoppingManualRetryJob.perform_later
+      aj = batch ? batch.job_instances.first : StoppingManualRetryJob.perform_later
       DecentJob::Performer.new(database: database).perform_one
       job = DecentJob::Job.find(aj.provider_job_id, database: database)
       _(job.discarded?).must_equal true

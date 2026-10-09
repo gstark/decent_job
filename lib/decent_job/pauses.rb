@@ -41,11 +41,11 @@ module DecentJob
       end
     end
 
-    def paused?(active_job: nil, **target)
-      if active_job
+    def paused?(job_instance: nil, **target)
+      if job_instance
         raise ArgumentError, "provide only one target" unless target.values.compact.empty?
-        labels = active_job.respond_to?(:decent_job_labels) ? active_job.decent_job_labels : []
-        reason(queue: active_job.queue_name, job_class: active_job.class.name, labels: labels)
+        labels = job_instance.respond_to?(:decent_job_labels) ? job_instance.decent_job_labels : []
+        reason(queue: job_instance.queue_name, job_class: job_instance.class.name, labels: labels)
       elsif target.values.compact.empty?
         paused.values.any?(&:any?)
       else

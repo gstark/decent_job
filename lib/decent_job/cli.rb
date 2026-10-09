@@ -49,6 +49,7 @@ module DecentJob
       end
 
       cleanup_options = options.delete(:cleanup) || {}
+      prepare_for_rails_applications unless applications.empty?
       applications.each { |file| require File.expand_path(file) }
       begin
         DecentJob.apply_cli_configuration(options)
@@ -73,6 +74,17 @@ module DecentJob
     rescue LoadError, StandardError => error
       @stderr.puts "Error: #{error.message}"
       1
+    end
+
+    # The CLI loads DecentJob before the application. A Rails application
+    # needs the Railtie hook registered before it boots, and that hook needs
+    # ActiveSupport.
+    def prepare_for_rails_applications
+      require "active_support"
+    rescue LoadError
+      nil
+    else
+      DecentJob.load_railtie_with_rails
     end
 
     def set_up_logging

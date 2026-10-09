@@ -11,7 +11,7 @@ job.active_job_id  # Active Job ID
 job.status
 job.attributes
 job.executions
-job.active_job
+job.job_instance
 job.reload
 ```
 
@@ -19,7 +19,7 @@ Pass `database:` to `find` when using an explicit pool. Otherwise it uses the cu
 
 `status` distinguishes `:queued`, `:scheduled`, `:retried`, `:running`, `:succeeded`, and `:discarded`. Due jobs are queued; a future job with a previous error is retried. Running status checks advisory ownership so an abandoned running row is not mistaken for an active worker. The corresponding predicate methods and `finished?` are available. Errors include class, message, and backtrace; `error_event` records why an attempt failed or was retried.
 
-`active_job` normally raises when a class or argument cannot be deserialized. Pass `ignore_deserialization_errors: true` to retain an Active Job with its unavailable serialized arguments, or return `nil` for a missing class.
+`job_instance` normally raises when a class or argument cannot be deserialized. Pass `ignore_deserialization_errors: true` to retain the job instance with its unavailable serialized arguments, or return `nil` for a missing class.
 
 ## Operator actions
 

@@ -267,11 +267,11 @@ describe "PgBouncer transaction pooling" do
     batch = DecentJob::Batch.enqueue(database: database, on_success: PgBouncerCallbackJob, on_finish: PgBouncerCallbackJob) do
       DecentJob::Bulk.enqueue { 3.times { |index| PgBouncerRecordingJob.perform_later(index) } }
     end
-    _(batch.active_jobs.size).must_equal 3
+    _(batch.job_instances.size).must_equal 3
     nil while @performer.perform_one
     _(batch.reload.succeeded?).must_equal true
     _(batch.finished?).must_equal true
-    _(batch.callback_active_jobs.size).must_equal 2
+    _(batch.callback_job_instances.size).must_equal 2
     values = 5.times.map { PgBouncerRecordingJob.events.pop(true) }
     _(values.grep(Integer).sort).must_equal [0, 1, 2]
     _(values.grep(Array).sort).must_equal [[batch.id, :finish], [batch.id, :success]]

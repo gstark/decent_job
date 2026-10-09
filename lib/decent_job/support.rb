@@ -32,6 +32,22 @@ module DecentJob
       !blank?(value)
     end
 
+    # A class-level setting that subclasses inherit until they assign their
+    # own value, like ActiveSupport's class_attribute without instance access.
+    def class_setting(klass, name, default)
+      variable = :"@#{name}"
+      klass.define_singleton_method(name) do
+        if instance_variable_defined?(variable)
+          instance_variable_get(variable)
+        elsif superclass.respond_to?(name)
+          superclass.public_send(name)
+        else
+          default
+        end
+      end
+      klass.define_singleton_method(:"#{name}=") { |value| instance_variable_set(variable, value) }
+    end
+
     def pluralize(count, singular, plural = "#{singular}s")
       (count == 1) ? singular : plural
     end

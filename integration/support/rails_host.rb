@@ -410,7 +410,7 @@ when "runtime_isolation"
   end
   result[:isolation] = ActiveSupport::IsolatedExecutionState.isolation_level
   result[:backend_pids] = backend_pids
-  result[:captured_arguments] = buffer.active_jobs.map(&:arguments)
+  result[:captured_arguments] = buffer.jobs.map(&:arguments)
   result[:committed_arguments] = store.find(independent.provider_job_id).fetch("payload").fetch("arguments")
   result[:callbacks] = callbacks
   result[:job_count] = pool.with_connection { |connection| connection.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0).to_i }

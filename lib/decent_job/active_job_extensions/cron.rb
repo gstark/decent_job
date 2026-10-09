@@ -1,14 +1,10 @@
 # frozen_string_literal: true
 
+require "decent_job/job_extensions/batches"
+
 module DecentJob
   module ActiveJobExtensions
-    module Cron
-      extend ActiveSupport::Concern
-
-      included do
-        before_enqueue { |job| CronEntry.validate_jobs([job]) if CronEntry.current_context }
-      end
-    end
+    Cron = JobExtensions::Cron
 
     module CronBulk
       def perform_all_later(*jobs)

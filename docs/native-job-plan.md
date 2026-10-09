@@ -97,35 +97,73 @@ The engine must stop referring to `ActiveJob` directly. It talks to a job integr
 
 ### Integration interface
 
+The registry is `DecentJob::Integrations` in `lib/decent_job/integrations.rb`. The Active Job integration is in `lib/decent_job/active_job_extensions/integration.rb`.
+
 ```ruby
-# Registered with DecentJob.register_integration(integration)
-integration.handles?(job_class)     # => true or false
-integration.deserialize(payload)    # => job object
-integration.execute(payload)        # => DecentJob::Outcome
-integration.enqueue_error(message)  # => exception class to raise to callers
+integration.handles?(job_class)          # => true or false
+integration.deserialize(payload)         # => job instance
+integration.execute(payload, outcome)    # => perform value, or the handled error
+integration.serialize_core(job)          # => payload without extension metadata
+integration.enqueue_error(error)         # => error raised to enqueue callers
+integration.deserialization_error        # => error class for unloadable arguments
+integration.with_context(job) { }        # => runs a manual retry in the job's context
+integration.discarding(job, error) { }   # => wraps an operator discard
 ```
 
-`Outcome` holds `state` (succeeded, retried, discarded), `error`, `error_event`, and `value`. With this interface, `Performer` no longer subscribes to `*.active_job` events to find the outcome.
+`Outcome` is a mutable struct with `job_instance`, `state`, `error`, and `error_event`. The integration fills it in while the job runs, so it stays correct when the job raises. The approved plan returned an `Outcome`, but a return value is lost when the job raises.
 
 ### Changes by file
 
-- [ ] `Performer`: call `integration.execute` and use the returned `Outcome`.
-- [ ] `Store`, `Job`, `BatchStore`, `JobRetry`: deserialize through the integration that handles the job class.
-- [ ] `Batch`, `Bulk`, `CronEntry`, `BatchStore`: replace `is_a?(ActiveJob::Base)` checks with integration lookup.
-- [ ] Add `DecentJob::EnqueueError`. Replace the `ActiveJob::EnqueueError` raises in the engine with it.
-- [ ] Move labels, notify options, concurrency, interrupt errors, batches, and cron validation out of `active_job_extensions/` into shared modules. Both job kinds include the same modules.
-- [ ] Concurrency admission must run after all user `before_enqueue` callbacks. The native callback chain must do this without the callback reorder hack in `Concurrency.move_decent_job_enqueue_check_last`.
-- [ ] `PerformControls`: move `ConcurrencyExceededError` and `ThrottleExceededError` to `DecentJob`.
-- [ ] Add native specs for enqueue, perform, retry, discard, batches, cron, concurrency, and bulk.
+- [x] `Performer`: call `integration.execute` and read the `Outcome`.
+- [x] `Job`, `BatchStore`, `JobRetry`: deserialize through the integration that handles the job class.
+- [x] `Batch`, `Bulk`, `CronEntry`, `BatchStore`, `DecentJob.start_cron`: replace `ActiveJob::Base` checks with integration lookup.
+- [x] Add `DecentJob::EnqueueError`. The engine raises it. `Adapter#enqueue`, `#enqueue_at`, `#enqueue_all`, and `#reschedule` convert it to the integration's error class, so Active Job callers still get `ActiveJob::EnqueueError`.
+- [x] Move labels, notify options, concurrency, interrupt errors, batches, and cron validation into `lib/decent_job/job_extensions/`. The `ActiveJobExtensions` constants are aliases, except `Concurrency`.
+- [x] Concurrency admission runs after all user `before_enqueue` callbacks. Native jobs call it from `Base#before_adapter_enqueue`. Active Job keeps the named callback and the reordering, because `skip_callback(:enqueue, :before, :_decent_job_concurrency_before_enqueue)` is a documented way to skip the check.
+- [x] Move `ConcurrencyExceededError` and `ThrottleExceededError` to `DecentJob`.
+- [x] Add native specs for perform, retry, discard, management, batches, concurrency, labels, and bulk (`spec/native_execution_spec.rb`).
+
+Phase 3 verification: two full runs of 1,855 runs. Each run had one different timing failure: `daemon_cli_spec.rb` in the first run and `health_status_spec.rb` in the second. Both files pass three times out of three when run alone. Standard passed.
+
+### Renames
+
+The deserialized object, native or Active Job, is the "job instance". `DecentJob::Job` stays the database row.
+
+- `Job#active_job` is now `Job#job_instance`.
+- `Batch#active_jobs` and `#callback_active_jobs` are now `#job_instances` and `#callback_job_instances`.
+- The `enqueue_job.decent_job` payload key `:active_job` is now `:job_instance`.
+- `Pauses#paused?(active_job:)` is now `paused?(job_instance:)`.
+- `Bulk::Buffer#active_jobs` is now `#jobs`.
+
+The `active_job_id` column and `active_job_ids` event key keep their names. Renaming them needs a schema migration.
+
+### Other changes
+
+- Native jobs include labels, notify options, concurrency, batches, and cron validation by default. `InterruptErrors` stays opt-in, because it changes how an interrupted job ends.
+- `DecentJob::Base` instance methods are in `Base::Core`, so extensions can wrap them with `super`.
+- Batch properties use `DecentJob::Arguments` and raise `DecentJob::SerializationError` and `DecentJob::DeserializationError`.
+- `Batch` arguments are written as GlobalID strings through `decent_job_global_id`, without the `globalid` gem.
+- `enqueue_job.decent_job` events report `DecentJob::EnqueueError`, the error raised inside the engine.
 
 ## Phase 4: Active Job bridge
 
-- [ ] Move the Active Job code to `lib/decent_job/active_job.rb` and `lib/decent_job/active_job/`.
-- [ ] `require "decent_job"` must not load Active Job. `require "decent_job/active_job"` loads the bridge.
-- [ ] `lib/active_job/queue_adapters/decent_job_adapter.rb` must require the bridge. Then `config.active_job.queue_adapter = :decent_job` works without an extra require.
-- [ ] The Railtie must load the bridge when Active Job is loaded.
-- [ ] The bridge integration moves the `*.active_job` subscription out of `Performer`. It converts those events into an `Outcome`.
-- [ ] The bridge adapter rescues `DecentJob::EnqueueError` and raises `ActiveJob::EnqueueError`, because `perform_later` returns `false` only for that class.
+- [x] Add `lib/decent_job/active_job.rb`. It loads Active Job and the extensions, registers the integration, includes `GlobalID::Identification` in `Batch`, and sets `Arguments.fallback` to `ActiveJob::Serializers`.
+- [x] `require "decent_job"` does not load Active Job, ActiveSupport, or GlobalID. `require "decent_job/active_job"` loads the bridge.
+- [x] `lib/active_job/queue_adapters/decent_job_adapter.rb` requires the bridge. `decent_job.rb` registers the adapter autoload when Active Job is already loaded, so `queue_adapter = :decent_job` works without an extra require.
+- [x] The Railtie loads the bridge from `ActiveSupport.on_load(:active_job)`.
+- [x] The bridge integration owns the `*.active_job` subscription (Phase 3).
+- [x] The bridge converts `DecentJob::EnqueueError` to `ActiveJob::EnqueueError` (Phase 3, in `Adapter`).
+
+Phase 4 verification: 1,855 runs, 8,687 assertions, 0 failures, 4 skips (seed 23889). The seed that failed before the daemon spec fix (65179) also passes. `BUNDLE_GEMFILE=gemfiles/rails.gemfile bundle exec rake spec:rails`: 34 runs, 231 assertions, 0 failures. Standard passed. The PgBouncer spec was not run.
+
+### Phase 4 notes
+
+- The extension files stay in `lib/decent_job/active_job_extensions/`, and the constants keep their names. Moving them would only rename files.
+- `decent_job.rb` does not load the bridge on its own when Active Job is present, because the bridge requires `decent_job` and that would be a circular require. A plain Ruby app that uses Active Job must `require "decent_job/active_job"` or set `queue_adapter = :decent_job`.
+- With the bridge loaded, values that no native serializer handles go to `ActiveJob::Serializers`. Custom Active Job serializers then work for native jobs and batch properties.
+- The CLI loads DecentJob before the application. Before Phase 4, Active Job loaded ActiveSupport, so the Railtie hook (`on_load(:before_configuration)`) was always registered. Now the CLI tries `require "active_support"` before it requires application files, then registers the hook. When ActiveSupport is not installed, the CLI skips this. The library itself never loads ActiveSupport.
+- `spec_helper.rb` and the spec support scripts that use Active Job require the bridge.
+- Several async specs leave stopped workers registered, because their `after` blocks do not call `DecentJob.reset!`. When a daemon CLI spec ran next, CLI configuration drained that worker and the spec failed, depending on test order. `daemon_cli_spec.rb` now resets the runtime before each test. This leak existed before the native work.
 
 ## Phase 5: packaging, specs, docs
 

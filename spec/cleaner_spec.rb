@@ -326,7 +326,7 @@ describe "age cleanup" do
     after_candidate_page("decent_job_batches") { batch.enqueue([RecordingJob.new("reopened")]) }
     _(clean(older_than: 60)).must_equal 0
     _(batch.reload.finished?).must_equal false
-    _(batch.active_jobs.size).must_equal 1
+    _(batch.job_instances.size).must_equal 1
   end
 
   it "retains force-discarded members and their batch while the owner still holds its session lock" do

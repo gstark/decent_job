@@ -185,8 +185,8 @@ describe "batch workflows" do
     _(@performer.perform_one.state).must_equal "succeeded"
     _(batch.reload.jobs_finished?).must_equal true
     _(batch.finished?).must_equal false
-    _(batch.callback_active_jobs.size).must_equal 2
-    _(batch.callback_active_jobs.map { |job| [job.queue_name, job.priority] }).must_equal [["callbacks", -5], ["callbacks", -5]]
+    _(batch.callback_job_instances.size).must_equal 2
+    _(batch.callback_job_instances.map { |job| [job.queue_name, job.priority] }).must_equal [["callbacks", -5], ["callbacks", -5]]
     drain
     _(batch.reload.succeeded?).must_equal true
     _(callback_events.map { |_, event, _| event }.sort).must_equal [:finish, :success]
@@ -200,7 +200,7 @@ describe "batch workflows" do
     _(batch.reload.discarded?).must_equal true
     _(batch.finished?).must_equal true
     _(callback_events.map { |_, event, _| event }.sort).must_equal [:discard, :finish]
-    counts = batch.callback_active_jobs.map { |job| DecentJob::Store.new(database).executions(job.provider_job_id).size }
+    counts = batch.callback_job_instances.map { |job| DecentJob::Store.new(database).executions(job.provider_job_id).size }
     _(counts).must_equal [2, 2]
   end
 
@@ -209,13 +209,13 @@ describe "batch workflows" do
     discarded = WorkflowDiscardOnceJob.new("eventual success")
     batch = DecentJob::Batch.enqueue([success, discarded], database: database, on_finish: WorkflowCallbackJob)
     drain
-    ids = batch.active_jobs.map(&:provider_job_id)
+    ids = batch.job_instances.map(&:provider_job_id)
     batch.retry
     _(batch.discarded?).must_equal false
     _(batch.jobs_finished?).must_equal false
     drain
     _(batch.reload.succeeded?).must_equal true
-    _(batch.active_jobs.map(&:provider_job_id)).must_equal ids
+    _(batch.job_instances.map(&:provider_job_id)).must_equal ids
     _(DecentJob::Store.new(database).executions(success.provider_job_id).size).must_equal 1
     _(DecentJob::Store.new(database).executions(discarded.provider_job_id).size).must_equal 2
     _(callback_events.size).must_equal 2
@@ -239,8 +239,8 @@ describe "batch workflows" do
     batch = DecentJob::Batch.enqueue(database: database, on_finish: WorkflowRecursiveJob, stage: 1)
     _(batch.reload.finished?).must_equal true
     _(batch.properties).must_equal({stage: 3})
-    _(batch.active_jobs.size).must_equal 4
-    _(batch.callback_active_jobs.size).must_equal 3
+    _(batch.job_instances.size).must_equal 4
+    _(batch.callback_job_instances.size).must_equal 3
     _(WorkflowCallbackJob.events.size).must_equal 3
   end
 
@@ -253,7 +253,7 @@ describe "batch workflows" do
     _(created[1]).must_equal created[2]
     batch = DecentJob::Batch.find(created[1], database: database)
     _(batch.reload.succeeded?).must_equal true
-    _(batch.active_jobs.map(&:provider_job_id)).must_include parent.provider_job_id
+    _(batch.job_instances.map(&:provider_job_id)).must_include parent.provider_job_id
     _(callback_events.size).must_equal 1
   end
 
@@ -266,7 +266,7 @@ describe "batch workflows" do
       _(WorkflowMemberJob.events.size).must_equal 1
     end
     _(outer).must_be_empty
-    _(batch.active_jobs.size).must_equal 1
+    _(batch.job_instances.size).must_equal 1
     database.with_connection do |connection|
       _(connection.exec("SELECT batch_id FROM decent_jobs WHERE job_class = 'WorkflowMemberJob'").getvalue(0, 0)).must_be_nil
     end
@@ -282,7 +282,7 @@ describe "batch workflows" do
     2.times { WorkflowBlockingJob.release << true }
     @threads.each(&:value)
     _(batch.reload.jobs_finished?).must_equal true
-    _(batch.callback_active_jobs.size).must_equal 2
+    _(batch.callback_job_instances.size).must_equal 2
     3.times { DecentJob::BatchStore.new(database).reconcile(batch.id) }
     drain
     _(callback_events.size).must_equal 2
@@ -294,7 +294,7 @@ describe "batch workflows" do
     batch = DecentJob::Batch.enqueue([job], database: database,
       on_success: WorkflowCallbackJob, on_discard: WorkflowCallbackJob, on_finish: WorkflowCallbackJob)
     complete_during_reconciliation(batch, job)
-    _(batch.callback_active_jobs.map { |callback| callback.arguments.last.fetch(:event) }.sort).must_equal [:discard, :finish]
+    _(batch.callback_job_instances.map { |callback| callback.arguments.last.fetch(:event) }.sort).must_equal [:discard, :finish]
     drain
     _(batch.reload.discarded?).must_equal true
     _(batch.finished?).must_equal true
@@ -303,10 +303,10 @@ describe "batch workflows" do
   it "waits for the discard callback when a callback fails during reconciliation" do
     batch = DecentJob::Batch.enqueue(database: database,
       on_finish: WorkflowFailOnceCallbackJob, on_discard: WorkflowCallbackJob)
-    complete_during_reconciliation(batch, batch.callback_active_jobs.first)
+    complete_during_reconciliation(batch, batch.callback_job_instances.first)
     _(batch.reload.discarded?).must_equal true
     _(batch.finished?).must_equal false
-    _(batch.callback_active_jobs.size).must_equal 2
+    _(batch.callback_job_instances.size).must_equal 2
     drain
     _(batch.reload.finished?).must_equal true
     _(callback_events.map { |_, event, _| event }).must_equal [:discard]
@@ -317,17 +317,17 @@ describe "batch workflows" do
     batch = DecentJob::Batch.enqueue(database: database, on_finish: WorkflowLimitedCallbackJob)
     _(batch.reload.jobs_finished?).must_equal true
     _(batch.finished?).must_equal false
-    _(batch.callback_active_jobs).must_be_empty
+    _(batch.callback_job_instances).must_be_empty
     WorkflowLimitedCallbackJob.decent_job_control_concurrency_with(total_limit: 1)
     drain
     _(batch.reload.finished?).must_equal true
-    _(batch.callback_active_jobs.size).must_equal 1
+    _(batch.callback_job_instances.size).must_equal 1
     _(callback_events.size).must_equal 1
   end
 
   it "persists jobs created by a callback's enqueue callbacks" do
     batch = DecentJob::Batch.enqueue(database: database, on_finish: WorkflowEnqueuingCallbackJob)
-    _(batch.callback_active_jobs.size).must_equal 2
+    _(batch.callback_job_instances.size).must_equal 2
     drain
     _(WorkflowMemberJob.events.pop).must_equal "callback child"
     _(callback_events.size).must_equal 1
@@ -337,7 +337,7 @@ describe "batch workflows" do
   it "prepares controlled bulk callback children exactly once before admission" do
     WorkflowControlledBulkChildJob.decent_job_concurrency_rule(label: "callback-child", total_limit: 1)
     batch = DecentJob::Batch.enqueue(database: database, on_finish: WorkflowBulkChildrenCallbackJob)
-    children = batch.callback_active_jobs.select { |job| job.is_a?(WorkflowControlledBulkChildJob) }
+    children = batch.callback_job_instances.select { |job| job.is_a?(WorkflowControlledBulkChildJob) }
 
     _(WorkflowBulkChildrenCallbackJob.enqueue_events).must_equal [:before, :after]
     _(WorkflowControlledBulkChildJob.enqueue_events.map(&:first)).must_equal [:before, :after, :before, :after]
@@ -345,7 +345,7 @@ describe "batch workflows" do
     _(children.size).must_equal 1
     _(children.first.queue_name).must_equal "callback-child"
     _(children.first.decent_job_labels).must_equal ["callback-child"]
-    _(batch.callback_active_jobs.size).must_equal 2
+    _(batch.callback_job_instances.size).must_equal 2
     drain
     _(WorkflowMemberJob.events.pop).must_equal "first child"
     _(callback_events.size).must_equal 1
@@ -357,21 +357,21 @@ describe "batch workflows" do
     drain
     _(batch.reload.discarded?).must_equal true
     _(batch.finished?).must_equal true
-    old_jobs = batch.callback_active_jobs
+    old_jobs = batch.callback_job_instances
     batch.retry
     drain
     _(batch.reload.succeeded?).must_equal true
-    _(batch.callback_active_jobs.size).must_equal 3
+    _(batch.callback_job_instances.size).must_equal 3
     old_jobs.each { |job| _(DecentJob::Store.new(database).executions(job.provider_job_id).size).must_equal 1 }
   end
 
   it "does not redispatch an event when its callback job history is deleted" do
     batch = DecentJob::Batch.enqueue(database: database, on_finish: WorkflowCallbackJob)
-    callback = batch.callback_active_jobs.first
+    callback = batch.callback_job_instances.first
     database.with_connection { |connection| connection.exec_params("DELETE FROM decent_jobs WHERE id = $1", [callback.provider_job_id]) }
     DecentJob::BatchStore.new(database).reconcile(batch.id)
     _(batch.reload.finished?).must_equal true
-    _(batch.callback_active_jobs).must_be_empty
+    _(batch.callback_job_instances).must_be_empty
     _(drain).must_equal 0
   end
 
@@ -386,7 +386,7 @@ describe "batch workflows" do
     end
     2.times { gate << true }
     batches = Timeout.timeout(10) { @threads.map(&:value) }
-    _(batches.map { |batch| batch.callback_active_jobs.size }).must_equal [2, 2]
+    _(batches.map { |batch| batch.callback_job_instances.size }).must_equal [2, 2]
     drain
     _(batches.all? { |batch| batch.reload.succeeded? }).must_equal true
     _(callback_events.size).must_equal 4

@@ -72,7 +72,7 @@ describe "job management callbacks and transactions" do
     _(job.queue_name).must_equal "manual"
     _(job.priority).must_equal 21
     _(job.labels).must_equal ["retried"]
-    _(job.active_job.arguments).must_equal ["changed"]
+    _(job.job_instance.arguments).must_equal ["changed"]
   ensure
     I18n.available_locales = available
   end
@@ -91,8 +91,8 @@ describe "job management callbacks and transactions" do
       connection.exec_params("UPDATE decent_jobs SET job_class = 'RemovedManagementJob', payload = jsonb_set(payload, '{job_class}', '\"RemovedManagementJob\"') WHERE id = $1", [job.id])
     end
     job.reload
-    _(job.active_job(ignore_deserialization_errors: true)).must_be_nil
-    _(proc { job.active_job }).must_raise ActiveJob::UnknownJobClassError
+    _(job.job_instance(ignore_deserialization_errors: true)).must_be_nil
+    _(proc { job.job_instance }).must_raise DecentJob::UnknownJobClassError
     job.discard_job("removed")
     _(proc { job.retry_job }).must_raise DecentJob::Job::DeserializationError
     _(job.reload.discarded?).must_equal true
@@ -105,8 +105,8 @@ describe "job management callbacks and transactions" do
       connection.exec_params("UPDATE decent_jobs SET payload = jsonb_set(payload, '{arguments}', '[{\"_aj_serialized\":\"RemovedArgumentSerializer\"}]') WHERE id = $1", [job.id])
     end
     job.reload
-    _(proc { job.active_job }).must_raise ActiveJob::DeserializationError
-    _(job.active_job(ignore_deserialization_errors: true)).must_be_kind_of ManagementRetryJob
+    _(proc { job.job_instance }).must_raise ActiveJob::DeserializationError
+    _(job.job_instance(ignore_deserialization_errors: true)).must_be_kind_of ManagementRetryJob
     job.discard_job("invalid arguments")
     _(job.retry_job.successfully_enqueued?).must_equal true
     _(job.payload.fetch("arguments")).must_equal [{"_aj_serialized" => "RemovedArgumentSerializer"}]
@@ -256,7 +256,7 @@ describe "job management callbacks and transactions" do
       release.pop
     }
     batch = DecentJob::Batch.enqueue([ManagementRetryJob.new], database: database)
-    member = batch.active_jobs.first
+    member = batch.job_instances.first
     job = DecentJob::Job.find(member.provider_job_id, database: database)
     worker = Thread.new { @performer.perform_one }
     Timeout.timeout(3) { started.pop }
@@ -331,7 +331,7 @@ describe "job management callbacks and transactions" do
 
   it "requests durable batch completion in the discard transaction and reconciles only after commit" do
     batch = DecentJob::Batch.enqueue([ManagementRetryJob.new], database: database)
-    job = DecentJob::Job.find(batch.active_jobs.first.provider_job_id, database: database)
+    job = DecentJob::Job.find(batch.job_instances.first.provider_job_id, database: database)
     database.transaction do |connection|
       job.discard_job("batch member discarded")
       _(batch.reload.finished?).must_equal false
@@ -469,7 +469,7 @@ describe "job management callbacks and transactions" do
     _(order).must_equal [:callback, :event]
     _(observed[:job].id).must_equal job.id
     _(observed[:job].state).must_equal "ready"
-    _(observed[:active_job]).must_be_kind_of ManagementRetryJob
+    _(observed[:job_instance]).must_be_kind_of ManagementRetryJob
     _(observed[:accepted]).must_equal true
     _(retried.provider_job_id).must_equal job.id
   end

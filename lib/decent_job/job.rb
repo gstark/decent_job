@@ -46,15 +46,16 @@ module DecentJob
       @store.executions(id)
     end
 
-    def active_job(ignore_deserialization_errors: false)
+    # The deserialized job object, native or Active Job.
+    def job_instance(ignore_deserialization_errors: false)
       Current.with(database: database) do
-        ActiveJob::Base.deserialize(JSON.parse(JSON.generate(payload))).tap do |job|
+        Integrations.deserialize(JSON.parse(JSON.generate(payload))).tap do |job|
           job.send(:deserialize_arguments_if_needed)
-        rescue ActiveJob::DeserializationError
+        rescue *Integrations.deserialization_errors
           raise unless ignore_deserialization_errors
         end
       end
-    rescue NameError
+    rescue NameError, ArgumentError
       raise unless ignore_deserialization_errors
       nil
     end
@@ -119,7 +120,7 @@ module DecentJob
           reload
           raise StateMismatchError, "Only discarded jobs can be retried" unless discarded?
           prepared = JobRetry.new(self).prepare
-          scopes = ConcurrencyControls.new(database).scopes_for(prepared.fetch(:buffer).active_jobs.reject { |job| job.job_id == active_job_id })
+          scopes = ConcurrencyControls.new(database).scopes_for(prepared.fetch(:buffer).jobs.reject { |job| job.job_id == active_job_id })
           ConcurrencyClaims.new(database).synchronize(id, scopes: scopes, wait: false) do |connection|
             lock_row(connection)
             raise StateMismatchError, "Only discarded jobs can be retried" unless discarded?
@@ -205,8 +206,8 @@ module DecentJob
             isolated_context { batch_ids.sort.each { |batch_id| BatchStore.new(database).reconcile(batch_id) } }
           end
         end
-        job = active_job(ignore_deserialization_errors: true)
-        job ? job.send(:instrument, :discard, error: exception, &update) : update.call
+        job = job_instance(ignore_deserialization_errors: true)
+        job ? Integrations.for_job(job).discarding(job, exception, &update) : update.call
         reload
       end
     end

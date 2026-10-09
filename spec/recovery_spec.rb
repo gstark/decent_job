@@ -24,7 +24,7 @@ describe "process failure recovery" do
     job = CrashRecoveryJob.perform_later("recovered")
     reader, writer = IO.pipe
     code = <<~RUBY
-      require "decent_job"
+      require "decent_job/active_job"
       ActiveJob::Base.logger = Logger.new(File::NULL)
       DecentJob.configure { |config| config.database_url = JSON.parse(ENV.fetch("DECENT_JOB_TEST_CONNECTION")) }
       class CrashRecoveryJob < ActiveJob::Base
@@ -69,7 +69,7 @@ describe "process failure recovery" do
     second = ControlledCrashRecoveryJob.perform_later("promoted")
     reader, writer = IO.pipe
     code = <<~RUBY
-      require "decent_job"
+      require "decent_job/active_job"
       ActiveJob::Base.logger = Logger.new(File::NULL)
       DecentJob.configure { |config| config.database_url = JSON.parse(ENV.fetch("DECENT_JOB_TEST_CONNECTION")) }
       class ControlledCrashRecoveryJob < ActiveJob::Base

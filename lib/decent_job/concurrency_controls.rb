@@ -21,7 +21,7 @@ module DecentJob
         rules.each { |rule| check_enqueue(connection, rule, job) }
         yield
       rescue PG::Error => error
-        raise ActiveJob::EnqueueError, error.message
+        raise EnqueueError, error.message
       end
     end
 

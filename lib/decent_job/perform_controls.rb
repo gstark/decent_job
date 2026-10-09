@@ -3,6 +3,12 @@
 require "decent_job/concurrency_claims"
 
 module DecentJob
+  # Raised in perform when a concurrency or throttle rule must delay a job.
+  # Jobs with concurrency rules retry these without an attempt limit.
+  class ConcurrencyExceededError < StandardError; end
+
+  class ThrottleExceededError < ConcurrencyExceededError; end
+
   class PerformControls
     def initialize(database)
       @claims = ConcurrencyClaims.new(database)
@@ -20,13 +26,13 @@ module DecentJob
           limit = rule.perform_limit || rule.total_limit
           if limit && running_count(connection, rule, context) >= limit
             @claims.wait(connection, rule.scope, context)
-            exceeded = ActiveJobExtensions::Concurrency::ConcurrencyExceededError
+            exceeded = ConcurrencyExceededError
             break
           end
           @claims.grant(connection, rule.scope, context) if limit
           if rule.perform_throttle && throttled?(connection, rule, job)
             @claims.release(connection, context)
-            exceeded = ActiveJobExtensions::Concurrency::ThrottleExceededError
+            exceeded = ThrottleExceededError
             break
           end
         end
@@ -59,7 +65,7 @@ module DecentJob
 
     def throttled?(connection, rule, job)
       limit, seconds = rule.perform_throttle
-      allowed = connection.exec_params(<<~SQL, [rule.value, seconds, limit, ActiveJobExtensions::Concurrency::ThrottleExceededError.name]).column_values(0)
+      allowed = connection.exec_params(<<~SQL, [rule.value, seconds, limit, ThrottleExceededError.name]).column_values(0)
         SELECT decent_jobs.active_job_id FROM decent_job_executions
         JOIN decent_jobs ON decent_jobs.id = decent_job_executions.job_id
         WHERE #{predicate(rule)}

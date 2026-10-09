@@ -31,7 +31,7 @@ describe "standalone gem packaging" do
       program = <<~RUBY
         gem "activejob", #{Gem.loaded_specs.fetch("activejob").version.to_s.inspect}
         gem "pg", #{Gem.loaded_specs.fetch("pg").version.to_s.inspect}
-        require "decent_job"
+        require "decent_job/active_job"
         puts JSON.generate(
           loaded_from: $LOADED_FEATURES.find { |path| path.end_with?("/lib/decent_job.rb") },
           adapter: ActiveJob::QueueAdapters.lookup(:decent_job).name,

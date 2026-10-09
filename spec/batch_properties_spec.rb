@@ -73,8 +73,8 @@ describe DecentJob::BatchProperties do
     end
   end
 
-  it "retains Active Job validation of unsupported nested values" do
-    _ { DecentJob::BatchProperties.dump(record: Object.new) }.must_raise ActiveJob::SerializationError
+  it "rejects unsupported nested values" do
+    _ { DecentJob::BatchProperties.dump(record: Object.new) }.must_raise DecentJob::SerializationError
   end
 
   it "displays decoded properties when records can be loaded" do
@@ -86,7 +86,7 @@ describe DecentJob::BatchProperties do
   it "raises during load when a GlobalID record no longer exists" do
     serialized = DecentJob::BatchProperties.dump(record: BatchPropertiesRecord.new("missing"))
 
-    _ { DecentJob::BatchProperties.load(serialized) }.must_raise ActiveJob::DeserializationError
+    _ { DecentJob::BatchProperties.load(serialized) }.must_raise DecentJob::DeserializationError
   end
 
   it "displays raw properties when a GlobalID record no longer exists" do
@@ -98,7 +98,7 @@ describe DecentJob::BatchProperties do
   it "displays raw properties when the GlobalID model no longer exists" do
     serialized = {"record" => {"_aj_globalid" => "gid://decent-job-spec/RemovedBatchPropertiesRecord/42"}, "_aj_symbol_keys" => ["record"]}
 
-    _ { DecentJob::BatchProperties.load(serialized) }.must_raise ActiveJob::DeserializationError
+    _ { DecentJob::BatchProperties.load(serialized) }.must_raise DecentJob::DeserializationError
     _(DecentJob::BatchProperties.display(serialized)).must_be_same_as serialized
   end
 end

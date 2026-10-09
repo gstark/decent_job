@@ -256,10 +256,10 @@ describe DecentJob::Bulk do
     buffer.add(ControlledBulkDescendantJob.new(2))
     buffer.prepare
 
-    _(buffer.active_jobs.size).must_equal 3
-    _(buffer.active_jobs.map(&:queue_name).sort).must_equal ["generation-0", "generation-1", "generation-2"]
-    _(buffer.active_jobs.flat_map(&:decent_job_labels).sort).must_equal ["prepared-0", "prepared-1", "prepared-2"]
-    scopes = buffer.active_jobs.flat_map { |job| job.decent_job_resolved_concurrency_rules(stage: :metadata).map(&:scope) }
+    _(buffer.jobs.size).must_equal 3
+    _(buffer.jobs.map(&:queue_name).sort).must_equal ["generation-0", "generation-1", "generation-2"]
+    _(buffer.jobs.flat_map(&:decent_job_labels).sort).must_equal ["prepared-0", "prepared-1", "prepared-2"]
+    scopes = buffer.jobs.flat_map { |job| job.decent_job_resolved_concurrency_rules(stage: :metadata).map(&:scope) }
     _(scopes.sort).must_equal ["key:scope-0", "key:scope-1", "key:scope-2"]
     _(BulkJob.callback_events.tally.values).must_equal [1, 1, 1]
     _(BulkJob.after_callback_events.tally.values).must_equal [1, 1, 1]
@@ -272,7 +272,7 @@ describe DecentJob::Bulk do
     buffer.add([job, job])
     buffer.prepare
 
-    _(buffer.active_jobs).must_equal [job]
+    _(buffer.jobs).must_equal [job]
     _(BulkJob.callback_events).must_equal [job.job_id]
     _(BulkJob.after_callback_events).must_equal [job.job_id]
   end
@@ -284,7 +284,7 @@ describe DecentJob::Bulk do
     buffer.capture { job.enqueue }
     buffer.prepare
 
-    _(buffer.active_jobs).must_equal [job]
+    _(buffer.jobs).must_equal [job]
     _(BulkJob.callback_events).must_equal [job.job_id]
     _(BulkJob.after_callback_events).must_equal [job.job_id]
   end

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "decent_job/active_job"
 class RecordingJob < ActiveJob::Base
   class_attribute :events, default: Queue.new
 

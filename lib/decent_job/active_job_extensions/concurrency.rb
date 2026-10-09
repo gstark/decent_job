@@ -1,60 +1,27 @@
 # frozen_string_literal: true
 
-require "decent_job/active_job_extensions/labels"
-require "decent_job/concurrency_controls"
-require "decent_job/concurrency_rule"
-require "decent_job/perform_controls"
+require "decent_job/job_extensions/concurrency"
 
 module DecentJob
   module ActiveJobExtensions
+    # Active Job runs the concurrency check as a named before_enqueue callback,
+    # so applications can skip it with skip_callback. The callback stays last
+    # when more enqueue callbacks are added later.
     module Concurrency
-      extend ActiveSupport::Concern
-      include Labels
+      ConcurrencyExceededError = DecentJob::ConcurrencyExceededError
+      ThrottleExceededError = DecentJob::ThrottleExceededError
 
-      class ConcurrencyExceededError < StandardError; end
-      class ThrottleExceededError < ConcurrencyExceededError; end
-
-      module Enqueue
-        def enqueue(options = {})
-          @decent_job_enqueue_concurrency_enabled = false
-          super
-        rescue ConcurrencyControls::AdmissionRejected => error
-          self.successfully_enqueued = false
-          self.enqueue_error = ActiveJob::EnqueueError.new(error.message)
-          false
-        end
+      def self.included(base)
+        base.include(JobExtensions::Concurrency)
+        base.extend(ClassMethods)
+        base.before_enqueue :_decent_job_concurrency_before_enqueue
       end
 
-      included do
-        prepend Enqueue
-
-        class_attribute :decent_job_concurrency_config, instance_accessor: false, default: {}.freeze
-        class_attribute :decent_job_concurrency_rules, instance_accessor: false, default: [].freeze
-        attr_writer :decent_job_concurrency_key
-
-        retry_on ConcurrencyExceededError, attempts: Float::INFINITY, wait: :polynomially_longer
-        before_enqueue :_decent_job_concurrency_before_enqueue
-        before_perform do |job|
-          context = Current.execution
-          if job.class.queue_adapter.is_a?(Adapter) && context && context[:job_id] == job.job_id
-            PerformControls.new(context.fetch(:database)).check(job, context)
-          end
-        end
-      end
-
-      class_methods do
+      module ClassMethods
         def set_callback(name, *filters, &block)
           result = super
           move_decent_job_enqueue_check_last if name.to_sym == :enqueue
           result
-        end
-
-        def decent_job_control_concurrency_with(**configuration)
-          self.decent_job_concurrency_config = configuration.dup.freeze
-        end
-
-        def decent_job_concurrency_rule(**configuration)
-          self.decent_job_concurrency_rules = (decent_job_concurrency_rules + [ConcurrencyRule.new(**configuration)]).freeze
         end
 
         private
@@ -72,58 +39,6 @@ module DecentJob
             callbacks.append(marker)
             job_class._enqueue_callbacks = callbacks
           end
-        end
-      end
-
-      def decent_job_applied_labels
-        super + self.class.decent_job_concurrency_rules.filter_map { |rule| rule.applied_label(self) }
-      end
-
-      def decent_job_enqueue_concurrency_enabled?
-        @decent_job_enqueue_concurrency_enabled != false
-      end
-
-      def decent_job_concurrency_key
-        return @decent_job_concurrency_key if @decent_job_concurrency_key
-
-        deserialize_arguments_if_needed
-        configuration = self.class.decent_job_concurrency_config
-        key = configuration.fetch(:key, self.class.name)
-        ConcurrencyRule.new(key: key).resolve(self, stage: :metadata)&.value
-      end
-
-      def decent_job_resolved_concurrency_rules(stage: nil)
-        deserialize_arguments_if_needed
-        rules = self.class.decent_job_concurrency_rules.filter_map { |rule| rule.resolve(self, stage: stage) }
-        configuration = self.class.decent_job_concurrency_config
-        if !configuration.empty? && !decent_job_concurrency_key.nil?
-          rules.unshift(ConcurrencyRule.new(**configuration.merge(key: decent_job_concurrency_key)).resolve(self, stage: stage))
-        end
-        rules
-      end
-
-      def serialize
-        key = decent_job_concurrency_key
-        keys = decent_job_resolved_concurrency_rules(stage: :metadata).select { |rule| rule.kind == "key" }.map(&:value)
-        super.merge(
-          "decent_job_concurrency_key" => key,
-          "decent_job_concurrency_keys" => [key, *keys].compact.uniq
-        )
-      end
-
-      def deserialize(job_data)
-        super
-        @decent_job_concurrency_key = job_data["decent_job_concurrency_key"] if job_data.key?("decent_job_concurrency_key")
-      end
-
-      private
-
-      def _decent_job_concurrency_before_enqueue
-        @decent_job_enqueue_concurrency_enabled = self.class.queue_adapter.is_a?(Adapter)
-        return if Current.execution&.fetch(:job_id, nil) == job_id
-
-        if @decent_job_enqueue_concurrency_enabled && !self.class.decent_job_concurrency_config.empty?
-          @decent_job_concurrency_key ||= decent_job_concurrency_key
         end
       end
     end

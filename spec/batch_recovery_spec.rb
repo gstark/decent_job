@@ -28,7 +28,7 @@ describe "batch completion recovery" do
     batch = DecentJob::Batch.enqueue([job], database: database, on_finish: BatchRecoveryCallbackJob)
     reader, writer = IO.pipe
     code = <<~RUBY
-      require "decent_job"
+      require "decent_job/active_job"
       ActiveJob::Base.logger = Logger.new(File::NULL)
       DecentJob.logger = Logger.new(File::NULL)
       DecentJob.configure { |config| config.database_url = JSON.parse(ENV.fetch("DECENT_JOB_TEST_CONNECTION")) }
@@ -59,7 +59,7 @@ describe "batch completion recovery" do
     performer = DecentJob::Performer.new(database: database)
     _(performer.perform_one(job_id: SecureRandom.uuid)).must_be_nil
     _(batch.reload.jobs_finished?).must_equal true
-    _(batch.callback_active_jobs.size).must_equal 1
+    _(batch.callback_job_instances.size).must_equal 1
     _(performer.perform_one.state).must_equal "succeeded"
     2.times { _(performer.perform_one).must_be_nil }
     _(batch.reload.succeeded?).must_equal true

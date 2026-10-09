@@ -60,7 +60,7 @@ These events are currently emitted by the runtime:
 
 | Event, followed by `.decent_job` | Payload | Built-in log level |
 | --- | --- | --- |
-| `enqueue_job` | Original `active_job`, original `scheduled_at` argument (nil for ordinary enqueue), `job` snapshot, `accepted`, `create_with_advisory_lock: false` | No default message |
+| `enqueue_job` | Original `job_instance`, original `scheduled_at` argument (nil for ordinary enqueue), `job` snapshot, `accepted`, `create_with_advisory_lock: false` | No default message |
 | `perform_job` | `job` and `execution` snapshots, OS `process_id`, `thread_name`, and outcome fields described below | info |
 | `enqueue_concurrency_limit_exceeded` | Original Active Job as `job`, resolved `key`, `kind`, `scope`, numeric `limit`, observed `count` | info |
 | `enqueue_concurrency_throttle_exceeded` | Same admission fields, plus `window` in seconds | info |

@@ -53,7 +53,7 @@ describe "recurring enqueue integration" do
   it "deduplicates the same occurrence from separate Ruby processes" do
     cron_entry.disable
     script = <<~RUBY
-      require "decent_job"
+      require "decent_job/active_job"
       class CronIntegrationJob < ActiveJob::Base
         def perform(*)
         end

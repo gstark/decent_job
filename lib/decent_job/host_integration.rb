@@ -2,6 +2,20 @@
 
 module DecentJob
   module HostIntegration
+    # Load the Railtie now under Rails, or before a Rails application that
+    # boots later reads its configuration. Without ActiveSupport there is no
+    # Rails application to configure.
+    def load_railtie_with_rails
+      if defined?(Rails::Railtie)
+        require "decent_job/railtie"
+      elsif defined?(ActiveSupport.on_load) && !@railtie_hook_registered
+        @railtie_hook_registered = true
+        ActiveSupport.on_load(:before_configuration) do
+          require "decent_job/railtie" if defined?(Rails::Railtie)
+        end
+      end
+    end
+
     def prepare_rails!
       @rails_ready = false
     end

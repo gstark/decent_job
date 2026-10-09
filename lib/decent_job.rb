@@ -2,17 +2,10 @@
 
 require "json"
 require "time"
-require "active_job"
 require "decent_job/support"
 require "decent_job/isolated_state"
 require "decent_job/notifications"
 require "decent_job/logging"
-require "decent_job/active_job_extensions/batches"
-require "decent_job/active_job_extensions/concurrency"
-require "decent_job/active_job_extensions/cron"
-require "decent_job/active_job_extensions/interrupt_errors"
-require "decent_job/active_job_extensions/labels"
-require "decent_job/active_job_extensions/notify_options"
 require "decent_job/adapter"
 require "decent_job/base"
 require "decent_job/batch"
@@ -37,6 +30,7 @@ require "decent_job/fork_safety"
 require "decent_job/host_integration"
 require "decent_job/inline_buffer"
 require "decent_job/instrumentation"
+require "decent_job/integrations"
 require "decent_job/interrupt_error"
 require "decent_job/interrupted_error"
 require "decent_job/job"
@@ -59,11 +53,6 @@ require "decent_job/supervisor"
 require "decent_job/systemd_service"
 require "decent_job/thread_status"
 require "decent_job/worker"
-
-ActiveJob::QueueAdapters.autoload :DecentJobAdapter, "active_job/queue_adapters/decent_job_adapter"
-ActiveJob::Base.include DecentJob::ActiveJobExtensions::Batches
-ActiveJob::Base.include DecentJob::ActiveJobExtensions::Cron
-ActiveJob.singleton_class.prepend DecentJob::ActiveJobExtensions::CronBulk
 
 module DecentJob
   extend LifecycleHooks
@@ -229,7 +218,7 @@ module DecentJob
       entries.each do |entry|
         klass = entry.job_class
         klass = klass.constantize if klass.is_a?(String)
-        next unless klass.is_a?(Class) && klass <= ActiveJob::Base
+        next unless Integrations.job_class?(klass)
         adapter = klass.queue_adapter
         unless adapter.is_a?(Adapter) && adapter.database.equal?(connection_pool)
           raise ArgumentError, "Cron jobs must use a DecentJob adapter with the cron entry database"
@@ -432,10 +421,10 @@ end
 
 DecentJob::LogSubscriber.attach_to(:decent_job)
 
-if defined?(Rails::Railtie)
-  require "decent_job/railtie"
-elsif defined?(ActiveSupport.on_load)
-  ActiveSupport.on_load(:before_configuration) do
-    require "decent_job/railtie" if defined?(Rails::Railtie)
-  end
+# When Active Job is already loaded, register the adapter name. The adapter
+# file loads the Active Job bridge on first lookup.
+if defined?(ActiveJob::QueueAdapters)
+  ActiveJob::QueueAdapters.autoload :DecentJobAdapter, "active_job/queue_adapters/decent_job_adapter"
 end
+
+DecentJob.load_railtie_with_rails
