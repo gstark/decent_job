@@ -1,6 +1,12 @@
 # frozen_string_literal: true
 
+require "json"
+require "time"
 require "active_job"
+require "decent_job/support"
+require "decent_job/isolated_state"
+require "decent_job/notifications"
+require "decent_job/logging"
 require "decent_job/active_job_extensions/batches"
 require "decent_job/active_job_extensions/concurrency"
 require "decent_job/active_job_extensions/cron"
@@ -425,7 +431,7 @@ DecentJob::LogSubscriber.attach_to(:decent_job)
 
 if defined?(Rails::Railtie)
   require "decent_job/railtie"
-else
+elsif defined?(ActiveSupport.on_load)
   ActiveSupport.on_load(:before_configuration) do
     require "decent_job/railtie" if defined?(Rails::Railtie)
   end

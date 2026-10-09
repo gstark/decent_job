@@ -6,7 +6,7 @@ module DecentJob
     def self.instrument(name, payload, database:, on_error: DecentJob.configuration.on_thread_error)
       Thread.handle_interrupt(Object => :never) do
         notification_payload = payload.dup
-        handle = observe(database, on_error) { ActiveSupport::Notifications.instrumenter.build_handle(name, notification_payload) }
+        handle = observe(database, on_error) { Notifications.build_handle(name, notification_payload) }
         completed = false
         begin
           observe(database, on_error) { handle.start } if handle
@@ -67,10 +67,10 @@ module DecentJob
 
     def self.report(error, database, on_error)
       # Do not start another application reporter while killed cleanup drains.
-      return if Thread.current.status == "aborting" || ActiveSupport::IsolatedExecutionState[:decent_job_reporting_observer_error]
+      return if Thread.current.status == "aborting" || IsolatedState[:decent_job_reporting_observer_error]
 
       begin
-        ActiveSupport::IsolatedExecutionState[:decent_job_reporting_observer_error] = true
+        IsolatedState[:decent_job_reporting_observer_error] = true
         callback = ->(*) { on_error&.call(error) }
         Thread.handle_interrupt(Object => :immediate) do
           database&.in_transaction? ? database.transaction(&callback) : callback.call
@@ -78,7 +78,7 @@ module DecentJob
       rescue Exception # standard:disable Lint/RescueException
         nil
       ensure
-        ActiveSupport::IsolatedExecutionState.delete(:decent_job_reporting_observer_error)
+        IsolatedState.delete(:decent_job_reporting_observer_error)
       end
     end
     private_class_method :report

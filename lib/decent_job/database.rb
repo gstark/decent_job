@@ -127,7 +127,7 @@ module DecentJob
     def with_connection
       raise ForkedDatabase, "create a new Database after forking" if @pid != Process.pid
 
-      owner = ActiveSupport::IsolatedExecutionState.context
+      owner = IsolatedState.context
       nested = @mutex.synchronize { @borrowed[owner] }
       return yield nested if nested
 
@@ -194,12 +194,12 @@ module DecentJob
     # Inspect only this context's checkout. An aborted transaction cannot accept
     # a savepoint; observers must still run so they can report the original error.
     def in_transaction?
-      connection = @mutex.synchronize { @borrowed[ActiveSupport::IsolatedExecutionState.context] }
+      connection = @mutex.synchronize { @borrowed[IsolatedState.context] }
       connection && !connection.finished? && connection.transaction_status == PG::PQTRANS_INTRANS
     end
 
     def after_commit(&block)
-      frames = @mutex.synchronize { @transaction_callbacks[@borrowed[ActiveSupport::IsolatedExecutionState.context]] }
+      frames = @mutex.synchronize { @transaction_callbacks[@borrowed[IsolatedState.context]] }
       if frames && !frames.empty?
         frames.last[:commit] << block
       else
@@ -210,7 +210,7 @@ module DecentJob
     # Savepoint commits retain these callbacks until the outer transaction ends.
     # Without an active transaction there is no rollback to observe.
     def after_rollback(&block)
-      frames = @mutex.synchronize { @transaction_callbacks[@borrowed[ActiveSupport::IsolatedExecutionState.context]] }
+      frames = @mutex.synchronize { @transaction_callbacks[@borrowed[IsolatedState.context]] }
       frames.last[:rollback] << block if frames && !frames.empty?
     end
 
@@ -218,7 +218,7 @@ module DecentJob
     # checkout, including application ensures and retirement of killed sessions.
     def after_connection_release(&block)
       connection = @mutex.synchronize do
-        current = @borrowed[ActiveSupport::IsolatedExecutionState.context]
+        current = @borrowed[IsolatedState.context]
         (@connection_release_callbacks[current] ||= []) << block if current
         current
       end

@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "active_support/core_ext/object/deep_dup"
-
 module DecentJob
   # Read-only attempt snapshots. Latencies and measured durations are seconds.
   class Execution
@@ -25,13 +23,13 @@ module DecentJob
     end
 
     def initialize(attributes, database:)
-      @attributes = attributes.deep_dup
+      @attributes = Support.deep_dup(attributes)
       @id = @attributes.fetch("id").to_s.dup.freeze
       @database = database
     end
 
     def attributes
-      @attributes.deep_dup
+      Support.deep_dup(@attributes)
     end
 
     def number

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "active_support/notifications"
+require "decent_job/notifications"
 require "time"
 
 module DecentJob
@@ -29,7 +29,7 @@ module DecentJob
       timestamp = cutoff.utc.iso8601(6)
       payload = {older_than: older_than, timestamp: cutoff, destroyed_jobs_count: 0,
                  destroyed_executions_count: 0, destroyed_batches_count: 0, destroyed_records_count: 0}
-      ActiveSupport::Notifications.instrument("cleanup_preserved_jobs.decent_job", payload) do
+      Notifications.instrument("cleanup_preserved_jobs.decent_job", payload) do
         pages("decent_jobs", timestamp, in_batches_of, stopping, include_discarded) do |id|
           counts = delete_job(id, timestamp, include_discarded)
           payload[:destroyed_jobs_count] += counts.fetch(:jobs)

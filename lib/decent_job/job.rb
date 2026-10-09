@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "active_support/core_ext/object/deep_dup"
-
 module DecentJob
   # A persisted job and its execution history, without an ORM dependency.
   class Job
@@ -28,7 +26,7 @@ module DecentJob
       @id = id.to_s.dup.freeze
       @database = database
       @store = Store.new(database)
-      @attributes = attributes.deep_dup if attributes
+      @attributes = Support.deep_dup(attributes) if attributes
     end
 
     def lock_type
@@ -36,7 +34,7 @@ module DecentJob
     end
 
     def attributes
-      @attributes.deep_dup
+      Support.deep_dup(@attributes)
     end
 
     def reload

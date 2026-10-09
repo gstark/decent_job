@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
-require "active_support/core_ext/object/blank"
-require "active_support/tagged_logging"
+require "decent_job/logging"
+require "decent_job/support"
 require "decent_job/configuration/errors"
 require "decent_job/configuration/validator"
 require "json"
@@ -81,7 +81,7 @@ module DecentJob
       @preserve_job_records = true
       @enable_cron = environment_boolean("DECENT_JOB_ENABLE_CRON", default: false)
       @cron_graceful_restart_period = Float(ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]) if ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]
-      @cron = ENV["DECENT_JOB_CRON"].present? ? JSON.parse(ENV.fetch("DECENT_JOB_CRON"), symbolize_names: true) : {}
+      @cron = Support.present?(ENV["DECENT_JOB_CRON"]) ? JSON.parse(ENV.fetch("DECENT_JOB_CRON"), symbolize_names: true) : {}
       @database_url = ENV["DECENT_JOB_DATABASE_URL"] || ENV["DATABASE_URL"]
       @environment_execution_mode = ENV["DECENT_JOB_EXECUTION_MODE"]&.to_sym
       @queues = ENV.fetch("DECENT_JOB_QUEUES", "*")
@@ -91,7 +91,7 @@ module DecentJob
       @enable_listen_notify = environment_boolean("DECENT_JOB_ENABLE_LISTEN_NOTIFY", default: true)
       @enable_pauses = environment_boolean("DECENT_JOB_ENABLE_PAUSES", default: false)
       @shutdown_timeout = Float(ENV.fetch("DECENT_JOB_SHUTDOWN_TIMEOUT", "30"))
-      @default_logger = ActiveSupport::TaggedLogging.new(ActiveSupport::Logger.new($stdout))
+      @default_logger = Logging.tagged_logger($stdout)
       @baseline_options = GENERIC_OPTIONS.each_with_object({}) do |name, baseline|
         variable = "@#{name}"
         baseline[name] = copy_containers(instance_variable_get(variable)) if instance_variable_defined?(variable)
@@ -147,7 +147,7 @@ module DecentJob
         unless GENERIC_OPTIONS.include?(key) || SPECIAL_OPTIONS.include?(key)
           raise ArgumentError, "unknown configuration option: #{name.inspect}"
         end
-        normalized[key] = value unless key == :cron && value.blank?
+        normalized[key] = value unless key == :cron && Support.blank?(value)
       end
       options = normalized
       @rails_environment = environment
@@ -351,7 +351,7 @@ module DecentJob
       validate_handled_exceptions!
 
       @handled_exceptions.map do |value|
-        klass = value.is_a?(String) ? value.constantize : value
+        klass = value.is_a?(String) ? Support.constantize(value) : value
         raise ArgumentError, "handled_exceptions must contain exception classes or class names" unless klass.is_a?(Class) && klass <= Exception
         klass
       rescue NameError

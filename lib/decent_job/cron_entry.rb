@@ -65,9 +65,9 @@ module DecentJob
       @errors = {}
       add_error(:key, "must be a Symbol") unless key.is_a?(Symbol)
       add_error(:cron, "is not a valid schedule") unless cron.respond_to?(:call) || schedule
-      unless job_class.blank? || job_class.is_a?(Class) || job_class.respond_to?(:call)
+      unless Support.blank?(job_class) || job_class.is_a?(Class) || job_class.respond_to?(:call)
         begin
-          resolved = job_class.is_a?(String) && job_class.constantize
+          resolved = job_class.is_a?(String) && Support.constantize(job_class)
           add_error(:class, "must resolve to a Class") unless resolved.is_a?(Class)
         rescue NameError
           add_error(:class, "does not exist")
@@ -83,8 +83,8 @@ module DecentJob
     def display_properties
       {key: key, class: display_property(job_class), cron: display_schedule,
        set: display_property(set), description: display_property(description)}.tap do |properties|
-        properties[:args] = display_property(args) if args.present?
-        properties[:kwargs] = display_property(kwargs) if kwargs.present?
+        properties[:args] = display_property(args) if Support.present?(args)
+        properties[:kwargs] = display_property(kwargs) if Support.present?(kwargs)
       end
     end
 
@@ -208,8 +208,8 @@ module DecentJob
 
     def enqueue_definition
       klass = resolve_value(job_class)
-      return if klass.blank?
-      klass = klass.constantize if klass.is_a?(String)
+      return if Support.blank?(klass)
+      klass = Support.constantize(klass) if klass.is_a?(String)
       return klass unless klass.is_a?(Class)
 
       klass.set(resolve_value(set) || {}).perform_later(*(resolve_value(args) || []), **(resolve_value(kwargs) || {}))

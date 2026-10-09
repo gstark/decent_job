@@ -80,18 +80,10 @@ module DecentJob
 
       @stdout.sync = true if @stdout.respond_to?(:sync=)
       destinations = LogSubscriber.loggers
-      return if destinations.any? { |logger| logger_outputs_to_stdout?(logger) }
+      return if destinations.any? { |logger| Logging.outputs_to?(logger, @stdout) }
 
-      destinations << ActiveSupport::TaggedLogging.new(ActiveSupport::Logger.new(@stdout))
+      destinations << Logging.tagged_logger(@stdout)
       LogSubscriber.reset_logger
-    end
-
-    def logger_outputs_to_stdout?(logger)
-      if logger.is_a?(ActiveSupport::BroadcastLogger)
-        logger.broadcasts.any? { |destination| logger_outputs_to_stdout?(destination) }
-      else
-        ActiveSupport::Logger.logger_outputs_to?(logger, @stdout)
-      end
     end
 
     def option_parser(options, applications)

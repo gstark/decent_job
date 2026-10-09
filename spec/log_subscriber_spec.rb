@@ -24,10 +24,10 @@ describe "DecentJob logging" do
 
   it "attaches once and supports detach and reattach" do
     _(@subscriber.subscribers.count { |subscriber| subscriber.is_a?(@subscriber) }).must_equal 1
-    ActiveSupport::Notifications.instrument("notifier_listen.decent_job")
+    DecentJob::Notifications.instrument("notifier_listen.decent_job")
     _(@output.string.scan("Notifier subscribed with LISTEN").size).must_equal 1
     @subscriber.detach_from(:decent_job)
-    ActiveSupport::Notifications.instrument("notifier_listen.decent_job")
+    DecentJob::Notifications.instrument("notifier_listen.decent_job")
     _(@output.string.scan("Notifier subscribed with LISTEN").size).must_equal 1
   ensure
     @subscriber.attach_to(:decent_job)
@@ -56,13 +56,13 @@ describe "DecentJob logging" do
   }.each do |name, (payload, severity, message)|
     it "logs #{name} at #{severity} level" do
       @logger.level = Logger.const_get(severity.upcase)
-      ActiveSupport::Notifications.instrument("#{name}.decent_job", payload)
+      DecentJob::Notifications.instrument("#{name}.decent_job", payload)
       _(@output.string).must_include "[DecentJob]"
       _(@output.string).must_include message
       @output.truncate(0)
       @output.rewind
       @logger.level += 1
-      ActiveSupport::Notifications.instrument("#{name}.decent_job", payload)
+      DecentJob::Notifications.instrument("#{name}.decent_job", payload)
       _(@output.string).must_equal ""
     end
   end
@@ -72,30 +72,30 @@ describe "DecentJob logging" do
       error = ArgumentError.new("broken")
       error.set_backtrace(["job.rb:123"])
       @logger.level = Logger::ERROR
-      ActiveSupport::Notifications.instrument("#{name}.decent_job", error: error)
+      DecentJob::Notifications.instrument("#{name}.decent_job", error: error)
       _(@output.string).must_include "ArgumentError: broken"
       _(@output.string).must_include "job.rb:123"
     end
   end
 
   it "describes unfinished shutdown and unsuccessful restart truthfully" do
-    ActiveSupport::Notifications.instrument("scheduler_shutdown.decent_job", stopped: false)
+    DecentJob::Notifications.instrument("scheduler_shutdown.decent_job", stopped: false)
     _(@output.string).must_include "scheduler is still draining."
     _(@output.string).wont_include "scheduler is shut down."
-    ActiveSupport::Notifications.instrument("scheduler_restart_pools.decent_job", restarted: false, outcome: :refused)
+    DecentJob::Notifications.instrument("scheduler_restart_pools.decent_job", restarted: false, outcome: :refused)
     _(@output.string).must_include "scheduler restart refused."
     _(@output.string).wont_include "scheduler has restarted."
   end
 
   it "ignores successful timer and job tasks" do
-    %i[finished_timer_task finished_job_task].each { |name| ActiveSupport::Notifications.instrument("#{name}.decent_job", error: nil) }
+    %i[finished_timer_task finished_job_task].each { |name| DecentJob::Notifications.instrument("#{name}.decent_job", error: nil) }
     _(@output.string).must_equal ""
   end
 
   it "logs job identifiers without serializing arguments and restores caller tags" do
     job = Struct.new(:id).new("job-123")
     @logger.tagged("ActiveJob", "caller") do
-      ActiveSupport::Notifications.instrument("perform_job.decent_job", job: job, process_id: 42, thread_name: "worker")
+      DecentJob::Notifications.instrument("perform_job.decent_job", job: job, process_id: 42, thread_name: "worker")
       _(@logger.formatter.current_tags).must_equal ["ActiveJob", "caller"]
     end
     _(@output.string).must_include "[ActiveJob] [caller] [ActiveJob] [DecentJob] [42] [worker] Executed DecentJob job-123"
@@ -105,9 +105,9 @@ describe "DecentJob logging" do
   it "pluralizes cron and concurrency messages" do
     job = LoggingJob.new("secret-argument")
     [1, 2].each do |count|
-      ActiveSupport::Notifications.instrument("cron_manager_start.decent_job", cron_entries: Array.new(count))
+      DecentJob::Notifications.instrument("cron_manager_start.decent_job", cron_entries: Array.new(count))
       %i[enqueue_concurrency_limit_exceeded enqueue_concurrency_throttle_exceeded].each do |name|
-        ActiveSupport::Notifications.instrument("#{name}.decent_job", job: job, key: "account", limit: count)
+        DecentJob::Notifications.instrument("#{name}.decent_job", job: job, key: "account", limit: count)
       end
       _(@output.string).must_include "#{count} #{(count == 1) ? "job" : "jobs"}"
     end
@@ -117,8 +117,8 @@ describe "DecentJob logging" do
   end
 
   it "logs kills without active jobs and subprocess signals" do
-    ActiveSupport::Notifications.instrument("scheduler_shutdown_kill.decent_job")
-    ActiveSupport::Notifications.instrument("cluster_reap.decent_job", pid: 42, signal: Signal.list.fetch("TERM"))
+    DecentJob::Notifications.instrument("scheduler_shutdown_kill.decent_job")
+    DecentJob::Notifications.instrument("cluster_reap.decent_job", pid: 42, signal: Signal.list.fetch("TERM"))
     _(@output.string).must_include "scheduler has been killed."
     _(@output.string).wont_include "interrupted"
     _(@output.string).must_include "signal: TERM"
@@ -129,15 +129,15 @@ describe "DecentJob logging" do
     second_logger = Logger.new(second_output, level: Logger::WARN)
     @subscriber.loggers << second_logger
     @subscriber.reset_logger
-    ActiveSupport::Notifications.instrument("notifier_listen.decent_job")
+    DecentJob::Notifications.instrument("notifier_listen.decent_job")
     _(@output.string).must_include "LISTEN"
     _(second_output.string).must_equal ""
-    ActiveSupport::Notifications.instrument("scheduler_shutdown_kill.decent_job")
+    DecentJob::Notifications.instrument("scheduler_shutdown_kill.decent_job")
     _(second_output.string).must_include "killed"
     @logger.level = Logger::WARN
     job = Object.new
     def job.id = raise("must remain lazy")
-    ActiveSupport::Notifications.instrument("perform_job.decent_job", job: job)
+    DecentJob::Notifications.instrument("perform_job.decent_job", job: job)
     _(@output.string).wont_include "must remain lazy"
   end
 
@@ -148,7 +148,7 @@ describe "DecentJob logging" do
     @subscriber.loggers.replace([broadcast])
     @subscriber.reset_logger
     @logger.tagged("caller") do
-      ActiveSupport::Notifications.instrument("scheduler_shutdown_start.decent_job", process_id: 42)
+      DecentJob::Notifications.instrument("scheduler_shutdown_start.decent_job", process_id: 42)
       _(@logger.formatter.current_tags).must_equal ["caller"]
       _(second.formatter.current_tags).must_equal []
     end
@@ -166,11 +166,11 @@ describe "DecentJob logging" do
     broadcast = ActiveSupport::BroadcastLogger.new(@logger, inner)
     @subscriber.loggers.replace([broadcast])
     @subscriber.reset_logger
-    ActiveSupport::Notifications.instrument("scheduler_shutdown_start.decent_job", process_id: 42)
+    DecentJob::Notifications.instrument("scheduler_shutdown_start.decent_job", process_id: 42)
     _(@output.string.lines.size).must_equal 1
     _(second_output.string).must_equal ""
     _(plain_output.string).must_equal ""
-    ActiveSupport::Notifications.instrument("scheduler_shutdown_kill.decent_job", process_id: 42)
+    DecentJob::Notifications.instrument("scheduler_shutdown_kill.decent_job", process_id: 42)
     _(@output.string.lines.size).must_equal 2
     _(second_output.string.lines).must_equal ["[DecentJob] [42] DecentJob scheduler has been killed.\n"]
     _(plain_output.string).must_equal ""
@@ -178,7 +178,7 @@ describe "DecentJob logging" do
     def second.error(*) = raise("broken nested error sink")
     @logger.tagged("outer") do
       second.tagged("nested") do
-        ActiveSupport::Notifications.instrument("scheduler_shutdown_kill.decent_job", process_id: 42)
+        DecentJob::Notifications.instrument("scheduler_shutdown_kill.decent_job", process_id: 42)
         _(@logger.formatter.current_tags).must_equal ["outer"]
         _(second.formatter.current_tags).must_equal ["nested"]
       end
@@ -196,28 +196,28 @@ describe "DecentJob logging" do
     broadcast = ActiveSupport::BroadcastLogger.new(@logger, inner)
     @subscriber.loggers.replace([broadcast])
     @subscriber.reset_logger
-    ActiveSupport::Notifications.instrument("scheduler_shutdown_start.decent_job", process_id: 42)
+    DecentJob::Notifications.instrument("scheduler_shutdown_start.decent_job", process_id: 42)
     _(@output.string.lines).must_equal Array.new(2, "[DecentJob] [42] DecentJob shutting down scheduler...\n")
     _(@logger.formatter.current_tags).must_equal []
   end
 
   it "supports a tagged logger with a nil formatter" do
     @logger.formatter = nil
-    ActiveSupport::Notifications.instrument("notifier_listen.decent_job")
+    DecentJob::Notifications.instrument("notifier_listen.decent_job")
     _(@output.string).must_include "Notifier subscribed with LISTEN"
   end
 
   it "restores tags and contains failing log destinations" do
     def @logger.info(*) = raise("broken sink")
     @logger.tagged("caller") do
-      ActiveSupport::Notifications.instrument("notifier_listen.decent_job")
+      DecentJob::Notifications.instrument("notifier_listen.decent_job")
       _(@logger.formatter.current_tags).must_equal ["caller"]
     end
   end
 
   it "exposes a cached broadcast logger rebuilt on reset" do
     logger = @subscriber.logger
-    _(logger).must_be_kind_of ActiveSupport::BroadcastLogger
+    _(logger).must_be_kind_of DecentJob::Logging::BroadcastLogger
     _(@subscriber.logger).must_be_same_as logger
     @subscriber.reset_logger
     _(@subscriber.logger).wont_be_same_as logger
@@ -228,7 +228,7 @@ describe "DecentJob logging" do
     DecentJob.configure { |config| config.logger = Logger.new(StringIO.new) }
     DecentJob.reset!
     _(@subscriber.loggers).must_equal [@logger]
-    ActiveSupport::Notifications.instrument("notifier_listen.decent_job")
+    DecentJob::Notifications.instrument("notifier_listen.decent_job")
     _(@output.string).must_include "LISTEN"
   end
 end

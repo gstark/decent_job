@@ -2,13 +2,13 @@
 
 # Event messages adapted from GoodJob; see LICENSE for the upstream notice.
 
-require "active_support/broadcast_logger"
-require "active_support/log_subscriber"
-require "active_support/tagged_logging"
+require "decent_job/logging"
+require "decent_job/notifications"
+require "decent_job/support"
 
 module DecentJob
   # Logs the public notification vocabulary without serializing job arguments.
-  class LogSubscriber < ActiveSupport::LogSubscriber
+  class LogSubscriber
     def finished_timer_task(event)
       exception = event.payload[:error]
       return unless exception
@@ -42,7 +42,7 @@ module DecentJob
       cron_jobs_count = cron_entries.size
 
       info do
-        "DecentJob started cron with #{cron_jobs_count} #{"job".pluralize(cron_jobs_count)}."
+        "DecentJob started cron with #{cron_jobs_count} #{Support.pluralize(cron_jobs_count, "job")}."
       end
     end
 
@@ -196,7 +196,7 @@ module DecentJob
       destroyed_records_count = event.payload[:destroyed_records_count]
 
       info do
-        "DecentJob destroyed #{destroyed_records_count} preserved job execution #{"records".pluralize(destroyed_records_count)} finished before #{timestamp}."
+        "DecentJob destroyed #{destroyed_records_count} preserved job execution #{Support.pluralize(destroyed_records_count, "record")} finished before #{timestamp}."
       end
     end
 
@@ -206,7 +206,7 @@ module DecentJob
       limit = event.payload[:limit]
 
       info do
-        "Aborted enqueue of #{job.class.name} (Job ID: #{job.job_id}) because the concurrency key '#{key}' has reached its enqueue limit of #{limit} #{"job".pluralize(limit)}"
+        "Aborted enqueue of #{job.class.name} (Job ID: #{job.job_id}) because the concurrency key '#{key}' has reached its enqueue limit of #{limit} #{Support.pluralize(limit, "job")}"
       end
     end
 
@@ -216,7 +216,7 @@ module DecentJob
       limit = event.payload[:limit]
 
       info do
-        "Aborted enqueue of #{job.class.name} (Job ID: #{job.job_id}) because the concurrency key '#{key}' has reached its throttle limit of #{limit} #{"job".pluralize(limit)}"
+        "Aborted enqueue of #{job.class.name} (Job ID: #{job.job_id}) because the concurrency key '#{key}' has reached its throttle limit of #{limit} #{Support.pluralize(limit, "job")}"
       end
     end
 
@@ -240,7 +240,36 @@ module DecentJob
       self.class.logger
     end
 
+    # Handlers swallow their own failures: logging must never fail the runtime.
+    def call(event)
+      handler = event.name.split(".").first.to_sym
+      public_send(handler, event) if self.class.handlers.include?(handler)
+    rescue => error
+      log_exception(event.name, error)
+    end
+
     class << self
+      def handlers
+        @handlers ||= public_instance_methods(false) - %i[logger call]
+      end
+
+      def subscribers
+        attachments.values.map(&:first)
+      end
+
+      def attach_to(namespace)
+        return if attachments.key?(namespace)
+
+        subscriber = new
+        subscription = Notifications.subscribe(/\.#{Regexp.escape(namespace.to_s)}\z/) { |event| subscriber.call(event) }
+        attachments[namespace] = [subscriber, subscription]
+      end
+
+      def detach_from(namespace)
+        _subscriber, subscription = attachments.delete(namespace)
+        Notifications.unsubscribe(subscription) if subscription
+      end
+
       # Changing this array opts into explicit destinations. Configuration changes
       # only replace the default destination while the array remains untouched.
       def loggers
@@ -260,11 +289,17 @@ module DecentJob
 
       def logger
         destinations = loggers
-        @logger ||= ActiveSupport::BroadcastLogger.new(*destinations)
+        @logger ||= Logging::BroadcastLogger.new(*destinations)
       end
 
       def reset_logger
         @logger = nil
+      end
+
+      private
+
+      def attachments
+        @attachments ||= {}
       end
     end
 
@@ -287,7 +322,7 @@ module DecentJob
     # leaves directly, then let the original broadcast write the event once.
     def leaf_loggers(destinations)
       destinations.flat_map do |destination|
-        destination.is_a?(ActiveSupport::BroadcastLogger) ? leaf_loggers(destination.broadcasts) : [destination]
+        destination.respond_to?(:broadcasts) ? leaf_loggers(destination.broadcasts) : [destination]
       end.uniq(&:object_id)
     end
 
@@ -297,10 +332,10 @@ module DecentJob
       end
     end
 
-    # ActiveSupport reports subscriber exceptions through the same logger. A
-    # failed destination must not turn that reporting into a runtime failure.
+    # Report handler failures through the same logger. A failed destination
+    # must not turn that reporting into a runtime failure.
     def log_exception(name, exception)
-      super
+      logger.error("Could not log #{name.inspect} event. #{exception.class}: #{exception.message} #{exception.backtrace}")
     rescue
       nil
     end

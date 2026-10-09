@@ -73,7 +73,7 @@ module DecentJob
 
     def stored_error
       details = @record.error || {}
-      klass = details.fetch("class").constantize
+      klass = Support.constantize(details.fetch("class"))
       raise TypeError, "Stored error is not an exception" unless klass <= Exception
       klass.new(details["message"]).tap { |error| error.set_backtrace(details["backtrace"]) }
     rescue

@@ -34,7 +34,7 @@ module DecentJob
         end
       end
       DecentJob.start unless @stopped
-      ActiveSupport::Notifications.instrument("subprocess_start.decent_job", pid: Process.pid, index: @index)
+      Notifications.instrument("subprocess_start.decent_job", pid: Process.pid, index: @index)
       until @stopped || Process.ppid != @supervisor_pid || !DecentJob.started?
         report_readiness
         IO.select([@reader], nil, nil, CHECK_INTERVAL)
@@ -43,14 +43,14 @@ module DecentJob
       true
     ensure
       begin
-        ActiveSupport::Notifications.instrument("subprocess_shutdown_start.decent_job", pid: Process.pid, index: @index)
+        Notifications.instrument("subprocess_shutdown_start.decent_job", pid: Process.pid, index: @index)
       rescue Exception => error # standard:disable Lint/RescueException
         DecentJob.report_thread_error(error)
       end
       begin
         @drained = DecentJob.shutdown(timeout: @immediate ? 0 : @configuration.shutdown_timeout)
         begin
-          ActiveSupport::Notifications.instrument("subprocess_shutdown.decent_job", pid: Process.pid, index: @index)
+          Notifications.instrument("subprocess_shutdown.decent_job", pid: Process.pid, index: @index)
         rescue Exception => error # standard:disable Lint/RescueException
           DecentJob.report_thread_error(error)
         end

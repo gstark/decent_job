@@ -17,7 +17,7 @@ module DecentJob
 
     def run_lifecycle_hooks(event)
       lifecycle_hooks.fetch(event).dup.each do |hook|
-        ActiveSupport::Notifications.instrument("#{event}.decent_job") { hook.call }
+        Notifications.instrument("#{event}.decent_job") { hook.call }
       rescue => error
         report_thread_error(error)
       end

@@ -17,7 +17,7 @@ module DecentJob
 
       receipts = []
       begin
-        ExecutionState.with(:lifecycle_events, Scope.new(pid: Process.pid, owner: ActiveSupport::IsolatedExecutionState.context, receipts: [].freeze)) do
+        ExecutionState.with(:lifecycle_events, Scope.new(pid: Process.pid, owner: IsolatedState.context, receipts: [].freeze)) do
           yield
         ensure
           receipts = owned_scope&.receipts || []
@@ -49,7 +49,7 @@ module DecentJob
       return if observing?(receipt.resource)
       scope = ExecutionState[:lifecycle_observers]
       resources = owned?(scope) ? scope.receipts : []
-      current = Scope.new(pid: Process.pid, owner: ActiveSupport::IsolatedExecutionState.context, receipts: (resources + [receipt.resource]).freeze)
+      current = Scope.new(pid: Process.pid, owner: IsolatedState.context, receipts: (resources + [receipt.resource]).freeze)
       ExecutionState.with(:lifecycle_observers, current) do
         Instrumentation.instrument("#{receipt.name}.decent_job", receipt.payload, database: receipt.database, on_error: receipt.on_error) {}
       end
@@ -73,7 +73,7 @@ module DecentJob
     private_class_method :owned_scope
 
     def self.owned?(scope)
-      scope && scope.pid == Process.pid && scope.owner.equal?(ActiveSupport::IsolatedExecutionState.context)
+      scope && scope.pid == Process.pid && scope.owner.equal?(IsolatedState.context)
     end
     private_class_method :owned?
   end

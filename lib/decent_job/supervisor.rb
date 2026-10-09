@@ -117,7 +117,7 @@ module DecentJob
     private
 
     def instrument(event, **payload)
-      ActiveSupport::Notifications.instrument("#{event}.decent_job", payload)
+      Notifications.instrument("#{event}.decent_job", payload)
     end
 
     def report_error(error)

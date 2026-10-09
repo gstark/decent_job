@@ -42,7 +42,7 @@ describe "DecentJob CLI logging" do
   it "adds one tagged stdout destination across repeated calls" do
     DecentJob::CLI.within_exe = true
     DecentJob.stub(:cleanup_preserved_jobs, ->(**) {
-      ActiveSupport::Notifications.instrument("notifier_listen.decent_job")
+      DecentJob::Notifications.instrument("notifier_listen.decent_job")
       0
     }) do
       2.times { _(@cli.run(["cleanup"])).must_equal 0 }
@@ -77,7 +77,7 @@ describe "DecentJob CLI logging" do
     DecentJob::LogSubscriber.loggers << destination
     DecentJob::LogSubscriber.reset_logger
     DecentJob.stub(:cleanup_preserved_jobs, ->(**) {
-      ActiveSupport::Notifications.instrument("notifier_listen.decent_job")
+      DecentJob::Notifications.instrument("notifier_listen.decent_job")
       0
     }) do
       2.times { _(@cli.run(["cleanup"])).must_equal 0 }
@@ -129,13 +129,13 @@ describe "DecentJob default logging" do
       DecentJob.configure { |config| config.logger = first }
       raise "stale configuration" unless subscriber.loggers == [first]
       raise "stale broadcast" if subscriber.logger.equal?(original)
-      ActiveSupport::Notifications.instrument("notifier_listen.decent_job")
+      DecentJob::Notifications.instrument("notifier_listen.decent_job")
       raise "missing configured message" unless first_output.string.include?("LISTEN")
       second_output = StringIO.new
       second = Logger.new(second_output)
       DecentJob.logger = second
       raise "setter not shared" unless DecentJob.configuration.logger.equal?(second)
-      ActiveSupport::Notifications.instrument("notifier_unlisten.decent_job")
+      DecentJob::Notifications.instrument("notifier_unlisten.decent_job")
       raise "missing assigned message" unless second_output.string.include?("UNLISTEN")
       raise "stale sink" if first_output.string.include?("UNLISTEN")
       DecentJob.reset!

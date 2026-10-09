@@ -1,11 +1,9 @@
 # frozen_string_literal: true
 
-require "active_support/core_ext/object/deep_dup"
-
 module DecentJob
   module Stats
     def self.aggregate(schedulers)
-      schedulers = schedulers.deep_dup
+      schedulers = Support.deep_dup(schedulers)
       result = {schedulers: schedulers}
       %i[empty_executions_count errored_executions_count succeeded_executions_count total_executions_count].each do |key|
         result[key] = schedulers.sum { |pool| pool.fetch(key) }

@@ -25,7 +25,7 @@ module DecentJob
       yield
     ensure
       Thread.handle_interrupt(Object => :never) do
-        current = ActiveSupport::IsolatedExecutionState[:decent_job]
+        current = IsolatedState[:decent_job]
         # A reset or fork starts a new generation. Never publish an old scope's
         # snapshot again, even if its ensure runs before the next state read.
         if scope && current && current.pid == Process.pid && current.generation.equal?(scope.generation)
@@ -35,14 +35,14 @@ module DecentJob
     end
 
     def self.reset_after_fork
-      ActiveSupport::IsolatedExecutionState.delete(:decent_job)
+      IsolatedState.delete(:decent_job)
     end
 
     def self.state
-      current = ActiveSupport::IsolatedExecutionState[:decent_job]
+      current = IsolatedState[:decent_job]
       unless current && current.pid == Process.pid
         current = State.new(pid: Process.pid, generation: Object.new, values: {}.freeze)
-        ActiveSupport::IsolatedExecutionState[:decent_job] = current
+        IsolatedState[:decent_job] = current
       end
       current
     end
@@ -50,7 +50,7 @@ module DecentJob
     def self.store(current, key, value)
       # Host streaming copies the top-level execution state with share_with.
       # Replace snapshots so neither context can mutate the other's values.
-      ActiveSupport::IsolatedExecutionState[:decent_job] = current.with(values: current.values.merge(key => value).freeze)
+      IsolatedState[:decent_job] = current.with(values: current.values.merge(key => value).freeze)
     end
     private_class_method :state, :store
   end

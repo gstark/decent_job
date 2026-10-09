@@ -261,7 +261,7 @@ module DecentJob
       raise ArgumentError, "Unknown batch attributes" unless (values.keys - ATTRIBUTES).empty?
       values.each do |key, value|
         if key.start_with?("on_") && value
-          klass = value.is_a?(Class) ? value : value.to_s.constantize
+          klass = value.is_a?(Class) ? value : Support.constantize(value)
           validate_adapter(klass)
           values[key] = klass.name
         end
@@ -298,7 +298,7 @@ module DecentJob
       return if events.empty?
       batch = Batch.find(id, database: @database)
       pairs = events.map do |event|
-        klass = event.fetch("job_class").constantize
+        klass = Support.constantize(event.fetch("job_class"))
         validate_adapter(klass)
         options = {queue: event["queue_name"], priority: event["priority"]&.to_i}.compact
         [event, klass.new(batch, {event: event.fetch("event").to_sym}).tap { |job| job.set(**options) }]

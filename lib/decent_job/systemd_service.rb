@@ -29,7 +29,7 @@ module DecentJob
       safely { SdNotify.ready }
       interval = SdNotify.watchdog_interval / 2
       if interval.positive?
-        safely { ActiveSupport::Notifications.instrument("systemd_watchdog_start.decent_job", interval: interval) }
+        safely { Notifications.instrument("systemd_watchdog_start.decent_job", interval: interval) }
         @mutex.synchronize do
           if !@stopping && @active && @generation == generation
             @watchdog = Thread.new { run_watchdog(interval, generation) }
@@ -117,7 +117,7 @@ module DecentJob
       yield
     rescue Exception => error # standard:disable Lint/RescueException
       begin
-        ActiveSupport::Notifications.instrument("systemd_watchdog_error.decent_job", error: error)
+        Notifications.instrument("systemd_watchdog_error.decent_job", error: error)
       rescue Exception # standard:disable Lint/RescueException
         # Subscribers are application callbacks too.
       end
