@@ -152,8 +152,11 @@ module DecentJob
 
       worker = @worker_mutex.synchronize do
         return if @stopping
-        @worker ||= Worker.new(database: database, **DecentJob.configuration.worker_options)
-        DecentJob.start_worker(@worker)
+        connection_pool = database
+        DecentJob.synchronize_resource_start do
+          @worker ||= Worker.new(database: connection_pool, **DecentJob.configuration.worker_options)
+          DecentJob.start_worker(@worker)
+        end
       end
       DecentJob.start_cron(database: database, automatic: true) if worker && DecentJob.configuration.enable_cron
       worker

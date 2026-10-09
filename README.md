@@ -77,6 +77,7 @@ DecentJob.configure do |config|
   config.execution_mode = :external
   config.queues = "urgent:2;default:3"
   config.max_threads = 5
+  config.lower_thread_priority = false
   config.poll_interval = 10
   config.max_cache = 10_000
   config.enable_listen_notify = true
@@ -86,7 +87,7 @@ DecentJob.configure do |config|
 end
 ```
 
-`DECENT_JOB_DATABASE_URL` falls back to `DATABASE_URL`. The other settings support `DECENT_JOB_EXECUTION_MODE`, `DECENT_JOB_QUEUES`, `DECENT_JOB_MAX_THREADS`, `DECENT_JOB_POLL_INTERVAL`, `DECENT_JOB_MAX_CACHE`, `DECENT_JOB_ENABLE_LISTEN_NOTIFY`, `DECENT_JOB_ENABLE_PAUSES`, and `DECENT_JOB_SHUTDOWN_TIMEOUT`. Set notification configuration to `false` to disable it. CLI options override configuration in the required application file.
+`DECENT_JOB_DATABASE_URL` falls back to `DATABASE_URL`. The other settings support `DECENT_JOB_EXECUTION_MODE`, `DECENT_JOB_QUEUES`, `DECENT_JOB_MAX_THREADS`, `DECENT_JOB_LOWER_THREAD_PRIORITY`, `DECENT_JOB_POLL_INTERVAL`, `DECENT_JOB_MAX_CACHE`, `DECENT_JOB_ENABLE_LISTEN_NOTIFY`, `DECENT_JOB_ENABLE_PAUSES`, and `DECENT_JOB_SHUTDOWN_TIMEOUT`. Set notification configuration to `false` to disable it. CLI options override configuration in the required application file.
 
 Queue expressions:
 
@@ -103,6 +104,8 @@ Smaller priority numbers run first. Equal priorities use scheduled time and job 
 The default database pool reserves one connection per execution thread plus two for application operations. Automatic cron adds three per configured entry, or four when restart catch-up is enabled. Each worker's heartbeat monitor and optional listener have additional dedicated connections. Account separately for connections used by application code, especially Active Record. See [recurring jobs](docs/recurring-jobs.md) for scheduler costs and [process tracking](docs/process-tracking.md) for heartbeat lifecycle, worker statistics, and connection sizing.
 
 Per-job notification controls and transactional publication are described in [notifications](docs/notifications.md). Disabling a notification does not prevent execution. Workers cache future deadlines and can run scheduled jobs with polling disabled. See [worker scheduling](docs/scheduling.md) for cache limits, polling defaults, and recovery tradeoffs.
+
+Use `DecentJob.stats` and `DecentJob.idle?` to inspect registered workers in the current process. Jobs can use `DecentJob.current_thread_shutting_down?` for cooperative shutdown. See [worker activity and thread controls](docs/worker-observability.md) for counters, timestamps, and `--lower-thread-priority` configuration.
 
 ## Embedded execution and tests
 

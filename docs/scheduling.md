@@ -41,4 +41,6 @@ A limit of zero disables startup cache warming. Future notifications still sched
 
 The listener uses a dedicated PostgreSQL connection, sends a keepalive query every 10 seconds, and reconnects after errors. A successful connection wakes workers to catch up on available work and rebuild positive caches. Invalid notification payloads are reported through `on_thread_error` without disconnecting the listener. Rails notification dispatch runs inside the application executor.
 
+DecentJob reports connection errors as they occur and marks listener readiness false immediately. Reporter failures do not stop reconnection. The independent heartbeat connection keeps process registration alive while the listener reconnects or execution-pool checkouts time out. Shutdown closes the listener connection; restarting creates a fresh listener and process identity.
+
 Polling provides recovery for missed notifications and changes made outside DecentJob. Disabling both polling and notifications leaves a running worker dependent on cached deadlines and explicit wakeups. SQL claim checks prevent stale cached deadlines from executing deleted, rescheduled, paused, or already claimed work.

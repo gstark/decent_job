@@ -41,6 +41,7 @@ module DecentJob
     def after_supervisor_fork(configuration)
       Daemon.after_fork!
       @runtime_mutex = Mutex.new
+      @thread_priority_mutex = Mutex.new
       Database.reset_after_fork
       configuration.execution_mode = :external if Configuration::ASYNC_MODES.include?(configuration.execution_mode)
       @configuration = configuration
@@ -55,6 +56,7 @@ module DecentJob
       # Preserve registered adapters in the child's lifecycle so reset! retires
       # them, without adopting ObjectSpace's allocated or failed adapters.
       ObjectSpace.each_object(Adapter, &:reset_after_fork)
+      ActiveSupport::IsolatedExecutionState.delete(:decent_job_worker)
       Thread.current[:decent_job_execution] = nil
       Thread.current[:decent_job_inline_buffer] = nil
       %i[decent_job_batch_context decent_job_cron_context decent_job_bulk_buffer].each do |key|

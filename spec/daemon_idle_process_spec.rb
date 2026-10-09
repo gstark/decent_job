@@ -108,7 +108,7 @@ describe "daemon and idle CLI lifecycle" do
     end
   end
 
-  it "keeps a long job alive beyond idle timeout and stops after it finishes" do
+  it "keeps a long job alive and waits for an idle period after it finishes" do
     started = job_file("started")
     release = job_file("release")
     finished = job_file("finished")
@@ -119,8 +119,10 @@ describe "daemon and idle CLI lifecycle" do
       _(process.alive?).must_equal true
       _(File.exist?(finished)).must_equal false
       _(response("/status/started").code).must_equal "200"
+      released_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       File.write(release, "finish")
       _(Timeout.timeout(3) { process.value.exitstatus }).must_equal 0
+      _(Process.clock_gettime(Process::CLOCK_MONOTONIC) - released_at).must_be :>=, 0.18
       _(File.read(finished)).must_equal "finished"
       _(error.read).must_equal ""
       no_errors

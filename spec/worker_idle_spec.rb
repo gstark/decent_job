@@ -53,7 +53,7 @@ describe "worker idle duration" do
     _(RecordingJob.events.size).must_equal 0
   end
 
-  it "requires all pools to be inactive and measures elapsed time from execution start" do
+  it "requires all pools to be inactive and measures elapsed time from execution completion" do
     _(@worker.method(:idle?).arity).wont_equal 0
     @worker.start
     @time[0] = 110
@@ -65,8 +65,12 @@ describe "worker idle duration" do
     _(@worker.idle?(1)).must_equal false
     BlockingJob.release << true
     wait_until { @worker.idle? }
+    _(@worker.idle?(4)).must_equal false
+    @time[0] = 119
     _(@worker.idle?(4)).must_equal true
     _(@worker.idle?(6)).must_equal false
+    @time[0] = 121
+    _(@worker.idle?(6)).must_equal true
   end
 
   it "resets its baseline on restart and ignores wall clock jumps" do

@@ -31,7 +31,7 @@ bundle exec decent_job start --require ./jobs.rb --idle-timeout 60
 
 Configure the same setting with `configuration.idle_timeout` or `DECENT_JOB_IDLE_TIMEOUT`. The default is `nil`, which disables idle shutdown. Values must be finite, nonnegative seconds; fractional seconds are accepted. Zero permits shutdown as soon as there is no active execution.
 
-Idle time begins at worker startup and resets when an actual job execution starts. Empty polls, future jobs, and pending cron schedules do not reset it. The clock is monotonic, so wall-clock adjustments do not alter the timeout. No pool may have an active job when the worker exits. A job that runs longer than the timeout can therefore be followed by immediate idle shutdown once it finishes.
+Idle time begins at worker startup and resets when an actual job execution starts or finishes. Empty polls, future jobs, and pending cron schedules do not reset it. The clock is monotonic, so wall-clock adjustments do not alter the timeout. No pool may have an active job when the worker exits. After a long job finishes, the worker waits for the configured idle period before shutting down.
 
 `worker.idle?` reports whether any jobs are active. `worker.idle?(seconds)` additionally checks elapsed time. An unstarted worker is idle. Restarting a worker resets its idle clock.
 

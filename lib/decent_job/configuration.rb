@@ -25,12 +25,13 @@ module DecentJob
       :handled_exceptions, :retry_on_unhandled_error, :enable_listen_notify, :shutdown_timeout, :enable_pauses, :preserve_job_records, :cron, :enable_cron, :cron_graceful_restart_period
 
     attr_reader :max_cache, :advisory_lock_heartbeat, :process_heartbeat_interval, :cleanup_discarded_jobs, :cleanup_preserved_jobs_before_seconds_ago,
-      :cleanup_interval_jobs, :cleanup_interval_seconds, :probe_port, :probe_handler, :probe_app, :daemonize, :pidfile, :idle_timeout
+      :cleanup_interval_jobs, :cleanup_interval_seconds, :probe_port, :probe_handler, :probe_app, :daemonize, :pidfile, :idle_timeout, :lower_thread_priority
 
     alias_method :cleanup_discarded_jobs?, :cleanup_discarded_jobs
     alias_method :daemonize?, :daemonize
 
     def initialize
+      self.lower_thread_priority = ENV.fetch("DECENT_JOB_LOWER_THREAD_PRIORITY", "false") == "true"
       self.daemonize = ENV.fetch("DECENT_JOB_DAEMONIZE", "false")
       self.pidfile = ENV.fetch("DECENT_JOB_PIDFILE", File.expand_path("tmp/pids/decent_job.pid", Dir.pwd))
       self.idle_timeout = Float(ENV["DECENT_JOB_IDLE_TIMEOUT"]) if ENV["DECENT_JOB_IDLE_TIMEOUT"]
@@ -113,6 +114,15 @@ module DecentJob
     def max_cache=(value)
       raise ArgumentError, "max_cache must be a nonnegative integer" unless value.is_a?(Integer) && value >= 0
       @max_cache = value
+    end
+
+    def self.validate_lower_thread_priority!(value)
+      raise ArgumentError, "lower_thread_priority must be true or false" unless [true, false].include?(value)
+    end
+
+    def lower_thread_priority=(value)
+      self.class.validate_lower_thread_priority!(value)
+      @lower_thread_priority = value
     end
 
     def daemonize=(value)
@@ -283,7 +293,7 @@ module DecentJob
     def worker_options
       {advisory_lock_heartbeat: @advisory_lock_heartbeat, process_heartbeat_interval: @process_heartbeat_interval,
        queues: @queues, max_threads: @max_threads, poll_interval: poll_interval, max_cache: @max_cache,
-       enable_listen_notify: @enable_listen_notify, on_thread_error: on_thread_error,
+       enable_listen_notify: @enable_listen_notify, lower_thread_priority: @lower_thread_priority, on_thread_error: on_thread_error,
        cleanup_interval_jobs: @cleanup_interval_jobs, cleanup_interval_seconds: @cleanup_interval_seconds,
        cleanup_preserved_jobs_before_seconds_ago: @cleanup_preserved_jobs_before_seconds_ago,
        cleanup_discarded_jobs: @cleanup_discarded_jobs}

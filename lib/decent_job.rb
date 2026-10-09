@@ -40,10 +40,12 @@ require "decent_job/process_record"
 require "decent_job/process_tracker"
 require "decent_job/queue_selection"
 require "decent_job/schema"
+require "decent_job/stats"
 require "decent_job/store"
 require "decent_job/subprocess"
 require "decent_job/supervisor"
 require "decent_job/systemd_service"
+require "decent_job/thread_status"
 require "decent_job/worker"
 
 ActiveJob::QueueAdapters.autoload :DecentJobAdapter, "active_job/queue_adapters/decent_job_adapter"
@@ -55,9 +57,11 @@ module DecentJob
   extend LifecycleHooks
   extend ForkSafety
   extend HostIntegration
+  extend ThreadStatus
 
   VERSION = "0.1.0"
   MUTEX = Mutex.new
+  @thread_priority_mutex = Mutex.new
   @configuration = Configuration.new
   @workers = []
   @cron_managers = {}
@@ -131,6 +135,28 @@ module DecentJob
       !workers.empty? && workers.all?(&:connected?)
     end
 
+    def stats
+      workers = runtime_mutex.synchronize { @workers.dup }
+      Stats.aggregate(workers.flat_map { |worker| worker.stats.fetch(:schedulers) })
+    end
+
+    def idle?(duration = nil)
+      Configuration.validate_idle_timeout!(duration)
+      workers = runtime_mutex.synchronize { @workers.dup }
+      workers.all? { |worker| worker.idle?(duration) }
+    end
+
+    def lower_thread_priority=(value)
+      @thread_priority_mutex.synchronize do
+        workers = runtime_mutex.synchronize do
+          @configuration.lower_thread_priority = value
+          @workers.dup
+        end
+        workers.each { |worker| worker.lower_thread_priority = value }
+      end
+      value
+    end
+
     def cron_managers
       runtime_mutex.synchronize { @cron_managers.values.dup }
     end
@@ -198,9 +224,7 @@ module DecentJob
     end
 
     def start_worker(worker)
-      raise ForkInProgress, "runtime is preparing to fork" if @forking
-      runtime_mutex.synchronize do
-        raise ForkInProgress, "runtime is preparing to fork" if @forking
+      synchronize_resource_start do
         return if @stopping
         register_exit_hook
         @workers << worker unless @workers.include?(worker)

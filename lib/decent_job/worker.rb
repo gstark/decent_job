@@ -5,12 +5,15 @@ require "decent_job/cleanup_tracker"
 require "decent_job/performer"
 require "decent_job/queue_selection"
 require "decent_job/scheduler_cache"
+require "decent_job/stats"
+require "decent_job/thread_status"
 
 module DecentJob
   # Each execution thread owns its database checkout for the entire job. The
   # notification listener uses its own connection and only hints workers to poll.
   class Worker
     def initialize(database:, queues: "*", max_threads: 5, poll_interval: 10, max_cache: 10_000, enable_listen_notify: true, on_thread_error: DecentJob.configuration.on_thread_error,
+      lower_thread_priority: DecentJob.configuration.lower_thread_priority,
       advisory_lock_heartbeat: DecentJob.configuration.advisory_lock_heartbeat,
       process_heartbeat_interval: DecentJob.configuration.process_heartbeat_interval,
       cleanup_interval_jobs: DecentJob.configuration.cleanup_interval_jobs,
@@ -37,6 +40,7 @@ module DecentJob
       @enable_listen_notify = enable_listen_notify
       @on_thread_error = on_thread_error
       @mutex = Mutex.new
+      self.lower_thread_priority = lower_thread_priority
       @condition = ConditionVariable.new
       @stopping = true
       @threads = []
@@ -163,11 +167,17 @@ module DecentJob
     def stats
       @mutex.synchronize do
         schedulers = @scheduler_stats.each_with_index.map { |pool, index| pool.merge(@caches.fetch(index).stats) }
-        {schedulers: schedulers,
-         total_executions_count: schedulers.sum { |pool| pool.fetch(:total_executions_count) },
-         total_succeeded_executions_count: schedulers.sum { |pool| pool.fetch(:succeeded_executions_count) },
-         total_errored_executions_count: schedulers.sum { |pool| pool.fetch(:errored_executions_count) }}
+        Stats.aggregate(schedulers)
       end
+    end
+
+    def lower_thread_priority=(value)
+      Configuration.validate_lower_thread_priority!(value)
+      @mutex.synchronize { @lower_thread_priority = value }
+    end
+
+    def lower_thread_priority
+      @mutex.synchronize { @lower_thread_priority }
     end
 
     def idle?(duration = nil)
@@ -234,7 +244,7 @@ module DecentJob
         {queues: queues, live_threads: live_threads, max_threads: pool.fetch(:threads), active_threads: 0,
          available_threads: live_threads, total_executions_count: 0, succeeded_executions_count: 0,
          errored_executions_count: 0, empty_executions_count: 0, started_at: Time.now.iso8601(6),
-         last_execution_at: nil, last_success_at: nil, last_error_at: nil, last_empty_at: nil}
+         execution_at: nil, check_queue_at: nil, last_execution_at: nil, last_success_at: nil, last_error_at: nil, last_empty_at: nil}
       end
     end
 
@@ -244,13 +254,18 @@ module DecentJob
         counters[:total_executions_count] += 1
         counters[error ? :errored_executions_count : :succeeded_executions_count] += 1
         now = Time.now.iso8601(6)
+        @idle_since = monotonic_time
+        counters[:execution_at] = now
         counters[:last_execution_at] = now
         counters[error ? :last_error_at : :last_success_at] = now
       end
     end
 
     def run(pool, index)
-      @process_tracker.register(stopping: method(:stopping?)) { run_registered(pool, index) }
+      original_priority = Thread.current.priority
+      @process_tracker.register(stopping: method(:stopping?)) do
+        ThreadStatus.with_worker(self) { run_registered(pool, index, original_priority) }
+      end
     rescue Exception => error # standard:disable Lint/RescueException
       @mutex.synchronize { @failure ||= error }
       raise
@@ -270,16 +285,18 @@ module DecentJob
       @process_tracker.stop if last
     end
 
-    def run_registered(pool, index)
+    def run_registered(pool, index, original_priority)
       selection = pool.fetch(:selection)
       execution_error = nil
       executing = false
+      lowered_priority = false
       performer = Performer.new(database: @database, process_tracker: @process_tracker,
         on_execution_start: lambda {
           executing = true
           @mutex.synchronize do
             counters = @scheduler_stats.fetch(index)
             @idle_since = monotonic_time
+            counters[:execution_at] = Time.now.iso8601(6)
             counters[:active_threads] += 1
             counters[:available_threads] -= 1
           end
@@ -292,10 +309,14 @@ module DecentJob
           execution_error = nil
           result = nil
           retry_attempt = false
+          execution_finished = false
+          lowered_priority = apply_thread_priority(original_priority, lowered_priority)
           cleanup_processes
+          @mutex.synchronize { @scheduler_stats.fetch(index)[:check_queue_at] = Time.now.iso8601(6) }
           result = performer.perform_one(queues: selection, stopping: method(:stopping?))
           if result
             record_attempt(index, error: result.error)
+            execution_finished = true
             if result.state == "retried"
               Store.new(@database).scheduling_hints([result.job_id]).each { |state| wake(state) }
             end
@@ -310,7 +331,16 @@ module DecentJob
             refresh_cache(pool, index)
           end
         rescue Exception => error # standard:disable Lint/RescueException
-          record_attempt(index, error: error) if error.equal?(execution_error)
+          if error.equal?(execution_error)
+            record_attempt(index, error: error)
+            execution_finished = true
+          elsif executing && !execution_finished
+            @mutex.synchronize do
+              @idle_since = monotonic_time
+              @scheduler_stats.fetch(index)[:execution_at] = Time.now.iso8601(6)
+            end
+            execution_finished = true
+          end
           report_error(error)
           raise if error.equal?(execution_error) || !error.is_a?(StandardError)
           wait(retry_interval)
@@ -324,6 +354,10 @@ module DecentJob
           if executing
             @mutex.synchronize do
               counters = @scheduler_stats.fetch(index)
+              unless execution_finished
+                @idle_since = monotonic_time
+                counters[:execution_at] = Time.now.iso8601(6)
+              end
               counters[:active_threads] -= 1
               counters[:available_threads] += 1
             end
@@ -331,6 +365,15 @@ module DecentJob
           end
         end
       end
+    end
+
+    def apply_thread_priority(original_priority, previously_lowered)
+      enabled = lower_thread_priority
+      Thread.current.priority = enabled ? -3 : original_priority if enabled || previously_lowered
+      enabled
+    rescue NotImplementedError
+      # Some Ruby engines do not support adjusting native thread priority.
+      false
     end
 
     def await_work(index)
