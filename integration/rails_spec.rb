@@ -191,6 +191,18 @@ describe "Rails 8.1 host integration" do
     _(result.fetch("versions")).must_equal [["version", 1, true], ["version", 2, true]]
   end
 
+  it "publishes enqueue before inline execution after commit and preserves deleted job snapshots" do
+    result = run_host("job_events", mode: "inline", active_record: true)
+    _(result.fetch("before_events")).must_equal []
+    _(result.fetch("notifications")).must_equal [
+      ["enqueue_job.decent_job", ["after commit"], false, 0],
+      ["perform_job.decent_job", ["after commit"], false, 1]
+    ]
+    _(result.fetch("snapshots")).must_equal [["RailsHostJob", ["after commit"]], ["RailsHostJob", ["after commit"]]]
+    _(result.fetch("performed")).must_equal [["perform", "after commit", true]]
+    _(result.fetch("job_count")).must_equal 0
+  end
+
   it "isolates fiber captures and transactions and wraps heartbeat callbacks in the host executor" do
     result = run_host("runtime_isolation", isolation: "fiber")
     _(result.fetch("isolation")).must_equal "fiber"

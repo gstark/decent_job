@@ -112,7 +112,7 @@ module DecentJob
           execution = connection.exec_params(<<~SQL, [execution_id, id, Process.pid, process_id]).first
             INSERT INTO decent_job_executions (id, job_id, process_id, process_uuid, payload, scheduled_at, job_class, queue_name)
             SELECT $1, id, $3, $4, payload, scheduled_at, job_class, queue_name FROM decent_jobs WHERE id = $2
-            RETURNING started_at
+            RETURNING *
           SQL
           started = @store.decode(connection.exec_params(<<~SQL, [id, execution_id, execution.fetch("started_at"), process_id]).first)
             UPDATE decent_jobs SET state = 'running', execution_id = $2, performed_at = $3,
@@ -120,7 +120,7 @@ module DecentJob
               executions_count = executions_count + 1, updated_at = clock_timestamp()
             WHERE id = $1 RETURNING *
           SQL
-          started.merge("execution_interrupted" => interrupted_at)
+          started.merge("execution_interrupted" => interrupted_at, "execution_attributes" => @store.decode(execution))
         end
       end
     end

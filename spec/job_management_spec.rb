@@ -448,4 +448,57 @@ describe "job management callbacks and transactions" do
   ensure
     other&.close
   end
+
+  it "emits one enqueue event for the final management retry write after callbacks" do
+    job = discarded_job
+    order = []
+    ManagementRetryJob.on_enqueue = ->(_) { order << :callback }
+    observed = nil
+    observer = lambda do |event|
+      order << :event
+      observed = event.payload
+    end
+    retried = nil
+    ActiveSupport::Notifications.subscribed(observer, "enqueue_job.decent_job") { retried = job.retry_job }
+    _(order).must_equal [:callback, :event]
+    _(observed[:job].id).must_equal job.id
+    _(observed[:job].state).must_equal "ready"
+    _(observed[:active_job]).must_be_kind_of ManagementRetryJob
+    _(observed[:accepted]).must_equal true
+    _(retried.provider_job_id).must_equal job.id
+  end
+
+  it "emits management retry snapshots from prepared payloads with missing arguments" do
+    job = discarded_job
+    database.with_connection do |connection|
+      connection.exec_params("UPDATE decent_jobs SET payload = jsonb_set(payload, '{arguments}', '[{\"_aj_serialized\":\"RemovedArgumentSerializer\"}]') WHERE id = $1", [job.id])
+    end
+    events = []
+    observer = ->(event) { events << event }
+    ActiveSupport::Notifications.subscribed(observer, "enqueue_job.decent_job") { job.retry_job }
+    _(events.size).must_equal 1
+    _(events.first.payload[:job].payload.fetch("arguments")).must_equal [{"_aj_serialized" => "RemovedArgumentSerializer"}]
+    _(events.first.payload[:accepted]).must_equal true
+  end
+
+  it "omits management retry events when callbacks veto and retains events for rolled back attempts" do
+    job = discarded_job
+    events = []
+    observer = ->(event) { events << event }
+    ActiveSupport::Notifications.subscribed(observer, "enqueue_job.decent_job") do
+      ManagementRetryJob.on_enqueue = ->(_) { throw :abort }
+      _(job.retry_job).must_equal false
+      _(events).must_be_empty
+      ManagementRetryJob.on_enqueue = nil
+      assert_raises(RuntimeError) do
+        database.transaction do
+          job.retry_job
+          raise "rollback retry"
+        end
+      end
+    end
+    _(events.size).must_equal 1
+    _(events.first.payload[:accepted]).must_equal true
+    _(job.reload.discarded?).must_equal true
+  end
 end

@@ -190,6 +190,30 @@ when "inline"
     result[:before_perform] = HOST_EVENTS.any? { |event| event.first == "perform" }
   end
   result[:after_perform] = HOST_EVENTS.select { |event| event.first == "perform" }
+when "job_events"
+  notifications = []
+  snapshots = []
+  DecentJob.configuration.preserve_job_records = false
+  callback = lambda do |event|
+    payload = event.payload
+    snapshots << payload.fetch(:job)
+    notifications << [event.name, payload.fetch(:job).payload.fetch("arguments"),
+      ActiveRecord::Base.connection.transaction_open?, HOST_EVENTS.count { |entry| entry.first == "perform" }]
+  end
+  ActiveSupport::Notifications.subscribed(callback, /\A(?:enqueue_job|perform_job)\.decent_job\z/) do
+    ActiveRecord::Base.transaction do
+      RailsHostJob.perform_later("after commit")
+      result[:before_events] = notifications.dup
+    end
+    ActiveRecord::Base.transaction do
+      RailsHostJob.perform_later("rolled back")
+      raise ActiveRecord::Rollback
+    end
+  end
+  result[:notifications] = notifications
+  result[:snapshots] = snapshots.map { |job| [job.job_class, job.payload.fetch("arguments")] }
+  result[:performed] = HOST_EVENTS.select { |entry| entry.first == "perform" }
+  result[:job_count] = DecentJob.database.with_connection { |connection| connection.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0).to_i }
 when "reload"
   HostReloadJob.perform_later
   DecentJob.perform_inline

@@ -11,33 +11,51 @@ module DecentJob
       @database = database
     end
 
-    def enqueue_all(jobs)
+    def enqueue_attributes(job, id: SecureRandom.uuid, payload: nil)
+      cron = CronEntry.context_for(@database) || {}
+      batch = Batch.context_for(@database, job: job) || {}
+      payload = (payload || job.serialize).merge("provider_job_id" => id)
+      Job::ATTRIBUTES.to_h { |key| [key, nil] }.merge(
+        "id" => id, "active_job_id" => job.job_id, "queue_name" => job.queue_name,
+        "job_class" => job.class.name, "priority" => job.priority || 0, "payload" => payload,
+        "scheduled_at" => (job.scheduled_at || Time.now).utc,
+        "labels" => payload.fetch("decent_job_labels", []),
+        "concurrency_keys" => payload.fetch("decent_job_concurrency_keys", []),
+        "batch_id" => batch[:batch_id], "batch_callback_id" => batch[:batch_callback_id],
+        "cron_key" => cron[:key]&.to_s, "cron_at" => cron[:at]&.getutc,
+        "state" => "ready", "executions_count" => 0
+      )
+    end
+
+    def enqueue_all(jobs, attributes: nil)
       return [] if jobs.empty?
 
-      ids = jobs.map { SecureRandom.uuid }
+      ids = nil
       accepted_ids = {}
       @database.transaction do |connection|
-        jobs.zip(ids).each_slice(500) do |entries|
+        attributes ||= jobs.map { |job| enqueue_attributes(job) }
+        ids = attributes.map { |row| row.fetch("id") }
+        attributes.each_slice(500) do |entries|
           params = []
-          values = entries.map do |job, id|
-            cron = CronEntry.context_for(@database) || {}
-            batch = Batch.context_for(@database, job: job) || {}
+          values = entries.map do |row|
             offset = params.size
-            payload = job.serialize.merge("provider_job_id" => id)
-            params.concat([id, job.job_id, job.queue_name, job.class.name, job.priority || 0,
-              JSON.generate(payload), (job.scheduled_at || Time.now).utc.iso8601(6),
-              PG::TextEncoder::Array.new.encode(payload.fetch("decent_job_labels", [])),
-              PG::TextEncoder::Array.new.encode(payload.fetch("decent_job_concurrency_keys", [])),
-              batch[:batch_id], batch[:batch_callback_id], cron[:key]&.to_s, cron[:at]&.getutc&.iso8601(6)])
+            params.concat([row.fetch("id"), row.fetch("active_job_id"), row.fetch("queue_name"), row.fetch("job_class"), row.fetch("priority"),
+              JSON.generate(row.fetch("payload")), row.fetch("scheduled_at").iso8601(6),
+              PG::TextEncoder::Array.new.encode(row.fetch("labels")),
+              PG::TextEncoder::Array.new.encode(row.fetch("concurrency_keys")),
+              row["batch_id"], row["batch_callback_id"], row["cron_key"], row["cron_at"]&.iso8601(6)])
             "(#{(1..13).map { |index| "$#{offset + index}" }.join(", ")})"
           end
           result = connection.exec_params(<<~SQL, params)
             INSERT INTO decent_jobs (id, active_job_id, queue_name, job_class, priority, payload, scheduled_at, labels, concurrency_keys, batch_id, batch_callback_id, cron_key, cron_at)
             VALUES #{values.join(", ")}
             ON CONFLICT (cron_key, cron_at) WHERE cron_key IS NOT NULL AND cron_at IS NOT NULL DO NOTHING
-            RETURNING id
+            RETURNING #{block_given? ? "*" : "id"}
           SQL
-          result.each { |row| accepted_ids[row.fetch("id")] = true }
+          result.each do |row|
+            accepted_ids[row.fetch("id")] = true
+            yield decode(row) if block_given?
+          end
         end
         Notifier.notify_jobs(connection, jobs.zip(ids).filter_map { |job, id| job if accepted_ids[id] })
       end
@@ -81,9 +99,15 @@ module DecentJob
             error = #{context[:manual_retry] ? "error" : "NULL"}, error_event = 'retried'
           WHERE id = $1 AND execution_id IS NOT DISTINCT FROM $2::uuid
             AND #{context[:manual_retry] ? "state = 'discarded'" : "finished_at IS NULL AND state IN ('ready', 'running')"}
+          RETURNING *
         SQL
         raise ActiveJob::EnqueueError, "execution ownership lost" unless result.cmd_tuples == 1
+        yield decode(result.first) if block_given?
         Notifier.notify_jobs(connection, [job])
+        unless context[:manual_retry]
+          context[:reenqueues] = context.fetch(:reenqueues, 0) + 1
+          @database.after_rollback { context[:reenqueues] -= 1 }
+        end
       end
       job.successfully_enqueued = true
     end

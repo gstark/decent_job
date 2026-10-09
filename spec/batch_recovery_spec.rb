@@ -30,6 +30,7 @@ describe "batch completion recovery" do
     code = <<~RUBY
       require "decent_job"
       ActiveJob::Base.logger = Logger.new(File::NULL)
+      DecentJob.logger = Logger.new(File::NULL)
       DecentJob.configure { |config| config.database_url = JSON.parse(ENV.fetch("DECENT_JOB_TEST_CONNECTION")) }
       class BatchRecoveryMemberJob < ActiveJob::Base
         def perform(*)

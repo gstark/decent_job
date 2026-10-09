@@ -18,7 +18,7 @@ module DecentJob
         rules.map(&:scope).uniq.sort.each do |scope|
           connection.exec_params("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || '.decent_job.concurrency.' || $1, 0))", [scope])
         end
-        rules.each { |rule| check_enqueue(connection, rule) }
+        rules.each { |rule| check_enqueue(connection, rule, job) }
         yield
       rescue PG::Error => error
         raise ActiveJob::EnqueueError, error.message
@@ -43,7 +43,7 @@ module DecentJob
 
     private
 
-    def check_enqueue(connection, rule)
+    def check_enqueue(connection, rule, job)
       scope = case rule.kind
       when "label" then "labels @> ARRAY[$1]::text[]"
       when "key" then "concurrency_keys @> ARRAY[$1]::text[]"
@@ -53,13 +53,24 @@ module DecentJob
       if limit
         performing_filter = rule.enqueue_limit ? "AND NOT (#{ConcurrencyClaims::JOB_LOCKED_SQL})" : ""
         count = connection.exec_params("SELECT count(*) FROM decent_jobs WHERE #{scope} AND state IN ('ready', 'running') #{performing_filter}", [rule.value]).getvalue(0, 0).to_i
-        raise AdmissionRejected, "enqueue concurrency limit exceeded for #{rule.scope}" if count >= limit
+        if count >= limit
+          rejection_event("limit", job, rule, limit, count)
+          raise AdmissionRejected, "enqueue concurrency limit exceeded for #{rule.scope}"
+        end
       end
       if rule.enqueue_throttle
         limit, seconds = rule.enqueue_throttle
         count = connection.exec_params("SELECT count(*) FROM decent_jobs WHERE #{scope} AND created_at > clock_timestamp() - $2::double precision * interval '1 second'", [rule.value, seconds]).getvalue(0, 0).to_i
-        raise AdmissionRejected, "enqueue throttle exceeded for #{rule.scope}" if count >= limit
+        if count >= limit
+          rejection_event("throttle", job, rule, limit, count, window: seconds)
+          raise AdmissionRejected, "enqueue throttle exceeded for #{rule.scope}"
+        end
       end
+    end
+
+    def rejection_event(type, job, rule, limit, count, **extensions)
+      payload = {job: job, key: rule.value, scope: rule.scope, kind: rule.kind, limit: limit, count: count, **extensions}
+      Instrumentation.instrument("enqueue_concurrency_#{type}_exceeded.decent_job", payload, database: @database) { nil }
     end
   end
 end

@@ -189,6 +189,13 @@ module DecentJob
       end
     end
 
+    # Inspect only this context's checkout. An aborted transaction cannot accept
+    # a savepoint; observers must still run so they can report the original error.
+    def in_transaction?
+      connection = @mutex.synchronize { @borrowed[ActiveSupport::IsolatedExecutionState.context] }
+      connection && !connection.finished? && connection.transaction_status == PG::PQTRANS_INTRANS
+    end
+
     def after_commit(&block)
       frames = @mutex.synchronize { @transaction_callbacks[@borrowed[ActiveSupport::IsolatedExecutionState.context]] }
       if frames && !frames.empty?

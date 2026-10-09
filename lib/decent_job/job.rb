@@ -20,10 +20,15 @@ module DecentJob
       new(id, database: database).reload
     end
 
-    def initialize(id, database:)
+    def self.from_attributes(attributes, database:)
+      new(attributes.fetch("id"), database: database, attributes: attributes)
+    end
+
+    def initialize(id, database:, attributes: nil)
       @id = id.to_s.dup.freeze
       @database = database
       @store = Store.new(database)
+      @attributes = attributes.deep_dup if attributes
     end
 
     def attributes
@@ -119,7 +124,7 @@ module DecentJob
             raise StateMismatchError, "Only discarded jobs can be retried" unless discarded?
             job = prepared[:job]
             if job
-              @store.reschedule(job, prepared.fetch(:context), payload: prepared.fetch(:payload))
+              job.queue_adapter.reschedule(job, prepared.fetch(:context), payload: prepared.fetch(:payload), attributes: @attributes, scheduled_at: job.scheduled_at&.to_f)
               job.queue_adapter.after_enqueue([id])
             end
             isolated_context do

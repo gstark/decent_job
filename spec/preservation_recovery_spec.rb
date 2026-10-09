@@ -44,6 +44,7 @@ describe "batch recovery after record deletion" do
       code = <<~RUBY
         require "decent_job"
         ActiveJob::Base.logger = Logger.new(File::NULL)
+        DecentJob.logger = Logger.new(File::NULL)
         DecentJob.configure do |config|
           config.database_url = JSON.parse(ENV.fetch("DECENT_JOB_TEST_CONNECTION"))
           config.preserve_job_records = false

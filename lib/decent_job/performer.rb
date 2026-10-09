@@ -73,40 +73,60 @@ module DecentJob
       end
       context = {database: @database, job_id: row.fetch("active_job_id"), id: row.fetch("id"), execution_id: row.fetch("execution_id"),
                  execution_interrupted: row["execution_interrupted"], batch_id: row["batch_id"], batch_callback_id: row["batch_callback_id"], stopping: stopping}
-      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      begin
-        Current.with(context) do
-          ActiveSupport::Notifications.subscribed(subscriber, /\A(?:perform|enqueue_retry|discard|retry_stopped)\.active_job\z/) do
-            value = wrap_execution { ActiveJob::Base.execute(row.fetch("payload")) }
-            if value.is_a?(Exception) && error.nil?
-              error = value
-              error_event = "handled"
-              state = "discarded"
+      duration = nil
+      payload = {job: Job.from_attributes(row.slice(*Job::ATTRIBUTES), database: @database),
+                 execution: Execution.new(row.fetch("execution_attributes"), database: @database),
+                 process_id: Process.pid, thread_name: (Thread.current.name || Thread.current.object_id).to_s}
+      Instrumentation.instrument("perform_job.decent_job", payload, database: @database) do
+        completed = false
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        begin
+          Current.with(context) do
+            ActiveSupport::Notifications.subscribed(subscriber, /\A(?:perform|enqueue_retry|discard|retry_stopped)\.active_job\z/) do
+              value = wrap_execution { ActiveJob::Base.execute(row.fetch("payload")) }
+              if value.is_a?(Exception)
+                if error.nil?
+                  error = value
+                  error_event = "handled"
+                  state = "discarded"
+                end
+                value = nil
+              end
+              unless Thread.current.status == "aborting"
+                payload.merge!(value: value, error: error, handled_error: error,
+                  retried: context.fetch(:reenqueues, 0).positive?, error_event: error_event&.to_sym)
+                completed = true
+              end
             end
           end
+        rescue *DecentJob.configuration.handled_exception_classes => exception
+          error_event = if exception.is_a?(InterruptError)
+            "interrupted"
+          elsif error_event == "retry_stopped" && error.equal?(exception)
+            "retry_stopped"
+          else
+            "unhandled"
+          end
+          error = exception
+          state = "discarded"
+          unhandled = true
+          unless Thread.current.status == "aborting"
+            payload.merge!(error: error, unhandled_error: error, error_event: error_event.to_sym)
+            completed = true
+          end
+        rescue Exception => exception # standard:disable Lint/RescueException
+          # Excluded application exceptions keep their original propagation path.
+          @on_unhandled_exception&.call(exception)
+          raise
+        ensure
+          duration = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+          payload[:interrupted] = true unless completed
         end
-      rescue *DecentJob.configuration.handled_exception_classes => exception
-        error_event = if exception.is_a?(InterruptError)
-          "interrupted"
-        elsif error_event == "retry_stopped" && error.equal?(exception)
-          "retry_stopped"
-        else
-          "unhandled"
-        end
-        error = exception
-        state = "discarded"
-        unhandled = true
-      rescue Exception => exception # standard:disable Lint/RescueException
-        # The worker distinguishes application exceptions deliberately excluded
-        # from handling from recoverable infrastructure failures.
-        @on_unhandled_exception&.call(exception)
-        raise
       end
       # User ensure blocks and Active Job handlers can swallow termination by
       # raising/rescuing another error. It remains an unfinished killed attempt.
       return if Thread.current.status == "aborting"
 
-      duration = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
       unhandled_error = error if unhandled
       state, error, error_event, forced = finish(row, state, error, error_event, active_job, unhandled, duration)
       raise error if raise_errors && unhandled && !forced

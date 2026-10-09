@@ -42,21 +42,12 @@ module DecentJob
     end
 
     def enqueue(job)
-      return if Bulk.capture(job, queue_adapter: self, callbacks_run: true)
-
-      context = Current.execution
-      if context && context[:database].equal?(database) && context[:job_id] == job.job_id
-        store.reschedule(job, context)
-        return job.provider_job_id
-      end
-      ConcurrencyControls.new(database).enqueue(job) { persist([job]) }
-      raise ActiveJob::EnqueueError, "cron occurrence already enqueued" unless job.provider_job_id
-      job.provider_job_id
+      enqueue_job(job)
     end
 
     def enqueue_at(job, timestamp)
       job.scheduled_at = Time.at(timestamp).utc
-      enqueue(job)
+      enqueue_job(job, scheduled_at: timestamp)
     end
 
     def enqueue_all(jobs, callbacks: true)
@@ -158,6 +149,21 @@ module DecentJob
       end
     end
 
+    # Management retries supply their callback-prepared payload so unavailable
+    # arguments do not need to deserialize again under the persistence locks.
+    def reschedule(job, context, payload: nil, attributes: nil, scheduled_at: nil)
+      attempted = store.enqueue_attributes(job, id: context.fetch(:id), payload: payload)
+      if attributes
+        attempted = attributes.merge(attempted.slice("payload", "queue_name", "priority", "labels", "concurrency_keys", "scheduled_at"))
+          .merge("state" => "ready", "finished_at" => nil, "performed_at" => nil, "error_event" => "retried")
+      end
+      instrument_enqueue(job, scheduled_at: scheduled_at, attributes: attempted) do |event, prepared|
+        store.reschedule(job, context, payload: prepared.fetch("payload")) { |row| event[:job] = Job.from_attributes(row, database: database) }
+        event[:accepted] = true
+      end
+      job.provider_job_id
+    end
+
     def execution_mode
       @execution_mode.nil? ? DecentJob.configuration.execution_mode : @execution_mode
     end
@@ -199,6 +205,32 @@ module DecentJob
 
     private
 
+    def enqueue_job(job, scheduled_at: nil)
+      return if Bulk.capture(job, queue_adapter: self, callbacks_run: true)
+
+      context = Current.execution
+      if context && context[:database].equal?(database) && context[:job_id] == job.job_id
+        reschedule(job, context, scheduled_at: scheduled_at)
+        return job.provider_job_id
+      end
+      ConcurrencyControls.new(database).enqueue(job) do
+        instrument_enqueue(job, scheduled_at: scheduled_at) do |payload, attributes|
+          persist([job], attributes: [attributes], dispatch: false) { |row| payload[:job] = Job.from_attributes(row, database: database) }
+          payload[:accepted] = !job.provider_job_id.nil?
+        end
+        after_enqueue([job.provider_job_id]) if job.provider_job_id
+      end
+      raise ActiveJob::EnqueueError, "cron occurrence already enqueued" unless job.provider_job_id
+      job.provider_job_id
+    end
+
+    def instrument_enqueue(job, scheduled_at:, attributes: nil)
+      attributes ||= store.enqueue_attributes(job)
+      payload = {active_job: job, scheduled_at: scheduled_at, create_with_advisory_lock: false,
+                 job: Job.from_attributes(attributes, database: database), accepted: false}
+      Instrumentation.instrument("enqueue_job.decent_job", payload, database: database) { yield payload, attributes }
+    end
+
     def enqueue_without_callbacks(job)
       job.successfully_enqueued = false
       job.enqueue_error = nil
@@ -211,11 +243,11 @@ module DecentJob
       job.enqueue_error = error
     end
 
-    def persist(jobs)
+    def persist(jobs, attributes: nil, dispatch: true, &block)
       return 0 if jobs.empty?
 
       ids = begin
-        store.enqueue_all(jobs)
+        store.enqueue_all(jobs, attributes: attributes, &block)
       rescue PG::Error => error
         raise ActiveJob::EnqueueError, error.message
       end
@@ -225,7 +257,7 @@ module DecentJob
         job.enqueue_error = ActiveJob::EnqueueError.new("cron occurrence already enqueued") unless id
       end
       ids = ids.compact
-      after_enqueue(ids)
+      after_enqueue(ids) if dispatch
       ids.size
     end
 
