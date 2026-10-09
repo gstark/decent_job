@@ -106,18 +106,22 @@ describe "worker task and poll events" do
       end
     end
     worker
+    # The worker builds its own Store, so intercept the class method body.
     original = DecentJob::Store.instance_method(:scheduling_hints)
-    replacement = ->(ids) {
+    DecentJob::Store.remove_method(:scheduling_hints)
+    DecentJob::Store.define_method(:scheduling_hints) do |ids|
       routed << ids
       []
-    }
-    DecentJob::Store.define_method(:scheduling_hints, replacement)
+    end
     @worker.start
     _(pop(routed)).must_equal [job.provider_job_id]
     _(pop(RecordingJob.events)).must_equal "retried"
   ensure
     @worker&.shutdown(timeout: 5)
-    DecentJob::Store.define_method(:scheduling_hints, original) if original
+    if original
+      DecentJob::Store.remove_method(:scheduling_hints)
+      DecentJob::Store.define_method(:scheduling_hints, original)
+    end
   end
 
   it "emits a task error after execution persistence fails and no extra event for cache maintenance" do

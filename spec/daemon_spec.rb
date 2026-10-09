@@ -162,15 +162,15 @@ describe "daemon PID ownership" do
 
   it "rejects manually owned workers before detaching" do
     worker = DecentJob::Worker.new(database: nil)
-    worker.define_singleton_method(:shutdown?) { false }
     instance = daemon
-    Process.stub(:daemon, ->(*) { flunk "must not detach" }) do
-      _ { instance.daemonize }.must_raise DecentJob::ForkInProgress
+    worker.stub(:shutdown?, false) do
+      Process.stub(:daemon, ->(*) { flunk "must not detach" }) do
+        _ { instance.daemonize }.must_raise DecentJob::ForkInProgress
+      end
     end
     contender = File.open(@path, File::RDWR)
     _(contender.flock(File::LOCK_EX | File::LOCK_NB)).must_equal 0
   ensure
-    worker&.define_singleton_method(:shutdown?) { true }
     contender&.close
   end
 

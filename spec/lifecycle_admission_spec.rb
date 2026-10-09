@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "minitest/mock"
 require "spec_helper"
 require "support/jobs"
 require "timeout"
@@ -368,7 +369,7 @@ describe "explicit global cron resumption" do
         resolve.call(**options)
       end
       start_cron = DecentJob.method(:start_cron)
-      DecentJob.define_singleton_method(:start_cron) do |**options|
+      intercepted_start_cron = lambda do |**options|
         if phase == :before_resolution
           entered << true
           release.pop
@@ -377,19 +378,21 @@ describe "explicit global cron resumption" do
         end
         start_cron.call(**options)
       end
-      starter = Thread.new { DecentJob.start }
-      Timeout.timeout(3) { entered.pop }
-      _(DecentJob.shutdown(timeout: 3)).must_equal true
-      release << true
-      worker = starter.value
-      _(worker.shutdown?).must_equal true
-      _(manager.shutdown?).must_equal true
-      _(DecentJob.stopping?).must_equal true
-      _(@deliveries).must_be_empty
+      starter = nil
+      DecentJob.stub(:start_cron, intercepted_start_cron) do
+        starter = Thread.new { DecentJob.start }
+        Timeout.timeout(3) { entered.pop }
+        _(DecentJob.shutdown(timeout: 3)).must_equal true
+        release << true
+        worker = starter.value
+        _(worker.shutdown?).must_equal true
+        _(manager.shutdown?).must_equal true
+        _(DecentJob.stopping?).must_equal true
+        _(@deliveries).must_be_empty
+      end
     ensure
       release << true if release
       starter&.join(3)
-      DecentJob.define_singleton_method(:start_cron, start_cron) if start_cron
       configuration.singleton_class.remove_method(:cron_entries) if configuration&.singleton_methods&.include?(:cron_entries)
     end
   end

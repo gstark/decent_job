@@ -129,6 +129,8 @@ describe "process tracking across workers" do
     _(waiting.scheduled_at).must_be :>, Time.now
     Process.kill("KILL", @process.pid)
     _(@process.join(5)).wont_be_nil
+    # The server releases the advisory lock only after it notices the closed socket.
+    await { DecentJob::ProcessRecord.inactive(database: database).map(&:id).include?(record.id) }
     _(DecentJob::ProcessRecord.inactive(database: database).map(&:id)).must_include record.id
     _(DecentJob::ProcessRecord.cleanup(database: database)).must_be :>=, 1
     _(job.reload.locked_by_id).must_be_nil

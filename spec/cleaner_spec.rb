@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "minitest/mock"
 require "spec_helper"
 require "support/jobs"
 require "timeout"
@@ -81,13 +82,12 @@ describe "age cleanup" do
     job = finished_job(at: timestamp - 60)
     calls = []
     subscriber = ActiveSupport::Notifications.subscribe("cleanup_preserved_jobs.decent_job") { |event| calls << event.payload }
-    original = Time.method(:now)
-    Time.define_singleton_method(:now) { timestamp }
     begin
-      _(clean(older_than: 60)).must_equal 2
-      _(calls.fetch(0)[:timestamp]).must_equal timestamp - 60
+      Time.stub(:now, timestamp) do
+        _(clean(older_than: 60)).must_equal 2
+        _(calls.fetch(0)[:timestamp]).must_equal timestamp - 60
+      end
     ensure
-      Time.define_singleton_method(:now, original)
       ActiveSupport::Notifications.unsubscribe(subscriber)
     end
     _(@store.find(job.provider_job_id)).must_be_nil

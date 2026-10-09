@@ -148,7 +148,9 @@ describe DecentJob::Worker do
   it "keeps performing jobs after an unhandled job error" do
     FailingJob.perform_later
     RecordingJob.perform_later("survived")
-    start_worker(max_threads: 1, poll_interval: 0.02, enable_listen_notify: false)
+    errors = Queue.new
+    start_worker(max_threads: 1, poll_interval: 0.02, enable_listen_notify: false, on_thread_error: ->(error) { errors << error })
+    _(pop(errors).message).must_equal "unhandled error"
     _(pop(RecordingJob.events)).must_equal "survived"
   end
 

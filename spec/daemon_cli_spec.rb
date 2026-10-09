@@ -16,10 +16,10 @@ describe "daemon and idle CLI lifecycle" do
     DecentJob::CLI.new(stdout: @output, stderr: @output)
   end
 
-  def fake_daemon(events)
+  def fake_daemon(events, cleanup: -> { events << :pid_cleanup })
     Object.new.tap do |instance|
       instance.define_singleton_method(:daemonize) { events << :detach }
-      instance.define_singleton_method(:cleanup) { events << :pid_cleanup }
+      instance.define_singleton_method(:cleanup, cleanup)
     end
   end
 
@@ -46,8 +46,7 @@ describe "daemon and idle CLI lifecycle" do
 
   it "preserves the startup failure when PID cleanup also fails" do
     events = []
-    instance = fake_daemon(events)
-    instance.define_singleton_method(:cleanup) { raise "secondary PID cleanup failure" }
+    instance = fake_daemon(events, cleanup: -> { raise "secondary PID cleanup failure" })
     command = cli
     DecentJob::Daemon.stub(:new, instance) do
       DecentJob.stub(:start, -> { raise "original startup failure" }) do

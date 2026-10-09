@@ -6,6 +6,12 @@ describe "execution modes" do
   before { DecentJob.reset! }
   after { DecentJob.reset! }
 
+  # Evaluates in_webserver? from a frame that reports the given file and line.
+  def in_webserver_from(frame)
+    file, line = frame.split(":")
+    DecentJob::Configuration.new.instance_eval("in_webserver?", file, line.to_i) # standard:disable Style/EvalWithLocation
+  end
+
   it "keeps standalone defaults external and follows configuration changes" do
     adapter = DecentJob::Adapter.new
     _(adapter.execution_mode).must_equal :external
@@ -61,17 +67,13 @@ describe "execution modes" do
   ["config.ru:3", "/gems/puma/request.rb:76", "/gems/puma/response.rb:78",
     "/gems/puma/cluster/worker.rb:58", "/gems/puma/single.rb:44", "/gems/rack/handler/iodine.rb:13"].each do |frame|
     it "recognizes the server stack #{frame}" do
-      config = DecentJob::Configuration.new
-      result = eval("config.in_webserver?", binding, frame.split(":").first, frame.split(":").last.to_i) # standard:disable Style/EvalWithLocation
-      _(result).must_equal true
+      _(in_webserver_from(frame)).must_equal true
     end
   end
 
   ["/gems/puma/cluster.rb:58", "/gems/rails/commands/console/console_command.rb:10", "db/migrate.rb:1"].each do |frame|
     it "does not treat #{frame} as a webserver" do
-      config = DecentJob::Configuration.new
-      result = eval("config.in_webserver?", binding, frame.split(":").first, frame.split(":").last.to_i) # standard:disable Style/EvalWithLocation
-      _(result).must_equal false
+      _(in_webserver_from(frame)).must_equal false
     end
   end
 
