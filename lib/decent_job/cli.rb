@@ -74,6 +74,9 @@ module DecentJob
         parser.on("--[no-]include-discarded", "Include discarded preserved jobs and batches") { |value| options[:cleanup_discarded_jobs] = value }
         parser.on("--probe-port PORT", Integer, "Serve health probes on this port (0 chooses an available port)") { |value| options[:probe_port] = value }
         parser.on("--probe-handler HANDLER", "Probe server: simple or optional webrick") { |value| options[:probe_handler] = value }
+        parser.on("--[no-]daemonize", "Detach and run in the background") { |value| options[:daemonize] = value }
+        parser.on("--pidfile PATH", "PID file for daemon mode") { |value| options[:pidfile] = value }
+        parser.on("--idle-timeout SECONDS", Float, "Exit after this many idle seconds (single process)") { |value| options[:idle_timeout] = value }
         parser.on("--queues EXPRESSION", "Queue selection and optional thread pools") { |value| options[:queues] = value }
         parser.on("--subprocesses N", Integer, "Fork and supervise N worker processes") { |value| options[:subprocesses] = value }
         parser.on("--max-threads N", Integer, "Default threads per queue pool") { |value| options[:max_threads] = value }
@@ -88,9 +91,27 @@ module DecentJob
     end
 
     def start
+      if DecentJob.configuration.daemonize
+        daemon = Daemon.new(configuration: DecentJob.configuration)
+        daemon.daemonize
+      end
+      start_workers
+    ensure
+      original_failure = $!
+      begin
+        daemon&.cleanup
+      rescue Exception # standard:disable Lint/RescueException
+        raise unless original_failure
+      end
+    end
+
+    def start_workers
       configuration = DecentJob.configuration
       if configuration.subprocesses.positive?
-        return start_cluster if Process.respond_to?(:fork)
+        if Process.respond_to?(:fork)
+          configuration.logger.warn("idle_timeout is ignored when running subprocesses") unless configuration.idle_timeout.nil?
+          return start_cluster
+        end
         @stderr.puts "Warning: fork is unavailable; running queue groups in one process."
         DecentJob.apply_cli_configuration(queues: configuration.single_process_config.queues, subprocesses: 0)
       end
@@ -106,12 +127,15 @@ module DecentJob
           probe.start
         end
         worker_started = true
-        DecentJob.start
+        worker = DecentJob.start
         service = SystemdService.new
         service.start
         @stdout.puts "DecentJob started. Send SIGINT or SIGTERM to stop."
         @stdout.flush
-        reader.read(1)
+        loop do
+          break if IO.select([reader], nil, nil, 0.1)
+          break if worker.shutdown? || (!configuration.idle_timeout.nil? && worker.idle?(configuration.idle_timeout))
+        end
       ensure
         original_failure = $!
         cleanup_failure = nil

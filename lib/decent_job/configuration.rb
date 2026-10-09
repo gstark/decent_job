@@ -9,11 +9,15 @@ module DecentJob
       :handled_exceptions, :retry_on_unhandled_error, :poll_interval, :enable_listen_notify, :shutdown_timeout, :logger, :on_thread_error, :enable_pauses, :preserve_job_records, :cron, :enable_cron, :cron_graceful_restart_period
 
     attr_reader :advisory_lock_heartbeat, :process_heartbeat_interval, :cleanup_discarded_jobs, :cleanup_preserved_jobs_before_seconds_ago,
-      :cleanup_interval_jobs, :cleanup_interval_seconds, :probe_port, :probe_handler, :probe_app
+      :cleanup_interval_jobs, :cleanup_interval_seconds, :probe_port, :probe_handler, :probe_app, :daemonize, :pidfile, :idle_timeout
 
     alias_method :cleanup_discarded_jobs?, :cleanup_discarded_jobs
+    alias_method :daemonize?, :daemonize
 
     def initialize
+      self.daemonize = ENV.fetch("DECENT_JOB_DAEMONIZE", "false")
+      self.pidfile = ENV.fetch("DECENT_JOB_PIDFILE", File.expand_path("tmp/pids/decent_job.pid", Dir.pwd))
+      self.idle_timeout = Float(ENV["DECENT_JOB_IDLE_TIMEOUT"]) if ENV["DECENT_JOB_IDLE_TIMEOUT"]
       self.subprocesses = Integer(ENV.fetch("DECENT_JOB_SUBPROCESSES", "0"), 10)
       self.probe_port = Integer(ENV["DECENT_JOB_PROBE_PORT"], 10) if ENV["DECENT_JOB_PROBE_PORT"]
       self.probe_handler = ENV["DECENT_JOB_PROBE_HANDLER"]
@@ -39,6 +43,32 @@ module DecentJob
       @shutdown_timeout = Float(ENV.fetch("DECENT_JOB_SHUTDOWN_TIMEOUT", "30"))
       @logger = Logger.new($stdout)
       @on_thread_error = ->(error) { @logger.error("#{error.class}: #{error.message}") }
+    end
+
+    def daemonize=(value)
+      value = true if value == "true"
+      value = false if value == "false"
+      raise ArgumentError, "daemonize must be true or false" unless [true, false].include?(value)
+      @daemonize = value
+    end
+
+    def pidfile=(value)
+      value = value.to_path if value.respond_to?(:to_path)
+      unless value.is_a?(String) && !value.strip.empty? && !value.include?("\0")
+        raise ArgumentError, "pidfile must be a nonempty path"
+      end
+      @pidfile = File.expand_path(value)
+    end
+
+    def self.validate_idle_timeout!(value)
+      if !value.nil? && !(value.is_a?(Numeric) && value.real? && value.finite? && value >= 0)
+        raise ArgumentError, "idle_timeout must be nil or a finite nonnegative number"
+      end
+    end
+
+    def idle_timeout=(value)
+      self.class.validate_idle_timeout!(value)
+      @idle_timeout = value
     end
 
     def subprocesses=(value)

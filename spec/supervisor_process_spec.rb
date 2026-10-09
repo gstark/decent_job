@@ -110,9 +110,12 @@ describe "supervised CLI processes" do
       _(File.readlines(File.join(@directory, "forks")).map(&:to_i)).must_equal [process.pid, process.pid]
       _(children.sort).must_equal records.map { |record| record.fetch("pid") }.sort
       Process.kill("TERM", process.pid)
-      _(Timeout.timeout(6) { process.value.exitstatus }).must_equal 0
+      status = Timeout.timeout(6) { process.value.exitstatus }
+      errors = error.read
+      details = File.read(File.join(@directory, "errors")) if File.exist?(File.join(@directory, "errors"))
+      _(status).must_equal 0, "#{errors} #{details}"
       _(output.read).must_match(/override.*subprocess|subprocess.*ignored/i)
-      _(error.read).must_equal ""
+      _(errors).must_equal ""
       _(File.exist?(File.join(@directory, "errors"))).must_equal false, (File.read(File.join(@directory, "errors")) if File.exist?(File.join(@directory, "errors")))
     end
   end

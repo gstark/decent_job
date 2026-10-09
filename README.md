@@ -65,6 +65,8 @@ Add `--probe-port 7001` to expose HTTP liveness and worker readiness checks. The
 
 Add `--subprocesses 3` to supervise three workers, or use pipe-separated recipes such as `--queues 'critical:2|default:4'`. Each child gets its own connections and threads. See [the supervisor](docs/supervisor.md) for lifecycle hooks, crash replacement, cluster readiness, and shutdown.
 
+Use `--idle-timeout 60` to exit a single worker after an idle period, or `--daemonize --pidfile ./tmp/pids/worker.pid` to detach it. See [daemon mode and idle shutdown](docs/daemon-and-idle.md) for PID ownership, logging, and shutdown behavior.
+
 ## Configuration
 
 Configure before opening the database or enqueueing jobs:

@@ -44,3 +44,5 @@ SIGINT and SIGTERM stop the cluster. The supervisor sends TERM to its children, 
 Systemd READY, STOPPING, and watchdog notifications come from the supervisor. STOPPING precedes child drain, and watchdog coverage continues through child and probe cleanup. No child starts a copy of the parent's watchdog. See [health services](health-services.md) for environment configuration.
 
 A timeout means an executing job may be interrupted and later recovered. Jobs should tolerate retry after process loss, as with any abrupt worker termination.
+
+Cluster mode warns and ignores `idle_timeout`; single-process fallback honors it. A daemonized supervisor owns the PID file, and its children close inherited PID-lock descriptors. See [daemon mode and idle shutdown](daemon-and-idle.md).

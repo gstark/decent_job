@@ -5,21 +5,33 @@ require "support/jobs"
 require "timeout"
 require "decent_job/worker"
 
+class PoolBlockingJob < BlockingJob
+  class_attribute :releases
+
+  def perform
+    started << queue_name
+    releases.fetch(queue_name).pop
+  end
+end
+
 describe DecentJob::Worker do
   include DatabaseSpec
 
   before do
     DecentJob::Schema.new(database).migrate
     @adapter = DecentJob::Adapter.new(database: database)
-    [RecordingJob, BlockingJob, FailingJob].each { |job| job.queue_adapter = @adapter }
+    [RecordingJob, BlockingJob, PoolBlockingJob, FailingJob].each { |job| job.queue_adapter = @adapter }
     RecordingJob.events = Queue.new
     BlockingJob.started = Queue.new
     BlockingJob.release = Queue.new
+    PoolBlockingJob.started = Queue.new
+    PoolBlockingJob.releases = {"urgent" => Queue.new, "ordinary" => Queue.new}
     @workers = []
   end
 
   after do
     10.times { BlockingJob.release << true }
+    PoolBlockingJob.releases.each_value { |release| 5.times { release << true } }
     @workers.each { |worker| worker.shutdown(timeout: 5) }
   end
 
@@ -66,16 +78,18 @@ describe DecentJob::Worker do
   end
 
   it "honors independent queue pool concurrency and excludes other queues" do
-    2.times { BlockingJob.set(queue: "urgent").perform_later }
-    BlockingJob.set(queue: "ordinary").perform_later
+    PoolBlockingJob.set(queue: "ordinary").perform_later
     RecordingJob.set(queue: "other").perform_later("excluded")
     worker = start_worker(queues: "urgent:1;ordinary:1", poll_interval: 0.02, enable_listen_notify: false)
-    2.times { pop(BlockingJob.started) }
+    _(pop(PoolBlockingJob.started)).must_equal "ordinary"
+    2.times { PoolBlockingJob.set(queue: "urgent").perform_later }
+    worker.wake
+    _(pop(PoolBlockingJob.started)).must_equal "urgent"
     sleep 0.08
-    _(BlockingJob.started.size).must_equal 0
-    BlockingJob.release << true
-    pop(BlockingJob.started)
-    2.times { BlockingJob.release << true }
+    _(PoolBlockingJob.started.size).must_equal 0
+    PoolBlockingJob.releases.fetch("urgent") << true
+    _(pop(PoolBlockingJob.started)).must_equal "urgent"
+    PoolBlockingJob.releases.each_value { |release| release << true }
     _(worker.shutdown(timeout: 5)).must_equal true
     _(RecordingJob.events.size).must_equal 0
   end

@@ -39,6 +39,7 @@ module DecentJob
     end
 
     def after_supervisor_fork(configuration)
+      Daemon.after_fork!
       @runtime_mutex = Mutex.new
       Database.reset_after_fork
       configuration.execution_mode = :external if configuration.execution_mode == :async

@@ -46,6 +46,7 @@ module DecentJob
           return self if @threads.any?(&:alive?)
 
           @stopping = false
+          @idle_since = monotonic_time
           @listener_connected = false
           reset_stats(running: true)
           @failure = nil
@@ -144,8 +145,12 @@ module DecentJob
       end
     end
 
-    def idle?
-      stats.fetch(:schedulers).all? { |pool| pool.fetch(:active_threads).zero? }
+    def idle?(duration = nil)
+      Configuration.validate_idle_timeout!(duration)
+      @mutex.synchronize do
+        @scheduler_stats.all? { |pool| pool.fetch(:active_threads).zero? } &&
+          (duration.nil? || @idle_since.nil? || monotonic_time - @idle_since >= duration)
+      end
     end
 
     private
@@ -214,6 +219,7 @@ module DecentJob
           executing = true
           @mutex.synchronize do
             counters = @scheduler_stats.fetch(index)
+            @idle_since = monotonic_time
             counters[:active_threads] += 1
             counters[:available_threads] -= 1
           end
