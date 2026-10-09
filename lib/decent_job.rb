@@ -29,11 +29,13 @@ require "decent_job/job"
 require "decent_job/job_retry"
 require "decent_job/pauses"
 require "decent_job/performer"
+require "decent_job/probe_server"
 require "decent_job/process_record"
 require "decent_job/process_tracker"
 require "decent_job/queue_selection"
 require "decent_job/schema"
 require "decent_job/store"
+require "decent_job/systemd_service"
 require "decent_job/worker"
 
 ActiveJob::QueueAdapters.autoload :DecentJobAdapter, "active_job/queue_adapters/decent_job_adapter"
@@ -103,6 +105,16 @@ module DecentJob
       end
       start_cron(database: connection_pool, automatic: true) if @configuration.enable_cron
       worker
+    end
+
+    def started?
+      workers = MUTEX.synchronize { @stopping ? [] : @workers.dup }
+      !workers.empty? && workers.all?(&:started?)
+    end
+
+    def connected?
+      workers = MUTEX.synchronize { @stopping ? [] : @workers.dup }
+      !workers.empty? && workers.all?(&:connected?)
     end
 
     def cron_managers

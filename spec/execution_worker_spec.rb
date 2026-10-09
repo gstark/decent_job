@@ -101,6 +101,10 @@ describe "worker execution error reporting" do
     worker(queues: "fatal:1;holding:1", enable_listen_notify: true).start
     error = pop(@errors)
     pop(WorkerBlockingJob.started)
+    Timeout.timeout(5) { sleep 0.005 until @worker.stats.fetch(:schedulers).any? { |pool| pool.fetch(:live_threads) < pool.fetch(:max_threads) } }
+    _(@worker.running?).must_equal true
+    _(@worker.started?).must_equal false
+    _(@worker.connected?).must_equal false
     releaser = Thread.new {
       sleep 0.1
       WorkerBlockingJob.release << true
@@ -132,6 +136,9 @@ describe "worker execution error reporting" do
     error = pop(@errors)
     DecentJob.start_worker(holding)
     pop(WorkerBlockingJob.started)
+    Timeout.timeout(5) { sleep 0.005 while fatal.running? }
+    _(DecentJob.started?).must_equal false
+    _(DecentJob.connected?).must_equal false
     releaser = Thread.new {
       sleep 0.1
       WorkerBlockingJob.release << true

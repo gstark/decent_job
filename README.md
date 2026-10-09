@@ -61,6 +61,8 @@ bundle exec decent_job start --require ./jobs.rb --max-threads 5
 
 SIGINT or SIGTERM stops claiming jobs and allows running jobs to finish. The CLI exits unsuccessfully if its shutdown deadline expires. A later worker can recover jobs interrupted by process termination.
 
+Add `--probe-port 7001` to expose HTTP liveness and worker readiness checks. The CLI also supports systemd readiness, stopping, and watchdog notifications. See [health probes and systemd](docs/health-services.md) for configuration and shutdown behavior.
+
 ## Configuration
 
 Configure before opening the database or enqueueing jobs:

@@ -69,6 +69,11 @@ module DecentJob
       end
     end
 
+    # Read only cached monitor state: never touch another thread's PG session.
+    def connected?
+      @mutex.synchronize { @pid == Process.pid && @ready && !@stopped && !!@monitor&.alive? }
+    end
+
     def stop
       return if @pid != Process.pid
       @mutex.synchronize do

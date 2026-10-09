@@ -74,6 +74,8 @@ module DecentJob
           (options[:cleanup] ||= {})[:in_batches_of] = value
         end
         parser.on("--[no-]include-discarded", "Include discarded preserved jobs and batches") { |value| options[:cleanup_discarded_jobs] = value }
+        parser.on("--probe-port PORT", Integer, "Serve health probes on this port (0 chooses an available port)") { |value| options[:probe_port] = value }
+        parser.on("--probe-handler HANDLER", "Probe server: simple or optional webrick") { |value| options[:probe_handler] = value }
         parser.on("--queues EXPRESSION", "Queue selection and optional thread pools") { |value| options[:queues] = value }
         parser.on("--max-threads N", Integer, "Default threads per queue pool") { |value| options[:max_threads] = value }
         parser.on("--poll-interval N", Float, "Polling interval in seconds") { |value| options[:poll_interval] = value }
@@ -89,31 +91,53 @@ module DecentJob
     def start
       reader, writer = IO.pipe
       previous_traps = {}
-      %w[INT TERM].each do |signal|
-        previous_traps[signal] = Signal.trap(signal) { writer.write_nonblock(".", exception: false) }
+      begin
+        %w[INT TERM].each do |signal|
+          previous_traps[signal] = Signal.trap(signal) { writer.write_nonblock(".", exception: false) }
+        end
+        configuration = DecentJob.configuration
+        if configuration.probe_port
+          probe = ProbeServer.new(port: configuration.probe_port, handler: configuration.probe_handler, app: configuration.probe_app)
+          probe.start
+        end
+        worker_started = true
+        DecentJob.start
+        service = SystemdService.new
+        service.start
+        @stdout.puts "DecentJob started. Send SIGINT or SIGTERM to stop."
+        @stdout.flush
+        reader.read(1)
+      ensure
+        original_failure = $!
+        cleanup_failure = nil
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + DecentJob.configuration.shutdown_timeout
+        actions = [
+          -> { service&.stopping },
+          -> { @shutdown_timed_out = !DecentJob.shutdown(timeout: remaining_time(deadline)) if worker_started },
+          -> { @shutdown_timed_out = true if probe && !probe.stop(timeout: remaining_time(deadline)) },
+          -> { service&.stop },
+          *previous_traps.map { |signal, handler| -> { Signal.trap(signal, handler) } },
+          -> { reader.close },
+          -> { writer.close }
+        ]
+        actions.each do |action|
+          action.call
+        rescue Exception => error # standard:disable Lint/RescueException
+          cleanup_failure ||= error
+        end
+        raise cleanup_failure if cleanup_failure && !original_failure
       end
-      started = true
-      DecentJob.start
-      @stdout.puts "DecentJob started. Send SIGINT or SIGTERM to stop."
-      @stdout.flush
-      reader.read(1)
-      shutdown_attempted = true
-      @shutdown_timed_out = !DecentJob.shutdown(timeout: DecentJob.configuration.shutdown_timeout)
       if @shutdown_timed_out
-        @stderr.puts "Error: shutdown timed out; jobs or cron callbacks are still running."
+        @stderr.puts "Error: shutdown timed out; jobs, cron callbacks, or probe callbacks are still running."
         1
       else
         @stdout.puts "DecentJob stopped."
         0
       end
-    ensure
-      begin
-        DecentJob.shutdown(timeout: DecentJob.configuration.shutdown_timeout) if started && !shutdown_attempted
-      ensure
-        previous_traps&.each { |signal, handler| Signal.trap(signal, handler) }
-        reader&.close
-        writer&.close
-      end
+    end
+
+    def remaining_time(deadline)
+      [deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC), 0].max
     end
   end
 end

@@ -45,6 +45,7 @@ module DecentJob
         return self if @threads.any?(&:alive?)
 
         @stopping = false
+        @listener_connected = false
         reset_stats(running: true)
         @failure = nil
         @process_cleanup_at = 0
@@ -66,6 +67,16 @@ module DecentJob
 
     def running?
       @mutex.synchronize { !@stopping && @execution_threads.any?(&:alive?) }
+    end
+
+    def started?
+      @mutex.synchronize { started_locked? }
+    end
+
+    def connected?
+      @mutex.synchronize do
+        started_locked? && @process_tracker.connected? && (!@enable_listen_notify || @listener_connected)
+      end
     end
 
     def wake
@@ -131,6 +142,11 @@ module DecentJob
     end
 
     private
+
+    def started_locked?
+      !@stopping && @scheduler_stats.all? { |pool| pool.fetch(:live_threads) == pool.fetch(:max_threads) } &&
+        @execution_threads.all?(&:alive?)
+    end
 
     def reset_stats(running: false)
       @scheduler_stats = @pools.map do |pool|
@@ -276,6 +292,7 @@ module DecentJob
         begin
           connection = @database.connect
           connection.exec("LISTEN decent_job")
+          @mutex.synchronize { @listener_connected = true }
           wake
           until stopping?
             readable = IO.select([connection.socket_io, @listener_reader], nil, nil, 1)
@@ -285,8 +302,10 @@ module DecentJob
             connection.wait_for_notify(0) { wake }
           end
         rescue => error
+          @mutex.synchronize { @listener_connected = false }
           report_error(error) unless stopping?
         ensure
+          @mutex.synchronize { @listener_connected = false }
           connection&.finish unless connection&.finished?
         end
         wait(retry_interval) unless stopping?

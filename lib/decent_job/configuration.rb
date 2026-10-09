@@ -9,11 +9,13 @@ module DecentJob
       :handled_exceptions, :retry_on_unhandled_error, :poll_interval, :enable_listen_notify, :shutdown_timeout, :logger, :on_thread_error, :enable_pauses, :preserve_job_records, :cron, :enable_cron, :cron_graceful_restart_period
 
     attr_reader :advisory_lock_heartbeat, :process_heartbeat_interval, :cleanup_discarded_jobs, :cleanup_preserved_jobs_before_seconds_ago,
-      :cleanup_interval_jobs, :cleanup_interval_seconds
+      :cleanup_interval_jobs, :cleanup_interval_seconds, :probe_port, :probe_handler, :probe_app
 
     alias_method :cleanup_discarded_jobs?, :cleanup_discarded_jobs
 
     def initialize
+      self.probe_port = Integer(ENV["DECENT_JOB_PROBE_PORT"], 10) if ENV["DECENT_JOB_PROBE_PORT"]
+      self.probe_handler = ENV["DECENT_JOB_PROBE_HANDLER"]
       self.advisory_lock_heartbeat = ENV.fetch("DECENT_JOB_ADVISORY_LOCK_HEARTBEAT", "false")
       self.process_heartbeat_interval = Float(ENV.fetch("DECENT_JOB_PROCESS_HEARTBEAT_INTERVAL", "30"))
       self.cleanup_discarded_jobs = ENV.fetch("DECENT_JOB_CLEANUP_DISCARDED_JOBS", "true")
@@ -43,6 +45,25 @@ module DecentJob
       unless interval.is_a?(Numeric) && interval.real? && interval.finite? && interval.positive? && interval < 300
         raise ArgumentError, "process_heartbeat_interval must be finite, positive, and less than 300"
       end
+    end
+
+    def probe_port=(value)
+      if !value.nil? && (!value.is_a?(Integer) || !(0..65_535).cover?(value))
+        raise ArgumentError, "probe_port must be nil or an integer between 0 and 65535"
+      end
+      @probe_port = value
+    end
+
+    def probe_handler=(value)
+      unless value.nil? || value.is_a?(String) || value.is_a?(Symbol)
+        raise ArgumentError, "probe_handler must be nil, a string, or a symbol"
+      end
+      @probe_handler = value&.to_sym
+    end
+
+    def probe_app=(value)
+      raise ArgumentError, "probe_app must be callable or nil" unless value.nil? || value.respond_to?(:call)
+      @probe_app = value
     end
 
     def advisory_lock_heartbeat=(value)
