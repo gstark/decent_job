@@ -101,6 +101,8 @@ Smaller priority numbers run first. Equal priorities use scheduled time and job 
 
 The default database pool reserves one connection per execution thread plus two for application operations. Automatic cron adds three per configured entry, or four when restart catch-up is enabled. Each worker's heartbeat monitor and optional listener have additional dedicated connections. Account separately for connections used by application code, especially Active Record. See [recurring jobs](docs/recurring-jobs.md) for scheduler costs and [process tracking](docs/process-tracking.md) for heartbeat lifecycle, worker statistics, and connection sizing.
 
+Per-job notification controls and transactional publication are described in [notifications](docs/notifications.md). Disabling a notification does not prevent execution.
+
 ## Embedded execution and tests
 
 Use `execution_mode = :async_all` to start background workers on the first enqueue in a standalone process. The `async` and `async_server` modes start embedded workers only in detected web servers. Rails starts eligible adapters after application boot. See [Rails integration](docs/rails-integration.md) for configuration, reloading, and transaction deferral. Call `DecentJob.shutdown(timeout: 30)` to stop registered workers and cron managers with one shared deadline. Enqueues after global shutdown remain persisted until `DecentJob.start` or `reset!` reopens the lifecycle. `DecentJob.start` also starts workers for jobs already in the database.

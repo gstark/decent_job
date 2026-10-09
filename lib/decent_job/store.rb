@@ -39,7 +39,7 @@ module DecentJob
           SQL
           result.each { |row| accepted_ids[row.fetch("id")] = true }
         end
-        notify(connection)
+        Notifier.notify_jobs(connection, jobs.zip(ids).filter_map { |job, id| job if accepted_ids[id] })
       end
       ids.map { |id| id if accepted_ids[id] }
     end
@@ -67,7 +67,7 @@ module DecentJob
             AND #{context[:manual_retry] ? "state = 'discarded'" : "finished_at IS NULL AND state IN ('ready', 'running')"}
         SQL
         raise ActiveJob::EnqueueError, "execution ownership lost" unless result.cmd_tuples == 1
-        notify(connection)
+        Notifier.notify_jobs(connection, [job])
       end
       job.successfully_enqueued = true
     end
@@ -79,7 +79,7 @@ module DecentJob
     end
 
     def notify(connection)
-      connection.exec("SELECT pg_notify('decent_job', '')")
+      Notifier.notify(connection)
     end
 
     def decode(row)

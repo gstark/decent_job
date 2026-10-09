@@ -174,6 +174,26 @@ Rails/host verification: the full core PostgreSQL suite passed 1,204 specs and 4
 
 Real host cases verify boot-time adapters, default and explicit configuration, logger selection, applications without Active Record, late Rails loading, cron autoloading, CLI pool suppression with follow-on enqueue, commit/rollback/savepoints, scheduled options, mixed bulk deferral, inline executor context, and changed-class reloading. Unit and process regressions also cover autoloading while configuring cron, callback execution context, reset/fork ownership, and CLI context restoration. The optional host bundle and sequential CI steps are checked in; remote CI has not run. A4, A7, and A9 are implemented. Worker scheduling/notification refinements, other lock strategies, dashboard features, and the full parity audit remain open.
 
+### Notifications and scheduled execution
+
+Notification foundation:
+
+- [x] Add the opt-in `ActiveJobExtensions::NotifyOptions` concern with class defaults, per-enqueue overrides, and serialized instance values preserved across retries.
+- [x] Honor global notification disabling and per-job options for ordinary, bulk, cron, and retry persistence. Publish only accepted jobs, grouped by queue and schedule, with counts; keep publication inside the transaction so rollback cannot wake workers.
+- [x] Define bounded JSON notification payloads and retain broad wakeups for maintenance actions. Notifications remain scheduling hints, not job access controls.
+- [x] Verify real PostgreSQL messages, rollback, duplicate cron suppression, nested bulk, retries, and separate worker processes. Review independently and verify the complete suite and packaged gem.
+
+Notification-foundation verification: the full core PostgreSQL suite passed 1,234 specs and 4,734 assertions, seed 2791. The separate Rails suite passed 14 cases and 81 assertions, seed 2724. Four optional WEBrick specs skipped under Bundler passed separately with 17 assertions. Standard, gem build, whitespace checks, and independent spec/quality reviews passed. The unpacked gem verified policy filtering, bulk counts, rollback, serialized options, and execution of notification-suppressed jobs. Four real producer/worker process specs verify global disabling, mixed bulk policy, retry suppression, and transaction rollback. Direct runtime dependencies remain Active Job and pg, with Minitest spec syntax throughout. Queue/count/fanout routing and scheduled-cache behavior remain the next scheduler slice; W4 is partial until relevant-worker routing is complete.
+
+Scheduler integration:
+
+- [ ] Route queue/count/fanout notifications to matching pools with bounded wakeup work; preserve legacy broad notifications and reject malformed messages safely.
+- [ ] Add future-job discovery, a bounded per-pool scheduled cache, startup warming, refresh after execution, and deadline wakeups without a timer thread per job.
+- [ ] Allow polling to be disabled while retaining notified/cached scheduled execution. Add max-cache configuration, environment/CLI controls, and cache statistics.
+- [ ] Verify listener reconnection, clock changes, queue isolation, cache limits, no early execution, shutdown/restart, and real CLI execution with polling disabled. Document resource and recovery tradeoffs and complete independent reviews.
+
+The reference disables cache warming at `max_cache = 0` but still accepts future notification timers. Scheduler integration must preserve notified future execution while bounding timer resources.
+
 ### Remaining slices
 
 1. Operations: scheduled-job cache, notification controls, and remaining worker lifecycle refinements.
