@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "active_support/core_ext/object/blank"
 require "active_support/tagged_logging"
 require "decent_job/configuration/errors"
 require "decent_job/configuration/validator"
@@ -46,9 +47,9 @@ module DecentJob
     end
 
     attr_accessor :database_url, :queues, :max_threads,
-      :handled_exceptions, :retry_on_unhandled_error, :enable_listen_notify, :shutdown_timeout, :enable_pauses, :preserve_job_records, :cron, :enable_cron, :cron_graceful_restart_period
+      :handled_exceptions, :retry_on_unhandled_error, :enable_listen_notify, :shutdown_timeout, :enable_pauses, :preserve_job_records, :cron, :cron_graceful_restart_period
 
-    attr_reader :max_cache, :advisory_lock_heartbeat, :process_heartbeat_interval, :cleanup_discarded_jobs, :cleanup_preserved_jobs_before_seconds_ago,
+    attr_reader :max_cache, :process_heartbeat_interval, :cleanup_discarded_jobs, :cleanup_preserved_jobs_before_seconds_ago,
       :cleanup_interval_jobs, :cleanup_interval_seconds, :probe_port, :probe_handler, :probe_app, :daemonize, :pidfile, :idle_timeout, :lower_thread_priority
 
     alias_method :cleanup_discarded_jobs?, :cleanup_discarded_jobs
@@ -68,7 +69,8 @@ module DecentJob
       self.subprocesses = Integer(ENV.fetch("DECENT_JOB_SUBPROCESSES", "0"), 10)
       self.probe_port = Integer(ENV["DECENT_JOB_PROBE_PORT"], 10) if ENV["DECENT_JOB_PROBE_PORT"]
       self.probe_handler = ENV["DECENT_JOB_PROBE_HANDLER"]
-      self.advisory_lock_heartbeat = environment_boolean("DECENT_JOB_ADVISORY_LOCK_HEARTBEAT", default: false)
+      @environment_advisory_lock_heartbeat = environment_boolean("DECENT_JOB_ADVISORY_LOCK_HEARTBEAT", default: nil)
+      self.advisory_lock_heartbeat = @environment_advisory_lock_heartbeat || false
       self.process_heartbeat_interval = Float(ENV.fetch("DECENT_JOB_PROCESS_HEARTBEAT_INTERVAL", "30"))
       self.cleanup_discarded_jobs = environment_boolean("DECENT_JOB_CLEANUP_DISCARDED_JOBS", default: true)
       self.cleanup_preserved_jobs_before_seconds_ago = Float(ENV.fetch("DECENT_JOB_CLEANUP_PRESERVED_JOBS_BEFORE_SECONDS_AGO", "1209600"))
@@ -79,7 +81,7 @@ module DecentJob
       @preserve_job_records = true
       @enable_cron = environment_boolean("DECENT_JOB_ENABLE_CRON", default: false)
       @cron_graceful_restart_period = Float(ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]) if ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]
-      @cron = JSON.parse(ENV.fetch("DECENT_JOB_CRON", "{}"), symbolize_names: true)
+      @cron = ENV["DECENT_JOB_CRON"].present? ? JSON.parse(ENV.fetch("DECENT_JOB_CRON"), symbolize_names: true) : {}
       @database_url = ENV["DECENT_JOB_DATABASE_URL"] || ENV["DATABASE_URL"]
       @environment_execution_mode = ENV["DECENT_JOB_EXECUTION_MODE"]&.to_sym
       @queues = ENV.fetch("DECENT_JOB_QUEUES", "*")
@@ -106,7 +108,22 @@ module DecentJob
       @errors = original.errors.dup
     end
 
-    attr_writer :execution_mode, :logger, :on_thread_error
+    attr_writer :execution_mode, :logger, :on_thread_error, :enable_cron
+
+    def enable_cron
+      return @enable_cron unless @enable_cron == true
+      @cron.is_a?(Hash) && !@cron.empty?
+    end
+
+    alias_method :enable_cron?, :enable_cron
+
+    def advisory_lock_heartbeat
+      if @explicit_options&.key?(:advisory_lock_heartbeat) || @rails_options&.key?(:advisory_lock_heartbeat) || !@environment_advisory_lock_heartbeat.nil?
+        @advisory_lock_heartbeat
+      else
+        @rails_environment == "development"
+      end
+    end
 
     def execution_mode
       return @execution_mode unless @execution_mode.nil?
@@ -130,7 +147,7 @@ module DecentJob
         unless GENERIC_OPTIONS.include?(key) || SPECIAL_OPTIONS.include?(key)
           raise ArgumentError, "unknown configuration option: #{name.inspect}"
         end
-        normalized[key] = value
+        normalized[key] = value unless key == :cron && value.blank?
       end
       options = normalized
       @rails_environment = environment
@@ -304,7 +321,7 @@ module DecentJob
     end
 
     def process_heartbeat_interval=(value)
-      self.class.validate_process_options!(@advisory_lock_heartbeat, value)
+      self.class.validate_process_options!(advisory_lock_heartbeat, value)
       @process_heartbeat_interval = value
     end
 
@@ -365,7 +382,7 @@ module DecentJob
     end
 
     def pool_size
-      cron_connections = if @enable_cron
+      cron_connections = if enable_cron
         @cron.size * (@cron_graceful_restart_period ? 4 : 3)
       else
         0
@@ -378,7 +395,7 @@ module DecentJob
     end
 
     def worker_options
-      {advisory_lock_heartbeat: @advisory_lock_heartbeat, process_heartbeat_interval: @process_heartbeat_interval,
+      {advisory_lock_heartbeat: advisory_lock_heartbeat, process_heartbeat_interval: @process_heartbeat_interval,
        queues: @queues, max_threads: @max_threads, poll_interval: poll_interval, max_cache: @max_cache,
        enable_listen_notify: @enable_listen_notify, lower_thread_priority: @lower_thread_priority, on_thread_error: on_thread_error,
        cleanup_interval_jobs: @cleanup_interval_jobs, cleanup_interval_seconds: @cleanup_interval_seconds,

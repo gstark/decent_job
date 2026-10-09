@@ -24,7 +24,7 @@ Rails options override environment defaults. Explicit Ruby settings retain prece
 | `async`, `async_server` | Execute in background threads when a web server is detected. Persist only in consoles, tasks, and other processes. |
 | `async_all` | Execute in background threads in any process. |
 
-Without an explicit mode, Rails development uses `async`, test uses `inline`, and other environments use `external`. Standalone applications default to `external`. Server detection recognizes Rails servers, Rack boot, Puma request handling and worker boot, and JRuby Rack. A Puma cluster master does not count as a worker.
+Without an explicit mode, Rails development uses `async`, test uses `inline`, and other environments use `external`. Standalone applications default to `external`. Rails development also defaults to advisory process heartbeats, while other environments use timestamp heartbeats. An explicit heartbeat setting takes precedence; see [process tracking](process-tracking.md). Server detection recognizes Rails servers, Rack boot, Puma request handling and worker boot, and JRuby Rack. A Puma cluster master does not count as a worker.
 
 Adapters created during Rails initialization wait until the framework is ready. Boot then starts eligible adapters, including workers for jobs already in the database. Active Record is not required. The CLI suppresses this automatic startup while loading the application and starts its configured workers afterward.
 

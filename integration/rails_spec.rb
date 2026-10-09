@@ -32,6 +32,8 @@ describe "Rails 8.1 host integration" do
                    "RAILS_MAX_THREADS" => nil,
                    "DECENT_JOB_MAX_CACHE" => scenario.start_with?("configuration") ? "7" : nil,
                    "DECENT_JOB_ENABLE_LISTEN_NOTIFY" => scenario.start_with?("configuration") ? "off" : nil,
+                   "DECENT_JOB_ADVISORY_LOCK_HEARTBEAT" => (scenario == "heartbeat_environment") ? "off" : nil,
+                   "DECENT_JOB_CRON" => scenario.start_with?("cron_sources") ? JSON.generate(from_environment: {cron: "@daily", class: "RailsHostJob"}) : nil,
                    "DECENT_JOB_EXECUTION_MODE" => nil, "DECENT_JOB_ENABLE_CRON" => "false"}
     Open3.popen3(environment, RbConfig.ruby, "-Ilib", "integration/support/rails_host.rb", pgroup: true) do |input, output, error, process|
       input.close
@@ -95,6 +97,43 @@ describe "Rails 8.1 host integration" do
     _(result.fetch("active_errors")).must_equal({})
     _(result.fetch("finished")).must_equal true
     _(result.fetch("active_record_loaded")).must_equal false
+  end
+
+  {"development" => true, "test" => false, "production" => false}.each do |environment, advisory|
+    it "uses the #{environment} default for actual heartbeat ownership" do
+      result = run_host("heartbeat", environment: environment)
+      _(result.fetch("heartbeat_setting")).must_equal advisory
+      _(result.fetch("worker_heartbeat_setting")).must_equal advisory
+      _(result.fetch("heartbeat_mode")).must_equal advisory ? "advisory" : "heartbeat"
+      _(result.fetch("heartbeat_lock_held")).must_equal advisory
+      _(result.fetch("processes_after")).must_equal 0
+    end
+  end
+
+  %w[heartbeat_environment heartbeat_host heartbeat_explicit].each do |scenario|
+    it "keeps #{scenario} false ahead of the development heartbeat default" do
+      result = run_host(scenario, environment: "development", early_load: true)
+      _(result.fetch("heartbeat_setting")).must_equal false
+      _(result.fetch("worker_heartbeat_setting")).must_equal false
+      _(result.fetch("heartbeat_mode")).must_equal "heartbeat"
+      _(result.fetch("heartbeat_lock_held")).must_equal false
+      _(result.fetch("processes_after")).must_equal 0
+    end
+  end
+
+  it "falls through blank host cron definitions to the captured environment" do
+    result = run_host("cron_sources")
+    _(result.fetch("initial")).must_equal [["from_environment"], true, true]
+    _(result.fetch("changed")).must_equal [["host"], true, true]
+    _(result.fetch("blank")).must_equal [["from_environment"], true, true]
+    _(result.fetch("cleared")).must_equal [[], false, false]
+    _(result.fetch("added")).must_equal [["added"], true, true]
+  end
+
+  it "keeps explicitly empty cron definitions ahead of host and environment sources" do
+    result = run_host("cron_sources_explicit", early_load: true)
+    %w[initial changed blank cleared].each { |key| _(result.fetch(key)).must_equal [[], false, false] }
+    _(result.fetch("added")).must_equal [["added"], true, true]
   end
 
   it "preserves an explicitly configured logger" do

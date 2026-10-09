@@ -194,8 +194,9 @@ describe "cron configuration" do
   end
 
   it "loads cron environment options and allows explicit configuration to override them" do
-    previous = ENV.to_h.slice("DECENT_JOB_ENABLE_CRON", "DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD")
+    previous = ENV.to_h.slice("DECENT_JOB_ENABLE_CRON", "DECENT_JOB_CRON", "DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD")
     ENV["DECENT_JOB_ENABLE_CRON"] = "true"
+    ENV["DECENT_JOB_CRON"] = '{"task":{"cron":"@hourly","class":"ActiveJob::Base"}}'
     ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"] = "12.5"
     configuration = DecentJob::Configuration.new
     _(configuration.enable_cron).must_equal true
@@ -204,7 +205,7 @@ describe "cron configuration" do
     configuration.cron_graceful_restart_period = nil
     _(configuration.validate!.enable_cron).must_equal false
   ensure
-    %w[DECENT_JOB_ENABLE_CRON DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD].each { |name| ENV[name] = previous[name] }
+    %w[DECENT_JOB_ENABLE_CRON DECENT_JOB_CRON DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD].each { |name| ENV[name] = previous[name] }
   end
 
   it "accounts for cron database concurrency in the global pool" do
@@ -218,6 +219,7 @@ describe "cron configuration" do
   end
 
   it "accepts CLI cron overrides after loading application configuration" do
+    DecentJob.configuration.cron = {task: {cron: "@hourly", class: "ActiveJob::Base"}}
     output = StringIO.new
     error = StringIO.new
     cli = DecentJob::CLI.new(stdout: output, stderr: error)

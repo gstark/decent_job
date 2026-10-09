@@ -30,6 +30,9 @@ if HOST_SCENARIO == "configuration_explicit"
   DecentJob.configuration.enable_listen_notify = false
 end
 
+DecentJob.configuration.advisory_lock_heartbeat = false if HOST_SCENARIO == "heartbeat_explicit"
+DecentJob.configuration.cron = {} if HOST_SCENARIO == "cron_sources_explicit"
+
 if HOST_SCENARIO == "logging"
   DecentJob::LogSubscriber.logger
 elsif HOST_SCENARIO == "logging_explicit"
@@ -85,6 +88,11 @@ class DecentJobHostApplication < Rails::Application
   if HOST_SCENARIO.start_with?("configuration")
     config.decent_job.max_cache = 11
     config.decent_job.enable_listen_notify = true
+  end
+  config.decent_job.advisory_lock_heartbeat = false if HOST_SCENARIO == "heartbeat_host"
+  if HOST_SCENARIO.start_with?("cron_sources")
+    config.decent_job.cron = {}
+    config.decent_job.enable_cron = true
   end
   if HOST_SCENARIO == "diagnostics"
     config.decent_job.on_thread_error = nil
@@ -150,6 +158,33 @@ result = {events: HOST_EVENTS, mode: RailsHostJob.queue_adapter.execution_mode,
           active_record_loaded: defined?(ActiveRecord::Base) ? true : false}
 
 case HOST_SCENARIO
+when "heartbeat", "heartbeat_environment", "heartbeat_host", "heartbeat_explicit"
+  result[:heartbeat_setting] = DecentJob.configuration.advisory_lock_heartbeat
+  result[:worker_heartbeat_setting] = DecentJob.configuration.worker_options.fetch(:advisory_lock_heartbeat)
+  tracker = DecentJob::ProcessTracker.new(database: DecentJob.database)
+  tracker.register do |id|
+    result[:heartbeat_mode] = DecentJob::ProcessRecord.find(id).heartbeat_mode
+    DecentJob.database.with_connection do |connection|
+      acquired = connection.exec_params("SELECT pg_try_advisory_lock(hashtextextended(current_schema() || '.decent_job_processes.' || $1, 0))", [id]).getvalue(0, 0) == "t"
+      result[:heartbeat_lock_held] = !acquired
+      connection.exec_params("SELECT pg_advisory_unlock(hashtextextended(current_schema() || '.decent_job_processes.' || $1, 0))", [id]) if acquired
+    end
+  end
+  result[:processes_after] = DecentJob::ProcessRecord.all.size
+when "cron_sources", "cron_sources_explicit"
+  snapshot = -> { [DecentJob.configuration.cron.keys, DecentJob.configuration.enable_cron, DecentJob.configuration.enable_cron?] }
+  result[:initial] = snapshot.call
+  ENV["DECENT_JOB_CRON"] = "{}"
+  application.config.decent_job.cron = {host: {cron: "@hourly", class: "RailsHostJob"}}
+  DecentJob.configure_rails(application)
+  result[:changed] = snapshot.call
+  application.config.decent_job.cron = {}
+  DecentJob.configure_rails(application)
+  result[:blank] = snapshot.call
+  DecentJob.configuration.cron.clear
+  result[:cleared] = snapshot.call
+  DecentJob.configuration.cron[:added] = {cron: "@daily"}
+  result[:added] = snapshot.call
 when "diagnostics"
   result[:valid] = DecentJob.configuration.valid?
   result[:errors] = DecentJob.configuration.errors.to_h

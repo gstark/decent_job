@@ -27,7 +27,7 @@ DecentJob.configure do |config|
 end
 ```
 
-These are the standalone defaults. Environment equivalents are `DECENT_JOB_ADVISORY_LOCK_HEARTBEAT` and `DECENT_JOB_PROCESS_HEARTBEAT_INTERVAL`. The interval must be finite, positive, and below 300 seconds.
+These are the standalone defaults. Rails development defaults advisory heartbeats to true when neither Ruby, Rails configuration, nor the captured environment overrides it. Other Rails environments default false. An explicit false value keeps timestamp heartbeats in every environment. Environment equivalents are `DECENT_JOB_ADVISORY_LOCK_HEARTBEAT` and `DECENT_JOB_PROCESS_HEARTBEAT_INTERVAL`. The interval must be finite, positive, and below 300 seconds.
 
 Timestamp heartbeats consider a process active until its heartbeat expires after five minutes. An optional advisory heartbeat keeps a PostgreSQL session lock on the process identity; loss of that lock makes the process inactive without waiting for expiration. A record is stale after 30 seconds and expired after five minutes. An advisory-locked process can remain active despite stale timestamps.
 

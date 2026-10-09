@@ -34,7 +34,7 @@ describe "configuration sources" do
       shutdown_timeout: [0, 1, 2],
       enable_pauses: [false, true, true],
       preserve_job_records: [false, true, :on_unhandled_error],
-      cron: [{explicit: {cron: "* * * * *"}}, {host: {cron: "0 * * * *"}}, {}],
+      cron: [{explicit: {cron: "* * * * *"}}, {host: {cron: "0 * * * *"}}, {changed: {cron: "@daily"}}],
       enable_cron: [false, true, true],
       cron_graceful_restart_period: [nil, 60, 120],
       max_cache: [0, 10, 20],
@@ -84,6 +84,7 @@ describe "configuration sources" do
   it "updates unowned host settings and restores the captured baseline when keys disappear" do
     source_cases.except(:on_thread_error).each do |name, (_, rails, changed)|
       config = DecentJob::Configuration.new
+      config.cron = {task: {cron: "@hourly", class: "ActiveJob::Base"}} if name == :enable_cron
       baseline = config.public_send(name)
       host(config, name.to_s => rails)
       assert_setting rails, config.public_send(name), name
@@ -308,13 +309,13 @@ describe "configuration sources" do
     config = DecentJob::Configuration.new
     config.cron[:task][:args] << "edited baseline"
     copy = config.dup
-    host(copy, cron: {})
+    host(copy, cron: {replacement: {}})
     host(copy)
     copy.cron[:task][:args].first.replace("copy")
-    host(config, cron: {})
+    host(config, cron: {replacement: {}})
     host(config)
     assert_equal ["environment"], config.cron[:task][:args]
-    host(copy, cron: {})
+    host(copy, cron: {replacement: {}})
     host(copy)
     assert_equal ["environment"], copy.cron[:task][:args]
   end
@@ -359,6 +360,7 @@ describe "configuration environment parsing" do
   }.each do |name, default|
     it "casts #{name} environment booleans without changing the absent default" do
       variable = "DECENT_JOB_#{name.upcase}"
+      ENV["DECENT_JOB_CRON"] = '{"task":{"cron":"@hourly","class":"ActiveJob::Base"}}' if name == :enable_cron
       {nil => default, "" => false, "0" => false, "f" => false, "F" => false,
        "false" => false, "FALSE" => false, "off" => false, "OFF" => false,
        "true" => true, "1" => true, "yes" => true, "False" => true, " " => true}.each do |value, expected|

@@ -546,9 +546,11 @@ describe "restarting an adapter before its first run" do
   it "reopens its database cron gate when the adapter is explicitly restarted" do
     DecentJob::Schema.new(database).migrate
     DecentJob.configuration.enable_cron = true
+    DecentJob.configuration.cron = {future: {cron: ->(previous) { (previous || Time.now) + 3600 }, class: RecordingJob, args: ["future"]}}
     DecentJob.configuration.enable_listen_notify = false
     DecentJob.configuration.max_threads = 1
     adapter = DecentJob::Adapter.new(database: database, execution_mode: :async_all)
+    RecordingJob.queue_adapter = adapter
     _(adapter.shutdown(timeout: 3)).must_equal true
     _(adapter.restart(timeout: 3)).must_be_same_as adapter
     _(DecentJob.cron_running?).must_equal true

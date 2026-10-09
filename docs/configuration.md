@@ -19,7 +19,7 @@ Settings resolve in this order:
 
 Explicit assignments survive initial Rails boot and subsequent changes to host options. Removing a host option restores its captured environment/default value unless it has an explicit assignment. `false` and `0` remain explicit values. Rails option names may be symbols or strings; unknown names raise `ArgumentError`.
 
-Cron definitions replace the lower source's whole hash; entries are not merged. Reapplying unchanged Rails options preserves edits made through mutable configuration getters. Changing or removing a host value replaces those edits unless the setting was explicitly assigned. Prefer assigning the complete value when an application override must survive later host changes.
+Cron definitions replace the lower source's whole hash; entries are not merged. Blank Rails cron values, including `{}`, fall through to the captured environment/default definitions. An explicit Ruby `cron = {}` suppresses all lower sources. Reapplying unchanged Rails options preserves edits made through mutable configuration getters. Changing or removing a host value replaces those edits unless the setting was explicitly assigned. Prefer assigning the complete value when an application override must survive later host changes.
 
 `nil` retains each setter's meaning. It clears explicit `execution_mode`, `logger`, `lock_strategy`, `dequeue_query_sort`, and `queue_select_limit` overrides. It is an explicit value for settings that permit it, such as `idle_timeout` or `database_url`. It does not clear every setting: `poll_interval = nil` is invalid, and `max_threads = nil` fails validation.
 
@@ -42,6 +42,10 @@ The following environment variables use the same boolean conversion:
 - `DECENT_JOB_CLEANUP_DISCARDED_JOBS`
 
 An absent variable uses its default. Empty strings, `0`, `f`, `F`, `false`, `FALSE`, `off`, and `OFF` disable the option. Other nonempty strings enable it. This conversion applies to environment strings; Ruby setters retain their existing validation. Empty strings become `false`, including where GoodJob's boolean cast returns a false-like `nil`.
+
+Blank `DECENT_JOB_CRON` values supply no definitions. Nonblank values must be valid JSON containing a definition hash. `enable_cron` and `enable_cron?` report false without definitions, even when the enable flag is true. Adding or removing definitions updates that result; disabling the flag keeps cron off. Invalid flags or definition containers still fail validation.
+
+Rails development defaults `advisory_lock_heartbeat` to true; standalone and other Rails environments default false. Explicit Ruby, Rails, and captured environment settings take precedence, including false. See [process tracking](process-tracking.md) and the required overrides for [PgBouncer transaction pooling](pgbouncer.md).
 
 Numeric settings reject malformed values instead of silently truncating them. Settings expressed in seconds retain supported fractional values. See [scheduling](scheduling.md), [shutdown](shutdown.md), [worker controls](worker-observability.md), [process tracking](process-tracking.md), and [Rails integration](rails-integration.md) for individual defaults and runtime behavior.
 
@@ -76,3 +80,5 @@ end
 ```
 
 Nil is an explicit setting and retains precedence over Rails options. Disabling the callback does not change job retry/discard outcomes, retention, batch recovery, or shutdown. Normal job logging and instrumentation remain available. Failures raised by a configured reporter remain contained by the operation's existing reporting boundary.
+
+See the [reference configuration map](configuration-reference.md) for GoodJob-to-DecentJob API names, defaults, environment variables, CLI options, intentional differences, and remaining control gaps.
