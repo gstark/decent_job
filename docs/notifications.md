@@ -38,6 +38,6 @@ Publication runs on the same PostgreSQL transaction as insertion or rescheduling
 
 An unusually long queue name can exceed PostgreSQL's notification payload limit. DecentJob falls back to a broad empty notification so a valid job can still be persisted. Maintenance actions also use broad notifications.
 
-The current listener accepts these notifications as wakeups. Queue-specific routing, count/fanout handling, and future-job caching are tracked in the scheduler integration slice.
+The listener routes queue-specific hints to matching pools and bounds wakeups by execution capacity. A `fanout: true` hint wakes every matching pool. Future scheduled times update the pool's deadline cache. Empty notifications retain their broad wakeup behavior. Malformed messages are reported without disconnecting the listener. See [worker scheduling](scheduling.md) for cache limits and execution with polling disabled.
 
 For explicit maintenance integration, `DecentJob::Notifier.notify(connection, state = nil)` publishes on a caller-owned pg connection. It does not apply job notification policy; `nil` publishes a broad wakeup. `Store#notify(connection)` remains the broad maintenance entry point.

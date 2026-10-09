@@ -22,9 +22,9 @@ module DecentJob
     end
 
     attr_accessor :database_url, :queues, :max_threads,
-      :handled_exceptions, :retry_on_unhandled_error, :poll_interval, :enable_listen_notify, :shutdown_timeout, :enable_pauses, :preserve_job_records, :cron, :enable_cron, :cron_graceful_restart_period
+      :handled_exceptions, :retry_on_unhandled_error, :enable_listen_notify, :shutdown_timeout, :enable_pauses, :preserve_job_records, :cron, :enable_cron, :cron_graceful_restart_period
 
-    attr_reader :advisory_lock_heartbeat, :process_heartbeat_interval, :cleanup_discarded_jobs, :cleanup_preserved_jobs_before_seconds_ago,
+    attr_reader :max_cache, :advisory_lock_heartbeat, :process_heartbeat_interval, :cleanup_discarded_jobs, :cleanup_preserved_jobs_before_seconds_ago,
       :cleanup_interval_jobs, :cleanup_interval_seconds, :probe_port, :probe_handler, :probe_app, :daemonize, :pidfile, :idle_timeout
 
     alias_method :cleanup_discarded_jobs?, :cleanup_discarded_jobs
@@ -53,7 +53,8 @@ module DecentJob
       @environment_execution_mode = ENV["DECENT_JOB_EXECUTION_MODE"]&.to_sym
       @queues = ENV.fetch("DECENT_JOB_QUEUES", "*")
       @max_threads = Integer(ENV.fetch("DECENT_JOB_MAX_THREADS", "5"))
-      @poll_interval = Float(ENV.fetch("DECENT_JOB_POLL_INTERVAL", "1"))
+      @environment_poll_interval = Float(ENV["DECENT_JOB_POLL_INTERVAL"]) if ENV["DECENT_JOB_POLL_INTERVAL"]
+      self.max_cache = Integer(ENV.fetch("DECENT_JOB_MAX_CACHE", "10000"), 10)
       @enable_listen_notify = ENV.fetch("DECENT_JOB_ENABLE_LISTEN_NOTIFY", "true") != "false"
       @enable_pauses = ENV.fetch("DECENT_JOB_ENABLE_PAUSES", "false") == "true"
       @shutdown_timeout = Float(ENV.fetch("DECENT_JOB_SHUTDOWN_TIMEOUT", "30"))
@@ -77,16 +78,41 @@ module DecentJob
     end
 
     def apply_rails_config(options, environment:, logger:)
+      @rails_environment = environment
+      @rails_poll_interval = options[:poll_interval]
       @rails_default_execution_mode = {"development" => :async, "test" => :inline}.fetch(environment, :external)
       @rails_execution_mode = options[:execution_mode]&.to_sym
       @rails_logger = options[:logger] || logger
       previous = @rails_options || {}
       options.each do |name, value|
-        next if %i[execution_mode logger].include?(name.to_sym) || (previous.key?(name) && previous[name] == value)
+        next if %i[execution_mode logger poll_interval].include?(name.to_sym) || (previous.key?(name) && previous[name] == value)
         public_send("#{name}=", value)
       end
       @rails_options = options.to_h.dup
       self
+    end
+
+    def poll_interval
+      return @poll_interval unless @poll_interval.nil?
+      return @rails_poll_interval unless @rails_poll_interval.nil?
+      return @environment_poll_interval unless @environment_poll_interval.nil?
+      (@rails_environment == "development" && ASYNC_MODES.include?(execution_mode)) ? -1 : 10
+    end
+
+    def poll_interval=(value)
+      self.class.validate_poll_interval!(value)
+      @poll_interval = value
+    end
+
+    def self.validate_poll_interval!(value)
+      unless value.is_a?(Numeric) && value.real? && value.finite?
+        raise ArgumentError, "poll_interval must be a finite real number"
+      end
+    end
+
+    def max_cache=(value)
+      raise ArgumentError, "max_cache must be a nonnegative integer" unless value.is_a?(Integer) && value >= 0
+      @max_cache = value
     end
 
     def daemonize=(value)
@@ -215,7 +241,7 @@ module DecentJob
       raise ArgumentError, "retry_on_unhandled_error must be true or false" unless [true, false].include?(@retry_on_unhandled_error)
       self.class.validate_execution_mode!(execution_mode)
       queue_groups.each { |group| QueueSelection.pools(group, default_threads: @max_threads) }
-      raise ArgumentError, "poll_interval must be positive" unless @poll_interval.is_a?(Numeric) && @poll_interval.positive? && @poll_interval.finite?
+      self.class.validate_poll_interval!(poll_interval)
       raise ArgumentError, "shutdown_timeout must be nonnegative" unless @shutdown_timeout.is_a?(Numeric) && @shutdown_timeout >= 0 && @shutdown_timeout.finite?
       raise ArgumentError, "on_thread_error must be callable" unless on_thread_error.respond_to?(:call)
       raise ArgumentError, "enable_cron must be true or false" unless [true, false].include?(@enable_cron)
@@ -256,7 +282,7 @@ module DecentJob
 
     def worker_options
       {advisory_lock_heartbeat: @advisory_lock_heartbeat, process_heartbeat_interval: @process_heartbeat_interval,
-       queues: @queues, max_threads: @max_threads, poll_interval: @poll_interval,
+       queues: @queues, max_threads: @max_threads, poll_interval: poll_interval, max_cache: @max_cache,
        enable_listen_notify: @enable_listen_notify, on_thread_error: on_thread_error,
        cleanup_interval_jobs: @cleanup_interval_jobs, cleanup_interval_seconds: @cleanup_interval_seconds,
        cleanup_preserved_jobs_before_seconds_ago: @cleanup_preserved_jobs_before_seconds_ago,

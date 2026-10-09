@@ -187,16 +187,20 @@ Notification-foundation verification: the full core PostgreSQL suite passed 1,23
 
 Scheduler integration:
 
-- [ ] Route queue/count/fanout notifications to matching pools with bounded wakeup work; preserve legacy broad notifications and reject malformed messages safely.
-- [ ] Add future-job discovery, a bounded per-pool scheduled cache, startup warming, refresh after execution, and deadline wakeups without a timer thread per job.
-- [ ] Allow polling to be disabled while retaining notified/cached scheduled execution. Add max-cache configuration, environment/CLI controls, and cache statistics.
-- [ ] Verify listener reconnection, clock changes, queue isolation, cache limits, no early execution, shutdown/restart, and real CLI execution with polling disabled. Document resource and recovery tradeoffs and complete independent reviews.
+- [x] Route queue/count/fanout notifications to matching pools with bounded wakeup work; preserve legacy broad notifications and reject malformed messages safely.
+- [x] Add future-job discovery, a bounded per-pool scheduled cache, startup warming, refresh after execution, and deadline wakeups without a timer thread per job.
+- [x] Allow polling to be disabled while retaining notified/cached scheduled execution. Add max-cache configuration, environment/CLI controls, and cache statistics.
+- [x] Verify listener reconnection, clock changes, queue isolation, cache limits, no early execution, shutdown/restart, and real CLI execution with polling disabled. Document resource and recovery tradeoffs and complete independent reviews.
 
-The reference disables cache warming at `max_cache = 0` but still accepts future notification timers. Scheduler integration must preserve notified future execution while bounding timer resources.
+The reference disables cache warming at `max_cache = 0` but still accepts future notification timers. DecentJob preserves that behavior with one coalesced deadline per pool when the cache limit is zero. See [worker scheduling](scheduling.md) for this bounded adaptation, polling defaults, and recovery tradeoffs.
+
+Scheduler-integration verification: `bundle exec rake TESTOPTS=--seed=62837` passed 1,268 specs and 4,853 assertions with no failures or errors. The separate Rails suite passed 14 cases and 81 assertions, seed 60249. Four optional WEBrick specs skipped under Bundler passed separately with 17 assertions, seed 5835. Standard, gem build, whitespace checks, and independent spec and quality reviews passed. The unpacked gem executed a future local job with polling, cache warming, and PostgreSQL notifications disabled, and verified no early execution, rollback, clean shutdown, and no Rails or Active Record loading. No migrations or runtime dependencies were added.
+
+Six real CLI cases cover startup warming and refill without polling or LISTEN, earlier future notifications, zero-cache notified execution, rescheduled/deleted cached jobs, bulk parallelism with queue isolation, and listener reconnect catch-up. Worker regressions cover notifications arriving during empty claims, jobs becoming due during cache warming, advisory-locked rows, forward/backward clock changes, cache shutdown/restart, and notification-suppressed local retries. Real PostgreSQL regressions verify nil transport payloads for broad maintenance notifications, bounded burst draining, malformed JSON rejection, and zero-cache hints when application time is ahead of database time. W2, W3, and W4 are implemented; remaining worker audits, additional lock strategies, dashboard features, and final parity verification remain open.
 
 ### Remaining slices
 
-1. Operations: scheduled-job cache, notification controls, and remaining worker lifecycle refinements.
+1. Operations: remaining worker lifecycle, instrumentation, and statistics refinements.
 2. Dashboard: authenticated job actions, histories, batches, schedules, processes and metrics.
 3. Compatibility: additional lock strategies, PgBouncer, benchmark and final parity audit.
 

@@ -84,7 +84,8 @@ module DecentJob
         parser.on("--queues EXPRESSION", "Queue selection and optional thread pools") { |value| options[:queues] = value }
         parser.on("--subprocesses N", Integer, "Fork and supervise N worker processes") { |value| options[:subprocesses] = value }
         parser.on("--max-threads N", Integer, "Default threads per queue pool") { |value| options[:max_threads] = value }
-        parser.on("--poll-interval N", Float, "Polling interval in seconds") { |value| options[:poll_interval] = value }
+        parser.on("--max-cache N", Integer, "Maximum cached future deadlines per queue pool") { |value| options[:max_cache] = value }
+        parser.on("--poll-interval N", Float, "Polling interval in seconds (nonpositive disables polling)") { |value| options[:poll_interval] = value }
         parser.on("--shutdown-timeout N", Float, "Time allowed for running jobs to finish") { |value| options[:shutdown_timeout] = value }
         parser.on("--[no-]enable-cron", "Enable recurring jobs") { |value| options[:enable_cron] = value }
         parser.on("--cron-graceful-restart-period N", Float, "Replay missed recurring jobs from this many seconds ago") { |value| options[:cron_graceful_restart_period] = value }

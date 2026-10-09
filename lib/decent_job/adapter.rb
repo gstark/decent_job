@@ -119,7 +119,10 @@ module DecentJob
           end
         end
       elsif execute_async?
-        database.after_commit { start_async&.wake }
+        database.after_commit do
+          worker = start_async
+          store.scheduling_hints(ids).each { |state| worker.wake(state) } if worker
+        end
       end
     end
 

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "minitest/mock"
 require "support/jobs"
 require "timeout"
 require "decent_job/worker"
@@ -39,6 +40,30 @@ describe DecentJob::Worker do
     worker = DecentJob::Worker.new(database: database, **options)
     @workers << worker
     worker.start
+  end
+
+  def pause_next_empty_claim
+    checked = Queue.new
+    release = Queue.new
+    intercepted = false
+    database.define_singleton_method(:with_connection) do |&block|
+      super() do |connection|
+        unless connection.singleton_class.method_defined?(:scheduler_original_exec_params)
+          connection.singleton_class.alias_method(:scheduler_original_exec_params, :exec_params)
+          connection.define_singleton_method(:exec_params) do |sql, *arguments|
+            result = scheduler_original_exec_params(sql, *arguments)
+            if sql.include?("SELECT id, hashtextextended") && !intercepted
+              intercepted = true
+              checked << true
+              release.pop
+            end
+            result
+          end
+        end
+        block.call(connection)
+      end
+    end
+    [checked, release]
   end
 
   def wait_until
@@ -210,8 +235,191 @@ describe DecentJob::Worker do
     _(pop(RecordingJob.events)).must_equal "restarted"
   end
 
+  it "discovers existing future jobs with periodic polling disabled" do
+    RecordingJob.set(wait: 0.2).perform_later("cached")
+    worker = start_worker(max_threads: 1, poll_interval: -1, enable_listen_notify: false)
+    _(pop(RecordingJob.events)).must_equal "cached"
+    _(worker.stats.fetch(:schedulers).first.fetch(:max_cache)).must_equal 10_000
+  end
+
+  it "routes counts only to matching pools and falls back when the first pool is full" do
+    worker = start_worker(queues: "urgent:1;urgent:1;ordinary:1", poll_interval: -1, enable_listen_notify: false)
+    wait_until { worker.stats.fetch(:schedulers).all? { |pool| pool.fetch(:empty_executions_count).positive? } }
+    2.times { PoolBlockingJob.set(queue: "urgent").perform_later }
+    ordinary_before = worker.stats.fetch(:schedulers).last.fetch(:empty_executions_count)
+    worker.wake(queue_name: "urgent", count: 1)
+    _(pop(PoolBlockingJob.started)).must_equal "urgent"
+    sleep 0.08
+    _(PoolBlockingJob.started.size).must_equal 0
+    worker.wake(queue_name: "urgent", count: 1)
+    _(pop(PoolBlockingJob.started)).must_equal "urgent"
+    _(worker.stats.fetch(:schedulers).last.fetch(:empty_executions_count)).must_equal ordinary_before
+  end
+
+  it "schedules future notifications with a zero cache and no polling" do
+    worker = start_worker(max_threads: 1, max_cache: 0, poll_interval: -1)
+    wait_until { worker.connected? }
+    RecordingJob.set(wait: 0.2).perform_later("notified future")
+    _(pop(RecordingJob.events)).must_equal "notified future"
+  end
+
+  it "ignores malformed notification payloads without disconnecting or waking unrelated pools" do
+    errors = Queue.new
+    worker = start_worker(queues: "urgent:1;ordinary:1", poll_interval: -1, on_thread_error: ->(error) { errors << error })
+    wait_until { worker.connected? && worker.stats.fetch(:schedulers).all? { |pool| pool.fetch(:empty_executions_count).positive? } }
+    sleep 0.05
+    before = worker.stats.fetch(:schedulers).map { |pool| pool.fetch(:empty_executions_count) }
+    payloads = ["{", "[]", "null", '{"count":-1}', '{"count":1.5}', '{"scheduled_at":"tomorrow"}', '{"queue_name":false}', '{"fanout":"yes"}']
+    database.with_connection do |connection|
+      payloads.each { |payload| connection.exec_params("SELECT pg_notify('decent_job', $1)", [payload]) }
+    end
+    wait_until { errors.size == payloads.size }
+    _(worker.connected?).must_equal true
+    _(worker.stats.fetch(:schedulers).map { |pool| pool.fetch(:empty_executions_count) }).must_equal before
+    RecordingJob.set(queue: "urgent").perform_later("valid after malformed")
+    _(pop(RecordingJob.events)).must_equal "valid after malformed"
+  end
+
+  it "honors exclusion and ordered queue pools for fanout without looping through huge counts" do
+    database.resize(6)
+    worker = start_worker(queues: "-ordinary:2;+urgent,ordinary:2;ordinary:1", poll_interval: -1, enable_listen_notify: false)
+    wait_until { worker.stats.fetch(:schedulers).all? { |pool| pool.fetch(:empty_executions_count).positive? } }
+    sleep 0.05
+    4.times { PoolBlockingJob.set(queue: "urgent").perform_later }
+    unrelated = worker.stats.fetch(:schedulers).last.fetch(:empty_executions_count)
+    worker.wake(queue_name: "urgent", count: 10**100, fanout: true)
+    4.times { _(pop(PoolBlockingJob.started)).must_equal "urgent" }
+    _(worker.stats.fetch(:schedulers).map { |pool| pool.fetch(:active_threads) }).must_equal [2, 2, 0]
+    _(worker.stats.fetch(:schedulers).last.fetch(:empty_executions_count)).must_equal unrelated
+  end
+
+  it "accepts Time and numeric future hints and interrupts an existing later deadline" do
+    worker = start_worker(max_threads: 1, max_cache: 0, poll_interval: -1, enable_listen_notify: false)
+    wait_until { worker.stats.fetch(:schedulers).first.fetch(:empty_executions_count).positive? }
+    worker.wake(queue_name: "default", scheduled_at: Time.now + 60)
+    at = Time.now + 0.2
+    RecordingJob.set(wait_until: at).perform_later("earlier")
+    worker.wake(queue_name: "default", scheduled_at: at.to_f)
+    sleep 0.06
+    _(RecordingJob.events.size).must_equal 0
+    _(pop(RecordingJob.events)).must_equal "earlier"
+  end
+
+  it "retains a wake arriving while an empty SQL claim is still finishing" do
+    checked, release = pause_next_empty_claim
+    worker = start_worker(max_threads: 1, max_cache: 0, poll_interval: -1, enable_listen_notify: false)
+    pop(checked)
+    RecordingJob.perform_later("racing wake")
+    worker.wake(queue_name: "default")
+    release << true
+    _(pop(RecordingJob.events)).must_equal "racing wake"
+  ensure
+    release << true
+  end
+
+  it "discovers a job that becomes due after an empty claim before cache warming" do
+    checked, release = pause_next_empty_claim
+    start_worker(max_threads: 1, max_cache: 1, poll_interval: -1, enable_listen_notify: false)
+    pop(checked)
+    RecordingJob.set(wait: 0.03).perform_later("became due")
+    sleep 0.05
+    release << true
+    _(pop(RecordingJob.events)).must_equal "became due"
+  ensure
+    release << true
+  end
+
+  it "bounds empty SQL attempts when the application clock jumps ahead of the database" do
+    RecordingJob.set(wait: 0.8).perform_later("clock corrected")
+    original_now = Time.method(:now)
+    offset = 60
+    Time.stub(:now, -> { original_now.call + offset }) do
+      worker = start_worker(max_threads: 1, poll_interval: -1, enable_listen_notify: false)
+      sleep 0.2
+      _(RecordingJob.events.size).must_equal 0
+      _(worker.stats.fetch(:schedulers).first.fetch(:empty_executions_count)).must_be :<=, 3
+      offset = 0
+      _(pop(RecordingJob.events)).must_equal "clock corrected"
+      worker.shutdown(timeout: 2)
+    end
+  end
+
+  it "rechecks a cached deadline after the wall clock moves backward and then recovers" do
+    RecordingJob.set(wait: 0.25).perform_later("clock recovered")
+    original_now = Time.method(:now)
+    offset = 0
+    Time.stub(:now, -> { original_now.call + offset }) do
+      worker = start_worker(max_threads: 1, poll_interval: -1, enable_listen_notify: false)
+      wait_until { worker.stats.fetch(:schedulers).first.fetch(:active_cache).positive? }
+      offset = -60
+      sleep 0.35
+      _(RecordingJob.events.size).must_equal 0
+      offset = 0
+      _(pop(RecordingJob.events)).must_equal "clock recovered"
+      worker.shutdown(timeout: 2)
+    end
+  end
+
+  it "clears pending cached timers on shutdown and discovers them again after restart" do
+    job = RecordingJob.set(wait: 60).perform_later("restarted timer")
+    worker = start_worker(max_threads: 1, max_cache: 1, poll_interval: -1, enable_listen_notify: false)
+    wait_until { worker.stats.fetch(:schedulers).first.fetch(:active_cache) == 1 }
+    _(worker.shutdown(timeout: 1)).must_equal true
+    _(worker.stats.fetch(:schedulers).first.fetch(:active_cache)).must_equal 0
+    DecentJob::Job.find(job.provider_job_id, database: database).reschedule_job(Time.now + 0.15)
+    worker.start
+    _(pop(RecordingJob.events)).must_equal "restarted timer"
+  end
+
+  it "accepts real PostgreSQL empty maintenance notifications as broad wakes" do
+    errors = Queue.new
+    worker = start_worker(queues: "urgent:1;ordinary:1", max_cache: 0, poll_interval: -1, on_thread_error: ->(error) { errors << error })
+    wait_until { worker.connected? && worker.stats.fetch(:schedulers).all? { |pool| pool.fetch(:empty_executions_count).positive? } }
+    previous = DecentJob.configuration.enable_listen_notify
+    DecentJob.configuration.enable_listen_notify = false
+    RecordingJob.set(queue: "urgent").perform_later("urgent maintenance")
+    RecordingJob.set(queue: "ordinary").perform_later("ordinary maintenance")
+    database.with_connection { |connection| DecentJob::Notifier.notify(connection) }
+    _(2.times.map { pop(RecordingJob.events) }.sort).must_equal ["ordinary maintenance", "urgent maintenance"]
+    _(worker.connected?).must_equal true
+    _(errors.size).must_equal 0
+  ensure
+    DecentJob.configuration.enable_listen_notify = previous
+  end
+
+  it "drains a PostgreSQL notification burst promptly to reach the relevant earlier deadline" do
+    worker = start_worker(queues: "default", max_threads: 1, max_cache: 0, poll_interval: -1)
+    wait_until { worker.connected? && worker.stats.fetch(:schedulers).first.fetch(:empty_executions_count).positive? }
+    worker.wake(queue_name: "default", scheduled_at: Time.now + 60)
+    previous = DecentJob.configuration.enable_listen_notify
+    DecentJob.configuration.enable_listen_notify = false
+    at = Time.now + 0.2
+    RecordingJob.set(wait_until: at).perform_later("burst deadline")
+    database.transaction do |connection|
+      20.times { |index| DecentJob::Notifier.notify(connection, queue_name: "unrelated-#{index}") }
+      DecentJob::Notifier.notify(connection, queue_name: "default", scheduled_at: at.iso8601(6))
+    end
+    _(Timeout.timeout(0.9) { RecordingJob.events.pop }).must_equal "burst deadline"
+  ensure
+    DecentJob.configuration.enable_listen_notify = previous
+  end
+
+  it "retains a timestamped zero-cache hint when the application clock is ahead" do
+    worker = start_worker(max_threads: 1, max_cache: 0, poll_interval: -1, enable_listen_notify: false)
+    wait_until { worker.stats.fetch(:schedulers).first.fetch(:empty_executions_count).positive? }
+    at = Time.now + 0.3
+    RecordingJob.set(wait_until: at).perform_later("zero cache skew")
+    original_now = Time.method(:now)
+    Time.stub(:now, -> { original_now.call + 60 }) do
+      worker.wake(queue_name: "default", scheduled_at: at)
+      sleep 0.1
+      _(RecordingJob.events.size).must_equal 0
+    end
+    _(pop(RecordingJob.events)).must_equal "zero cache skew"
+  end
+
   it "rejects invalid polling intervals" do
-    [0, -1, Float::INFINITY, Float::NAN, nil, "1"].each do |interval|
+    [Float::INFINITY, Float::NAN, nil, "1", true, Complex(1, 2)].each do |interval|
       _ { DecentJob::Worker.new(database: database, poll_interval: interval) }.must_raise ArgumentError
     end
   end

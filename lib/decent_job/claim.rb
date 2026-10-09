@@ -38,6 +38,41 @@ module DecentJob
       nil
     end
 
+    def next_scheduled_at(queues: "*", limit: 100, now_limit: 0)
+      selection = queues.is_a?(QueueSelection) ? queues : QueueSelection.new(queues)
+      filter = if selection.queues.empty?
+        "TRUE"
+      elsif selection.exclude?
+        "NOT (queue_name = ANY($1::text[]))"
+      else
+        "queue_name = ANY($1::text[])"
+      end
+      unless [limit, now_limit].all? { |value| value.is_a?(Integer) && value >= 0 }
+        raise ArgumentError, "discovery limits must be nonnegative integers"
+      end
+      scope = <<~SQL
+        SELECT scheduled_at FROM decent_jobs
+        WHERE state = 'ready' AND finished_at IS NULL AND locked_by_id IS NULL
+          AND #{filter} AND $1::text[] IS NOT NULL
+          AND #{@enable_pauses ? Pauses::EXCLUDED_SQL : "TRUE"}
+      SQL
+      @database.with_connection do |connection|
+        connection.exec_params(<<~SQL, [PG::TextEncoder::Array.new.encode(selection.queues), limit, now_limit]).map { |row| Time.parse(row.fetch("scheduled_at")) }
+          (#{scope} AND scheduled_at <= statement_timestamp()
+            AND NOT EXISTS (
+              SELECT 1 FROM pg_locks
+              WHERE locktype = 'advisory' AND granted AND objsubid = 1
+                AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+                AND ((classid::bigint << 32) | objid::bigint) = hashtextextended(current_schema() || '.decent_jobs.' || decent_jobs.id::text, 0)
+            )
+            ORDER BY scheduled_at, id LIMIT $3)
+          UNION ALL
+          (#{scope} AND scheduled_at > statement_timestamp() ORDER BY scheduled_at, id LIMIT $2)
+          ORDER BY scheduled_at
+        SQL
+      end
+    end
+
     private
 
     def candidates(connection, selection, job_id)

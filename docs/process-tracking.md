@@ -57,6 +57,8 @@ A killed process using timestamp heartbeats can leave its process record visible
 
 Scheduler statistics include configured capacity, live, active and available threads, empty polls, attempt outcomes, and recent activity timestamps. Dead execution threads reduce live and available capacity. When the final execution thread exits, the worker stops its listener and tracker; `running?` requires a live execution thread and no shutdown request. Active Job-handled retries and discards with errors count as errored attempts. Infrastructure failures do not invent job attempts. Heartbeat state copies these statistics, so database inspection reflects the most recent refresh rather than an instantaneous read of the worker.
 
+Each scheduler also reports `max_cache`, `active_cache`, and `available_cache`. These count cached deadlines, which may represent multiple jobs. See [worker scheduling](scheduling.md) for the zero-cache notification deadline and cache refill behavior.
+
 `Database#stats` reports configured pool size, allocated connections, active checkouts, and idle connections. The dedicated heartbeat and LISTEN connections are outside those counts. Reserve one additional connection for each active tracker, plus the listener when enabled. An idle worker keeps its tracker; a standalone performer only starts one after acquiring a candidate job.
 
 Create fresh database and worker objects after forking. Inherited pools and trackers are rejected instead of reusing the parent's connections or process identity. A child's rejected use must not remove the parent's process record.

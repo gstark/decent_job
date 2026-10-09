@@ -44,6 +44,22 @@ module DecentJob
       ids.map { |id| id if accepted_ids[id] }
     end
 
+    def scheduling_hints(ids)
+      @database.with_connection do |connection|
+        connection.exec_params(<<~SQL, [PG::TextEncoder::Array.new.encode(ids)]).map do |row|
+          SELECT queue_name,
+            CASE WHEN scheduled_at > statement_timestamp() THEN scheduled_at ELSE NULL END AS deadline,
+            count(*) AS count
+          FROM decent_jobs WHERE id = ANY($1::uuid[]) AND state = 'ready'
+          GROUP BY queue_name, deadline
+        SQL
+          state = {queue_name: row.fetch("queue_name"), count: row.fetch("count").to_i}
+          state[:scheduled_at] = Time.parse(row.fetch("deadline")) if row["deadline"]
+          state
+        end
+      end
+    end
+
     def find(id)
       @database.with_connection do |connection|
         row = connection.exec_params("SELECT * FROM decent_jobs WHERE id = $1", [id]).first
