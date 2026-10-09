@@ -103,7 +103,7 @@ The default database pool reserves one connection per execution thread plus two 
 
 ## Embedded execution and tests
 
-Use `execution_mode = :async` to start background workers on the first enqueue. Call `DecentJob.shutdown(timeout: 30)` to stop registered workers and cron managers with one shared deadline. Enqueues after global shutdown remain persisted until `DecentJob.start` or `reset!` reopens the lifecycle. `DecentJob.start` also starts workers for jobs already in the database.
+Use `execution_mode = :async_all` to start background workers on the first enqueue in a standalone process. The `async` and `async_server` modes start embedded workers only in detected web servers. Rails starts eligible adapters after application boot. See [Rails integration](docs/rails-integration.md) for configuration, reloading, and transaction deferral. Call `DecentJob.shutdown(timeout: 30)` to stop registered workers and cron managers with one shared deadline. Enqueues after global shutdown remain persisted until `DecentJob.start` or `reset!` reopens the lifecycle. `DecentJob.start` also starts workers for jobs already in the database.
 
 Use `execution_mode = :inline` to run due jobs before enqueue returns. Future jobs stay persisted. Inline mode records and propagates unhandled job errors; handled retries and discards retain Active Job behavior. Nested inline jobs and immediate retries drain iteratively.
 

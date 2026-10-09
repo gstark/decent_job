@@ -42,7 +42,7 @@ module DecentJob
       Daemon.after_fork!
       @runtime_mutex = Mutex.new
       Database.reset_after_fork
-      configuration.execution_mode = :external if configuration.execution_mode == :async
+      configuration.execution_mode = :external if Configuration::ASYNC_MODES.include?(configuration.execution_mode)
       @configuration = configuration
       @database&.resize(configuration.pool_size)
       @worker = nil
@@ -52,6 +52,8 @@ module DecentJob
       @cron_stopping = false
       @stopping = false
       @forking = false
+      # Preserve registered adapters in the child's lifecycle so reset! retires
+      # them, without adopting ObjectSpace's allocated or failed adapters.
       ObjectSpace.each_object(Adapter, &:reset_after_fork)
       Thread.current[:decent_job_execution] = nil
       Thread.current[:decent_job_inline_buffer] = nil

@@ -153,7 +153,7 @@ describe "recurring enqueue integration" do
   end
 
   it "executes cron and child jobs in async mode without sharing cron metadata" do
-    adapter = DecentJob::Adapter.new(database: database, execution_mode: :async)
+    adapter = DecentJob::Adapter.new(database: database, execution_mode: :async_all)
     CronIntegrationJob.queue_adapter = adapter
     cron_entry(args: ["spawn"]).enqueue(@at)
     values = Timeout.timeout(10) { 2.times.map { CronIntegrationJob.events.pop } }

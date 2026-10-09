@@ -24,6 +24,7 @@ require "decent_job/daemon"
 require "decent_job/database"
 require "decent_job/execution"
 require "decent_job/fork_safety"
+require "decent_job/host_integration"
 require "decent_job/inline_buffer"
 require "decent_job/interrupt_error"
 require "decent_job/interrupted_error"
@@ -51,6 +52,7 @@ ActiveJob.singleton_class.prepend DecentJob::ActiveJobExtensions::CronBulk
 module DecentJob
   extend LifecycleHooks
   extend ForkSafety
+  extend HostIntegration
 
   VERSION = "0.1.0"
   MUTEX = Mutex.new
@@ -212,7 +214,15 @@ module DecentJob
       rescue Exception => error # standard:disable Lint/RescueException
         failure = error
       end
+      adapters = runtime_mutex.synchronize { @adapters&.keys || [] }
+      adapters.each do |adapter|
+        adapter.shutdown(timeout: 0)
+      rescue Exception => error # standard:disable Lint/RescueException
+        failure ||= error
+      end
       runtime_mutex.synchronize do
+        @adapters = ObjectSpace::WeakMap.new
+        @rails_ready = nil unless defined?(DecentJob::Railtie)
         @worker = nil
         @workers = []
         @cron_managers = {}
@@ -275,5 +285,13 @@ module DecentJob
       at_exit { DecentJob.shutdown(timeout: DecentJob.configuration.shutdown_timeout) }
       @exit_hook_registered = true
     end
+  end
+end
+
+if defined?(Rails::Railtie)
+  require "decent_job/railtie"
+else
+  ActiveSupport.on_load(:before_configuration) do
+    require "decent_job/railtie" if defined?(Rails::Railtie)
   end
 end

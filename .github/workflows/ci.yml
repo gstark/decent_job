@@ -31,3 +31,9 @@ jobs:
       - run: bundle exec rake
       - run: bundle exec standardrb
       - run: gem build decent_job.gemspec
+      - run: bundle install
+        env:
+          BUNDLE_GEMFILE: gemfiles/rails.gemfile
+      - run: bundle exec rake spec:rails
+        env:
+          BUNDLE_GEMFILE: gemfiles/rails.gemfile

@@ -80,11 +80,7 @@ module DecentJob
     end
 
     def wrap_execution(&block)
-      if defined?(Rails.application) && Rails.application
-        Rails.application.executor.wrap(&block)
-      else
-        yield
-      end
+      DecentJob.wrap_execution(&block)
     end
 
     def preserve_record?(active_job, error, error_event, unhandled)

@@ -2,18 +2,17 @@
 
 module DecentJob
   class Adapter
-    attr_reader :execution_mode
-
-    def initialize(database: nil, execution_mode: DecentJob.configuration.execution_mode)
-      raise ArgumentError, "unknown execution mode" unless %i[external inline async].include?(execution_mode)
+    def initialize(database: nil, execution_mode: nil)
+      Configuration.validate_execution_mode!(execution_mode) unless execution_mode.nil?
       @database = database
       @execution_mode = execution_mode
       @worker_mutex = Mutex.new
       @stopping = false
+      DecentJob.register_adapter(self)
     end
 
     def reset_after_fork
-      @execution_mode = :external if @execution_mode == :async
+      @execution_mode = :external if Configuration::ASYNC_MODES.include?(execution_mode)
       @worker_mutex = Mutex.new
       @worker = nil
       @stopping = false
@@ -111,7 +110,7 @@ module DecentJob
     end
 
     def after_enqueue(ids)
-      if @execution_mode == :inline
+      if execute_inline?
         database.after_commit do
           Current.with(nil) do
             Bulk.with_buffer(nil) do
@@ -119,9 +118,42 @@ module DecentJob
             end
           end
         end
-      elsif @execution_mode == :async
+      elsif execute_async?
         database.after_commit { start_async&.wake }
       end
+    end
+
+    def execution_mode
+      @execution_mode.nil? ? DecentJob.configuration.execution_mode : @execution_mode
+    end
+
+    def execute_async?
+      execution_mode == :async_all || (Configuration::SERVER_ASYNC_MODES.include?(execution_mode) && DecentJob.configuration.in_webserver?)
+    end
+
+    def execute_inline?
+      execution_mode == :inline
+    end
+
+    def execute_external?
+      !execute_async? && !execute_inline?
+    end
+
+    def async_started?
+      @worker_mutex.synchronize { !!@worker&.started? }
+    end
+
+    def start_async
+      return unless DecentJob.async_ready? && execute_async?
+      return unless @database || DecentJob.configuration.database_url
+
+      worker = @worker_mutex.synchronize do
+        return if @stopping
+        @worker ||= Worker.new(database: database, **DecentJob.configuration.worker_options)
+        DecentJob.start_worker(@worker)
+      end
+      DecentJob.start_cron(database: database, automatic: true) if worker && DecentJob.configuration.enable_cron
+      worker
     end
 
     private
@@ -162,16 +194,6 @@ module DecentJob
 
     def store
       @store ||= Store.new(database)
-    end
-
-    def start_async
-      worker = @worker_mutex.synchronize do
-        return if @stopping
-        @worker ||= Worker.new(database: database, **DecentJob.configuration.worker_options)
-        DecentJob.start_worker(@worker)
-      end
-      DecentJob.start_cron(database: database, automatic: true) if worker && DecentJob.configuration.enable_cron
-      worker
     end
   end
 end

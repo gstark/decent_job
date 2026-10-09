@@ -62,7 +62,7 @@ describe "cron lifecycle" do
       config.cron = {recurring: {class: CronLifecycleJob, cron: ->(previous) { previous ? previous + 60 : Time.now }}}
     end
     DecentJob::Schema.new(database).migrate
-    CronLifecycleJob.queue_adapter = DecentJob::Adapter.new(database: database, execution_mode: :async)
+    CronLifecycleJob.queue_adapter = DecentJob::Adapter.new(database: database, execution_mode: :async_all)
     CronLifecycleJob.perform_later
     await { DecentJob.cron_running? }
     _(DecentJob.cron_managers.first.cron_entries.first.database).must_be_same_as database
@@ -105,7 +105,7 @@ describe "cron lifecycle" do
       release.pop
       CronLifecycleJob.perform_later
     }}}
-    adapter = DecentJob::Adapter.new(database: DecentJob.database, execution_mode: :async)
+    adapter = DecentJob::Adapter.new(database: DecentJob.database, execution_mode: :async_all)
     CronLifecycleJob.queue_adapter = adapter
     CronLifecycleJob.perform_later
     Timeout.timeout(5) { entered.pop }

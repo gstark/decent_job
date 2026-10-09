@@ -34,7 +34,7 @@ describe "adapter shutdown after fatal resource errors" do
     DecentJob.configuration.enable_listen_notify = false
     @reported = Queue.new
     DecentJob.configuration.on_thread_error = ->(error) { @reported << error }
-    @adapter = DecentJob::Adapter.new(database: database, execution_mode: :async)
+    @adapter = DecentJob::Adapter.new(database: database, execution_mode: :async_all)
     [AdapterShutdownBlockingJob, AdapterShutdownFatalJob].each { |klass| klass.queue_adapter = @adapter }
     AdapterShutdownBlockingJob.started = Queue.new
     AdapterShutdownBlockingJob.release = Queue.new

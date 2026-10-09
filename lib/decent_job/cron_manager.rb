@@ -184,11 +184,7 @@ module DecentJob
     end
 
     def in_context(&block)
-      if defined?(Rails) && Rails.respond_to?(:application) && Rails.application&.respond_to?(:executor)
-        Rails.application.executor.wrap(&block)
-      else
-        yield
-      end
+      DecentJob.wrap_execution(&block)
     end
 
     def safely

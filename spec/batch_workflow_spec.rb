@@ -398,7 +398,7 @@ describe "batch workflows" do
     DecentJob.configuration.max_threads = 2
     DecentJob.configuration.poll_interval = 0.02
     DecentJob.configuration.on_thread_error = ->(error) { errors << error }
-    async = DecentJob::Adapter.new(database: database, execution_mode: :async)
+    async = DecentJob::Adapter.new(database: database, execution_mode: :async_all)
     @classes.each { |klass| klass.queue_adapter = async }
     batches = 2.times.map { DecentJob::Batch.new(database: database, on_finish: WorkflowCallbackJob) }
     DecentJob::Batch.enqueue_all([[batches.first, []], [batches.last, [WorkflowMemberJob.new("async")]]])

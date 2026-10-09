@@ -67,6 +67,34 @@ describe "supervisor cleanup safety" do
     reader&.close unless reader&.closed?
     writer&.close unless writer&.closed?
   end
+  it "retires inherited registered adapters when the child runtime resets" do
+    adapter = DecentJob::Adapter.new
+    uninitialized_adapter = DecentJob::Adapter.allocate
+    reader, writer = IO.pipe
+    pid = nil
+    DecentJob.with_prepared_fork do
+      pid = fork do
+        reader.close
+        begin
+          DecentJob.after_supervisor_fork(DecentJob.configuration.dup)
+          DecentJob.reset!
+          writer.write(Marshal.dump([adapter.stopping?, uninitialized_adapter.stopping?]))
+        rescue => error
+          writer.write(Marshal.dump([error.class.name, error.message]))
+        ensure
+          writer.close
+        end
+        exit! 0
+      end
+    end
+    writer.close
+    _(Marshal.load(reader.read)).must_equal [:stopping, false]
+    Process.waitpid(pid)
+  ensure
+    reader&.close unless reader&.closed?
+    writer&.close unless writer&.closed?
+  end
+
   it "ignores allocated resources that have not initialized or started threads" do
     allocated = [DecentJob::Worker, DecentJob::CronManager, DecentJob::ProcessTracker].map(&:allocate)
     DecentJob.with_prepared_fork { _(allocated.size).must_equal 3 }

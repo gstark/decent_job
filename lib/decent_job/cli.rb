@@ -13,6 +13,12 @@ module DecentJob
     end
 
     def run(argv)
+      DecentJob.with_cli_application { run_command(argv) }
+    end
+
+    private
+
+    def run_command(argv)
       @shutdown_timed_out = false
       options = {}
       applications = []
@@ -58,8 +64,6 @@ module DecentJob
       @stderr.puts "Error: #{error.message}"
       1
     end
-
-    private
 
     def option_parser(options, applications)
       OptionParser.new do |parser|

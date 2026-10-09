@@ -5,8 +5,24 @@ require "logger"
 
 module DecentJob
   class Configuration
-    attr_accessor :database_url, :execution_mode, :queues, :max_threads,
-      :handled_exceptions, :retry_on_unhandled_error, :poll_interval, :enable_listen_notify, :shutdown_timeout, :logger, :on_thread_error, :enable_pauses, :preserve_job_records, :cron, :enable_cron, :cron_graceful_restart_period
+    SERVER_ASYNC_MODES = %i[async async_server].freeze
+    ASYNC_MODES = (SERVER_ASYNC_MODES + [:async_all]).freeze
+    EXECUTION_MODES = (ASYNC_MODES + %i[external inline]).freeze
+
+    def self.validate_execution_mode!(mode)
+      raise ArgumentError, "execution_mode must be #{EXECUTION_MODES.join(", ")}" unless EXECUTION_MODES.include?(mode)
+    end
+
+    def in_webserver?
+      return true if defined?(Rails::Server)
+      caller.any? do |frame|
+        frame.match?(%r{config\.ru|/puma/(?:request|response)\.rb|/puma/(?:cluster/worker|single)\.rb:\d+:|/rack/handler/}) ||
+          (RUBY_ENGINE == "jruby" && frame.include?("jruby/rack/rails_booter"))
+      end
+    end
+
+    attr_accessor :database_url, :queues, :max_threads,
+      :handled_exceptions, :retry_on_unhandled_error, :poll_interval, :enable_listen_notify, :shutdown_timeout, :enable_pauses, :preserve_job_records, :cron, :enable_cron, :cron_graceful_restart_period
 
     attr_reader :advisory_lock_heartbeat, :process_heartbeat_interval, :cleanup_discarded_jobs, :cleanup_preserved_jobs_before_seconds_ago,
       :cleanup_interval_jobs, :cleanup_interval_seconds, :probe_port, :probe_handler, :probe_app, :daemonize, :pidfile, :idle_timeout
@@ -34,15 +50,43 @@ module DecentJob
       @cron_graceful_restart_period = Float(ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]) if ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]
       @cron = JSON.parse(ENV.fetch("DECENT_JOB_CRON", "{}"), symbolize_names: true)
       @database_url = ENV["DECENT_JOB_DATABASE_URL"] || ENV["DATABASE_URL"]
-      @execution_mode = ENV.fetch("DECENT_JOB_EXECUTION_MODE", "external").to_sym
+      @environment_execution_mode = ENV["DECENT_JOB_EXECUTION_MODE"]&.to_sym
       @queues = ENV.fetch("DECENT_JOB_QUEUES", "*")
       @max_threads = Integer(ENV.fetch("DECENT_JOB_MAX_THREADS", "5"))
       @poll_interval = Float(ENV.fetch("DECENT_JOB_POLL_INTERVAL", "1"))
       @enable_listen_notify = ENV.fetch("DECENT_JOB_ENABLE_LISTEN_NOTIFY", "true") != "false"
       @enable_pauses = ENV.fetch("DECENT_JOB_ENABLE_PAUSES", "false") == "true"
       @shutdown_timeout = Float(ENV.fetch("DECENT_JOB_SHUTDOWN_TIMEOUT", "30"))
-      @logger = Logger.new($stdout)
-      @on_thread_error = ->(error) { @logger.error("#{error.class}: #{error.message}") }
+      @default_logger = Logger.new($stdout)
+    end
+
+    attr_writer :execution_mode, :logger, :on_thread_error
+
+    def execution_mode
+      return @execution_mode unless @execution_mode.nil?
+      @rails_execution_mode || @environment_execution_mode || @rails_default_execution_mode || :external
+    end
+
+    def on_thread_error
+      return @on_thread_error if defined?(@on_thread_error)
+      ->(error) { logger.error("#{error.class}: #{error.message}") }
+    end
+
+    def logger
+      @logger || @rails_logger || @default_logger
+    end
+
+    def apply_rails_config(options, environment:, logger:)
+      @rails_default_execution_mode = {"development" => :async, "test" => :inline}.fetch(environment, :external)
+      @rails_execution_mode = options[:execution_mode]&.to_sym
+      @rails_logger = options[:logger] || logger
+      previous = @rails_options || {}
+      options.each do |name, value|
+        next if %i[execution_mode logger].include?(name.to_sym) || (previous.key?(name) && previous[name] == value)
+        public_send("#{name}=", value)
+      end
+      @rails_options = options.to_h.dup
+      self
     end
 
     def daemonize=(value)
@@ -84,7 +128,7 @@ module DecentJob
     def subprocess_configs
       groups = queue_groups
       if groups.size > 1 && @subprocesses.positive?
-        @logger.warn("Queue groups override subprocesses=#{@subprocesses} with #{groups.size}")
+        logger.warn("Queue groups override subprocesses=#{@subprocesses} with #{groups.size}")
       end
       recipes = (groups.size > 1) ? groups : Array.new(subprocesses, groups.first)
       recipes.map { |queues| child_configuration(queues) }
@@ -169,11 +213,11 @@ module DecentJob
     def validate!
       validate_handled_exceptions!
       raise ArgumentError, "retry_on_unhandled_error must be true or false" unless [true, false].include?(@retry_on_unhandled_error)
-      raise ArgumentError, "execution_mode must be external, inline, or async" unless %i[external inline async].include?(@execution_mode)
+      self.class.validate_execution_mode!(execution_mode)
       queue_groups.each { |group| QueueSelection.pools(group, default_threads: @max_threads) }
       raise ArgumentError, "poll_interval must be positive" unless @poll_interval.is_a?(Numeric) && @poll_interval.positive? && @poll_interval.finite?
       raise ArgumentError, "shutdown_timeout must be nonnegative" unless @shutdown_timeout.is_a?(Numeric) && @shutdown_timeout >= 0 && @shutdown_timeout.finite?
-      raise ArgumentError, "on_thread_error must be callable" unless @on_thread_error.respond_to?(:call)
+      raise ArgumentError, "on_thread_error must be callable" unless on_thread_error.respond_to?(:call)
       raise ArgumentError, "enable_cron must be true or false" unless [true, false].include?(@enable_cron)
       period = @cron_graceful_restart_period
       if !period.nil? && (!period.is_a?(Numeric) || !period.finite? || !period.positive?)
@@ -207,13 +251,13 @@ module DecentJob
     end
 
     def cron_manager_options
-      {graceful_restart_period: @cron_graceful_restart_period, on_thread_error: @on_thread_error}
+      {graceful_restart_period: @cron_graceful_restart_period, on_thread_error: on_thread_error}
     end
 
     def worker_options
       {advisory_lock_heartbeat: @advisory_lock_heartbeat, process_heartbeat_interval: @process_heartbeat_interval,
        queues: @queues, max_threads: @max_threads, poll_interval: @poll_interval,
-       enable_listen_notify: @enable_listen_notify, on_thread_error: @on_thread_error,
+       enable_listen_notify: @enable_listen_notify, on_thread_error: on_thread_error,
        cleanup_interval_jobs: @cleanup_interval_jobs, cleanup_interval_seconds: @cleanup_interval_seconds,
        cleanup_preserved_jobs_before_seconds_ago: @cleanup_preserved_jobs_before_seconds_ago,
        cleanup_discarded_jobs: @cleanup_discarded_jobs}

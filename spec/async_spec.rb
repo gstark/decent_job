@@ -17,7 +17,7 @@ describe "async execution" do
   before do
     DecentJob.reset!
     DecentJob::Schema.new(database).migrate
-    @adapter = DecentJob::Adapter.new(database: database, execution_mode: :async)
+    @adapter = DecentJob::Adapter.new(database: database, execution_mode: :async_all)
     RecordingJob.queue_adapter = @adapter
     RecordingJob.events = Queue.new
   end
@@ -49,7 +49,7 @@ describe "async execution" do
   end
 
   it "does not start another adapter's worker while draining a job" do
-    parent_adapter = DecentJob::Adapter.new(database: database, execution_mode: :async)
+    parent_adapter = DecentJob::Adapter.new(database: database, execution_mode: :async_all)
     ShutdownEnqueuerJob.queue_adapter = parent_adapter
     ShutdownEnqueuerJob.started = Queue.new
     ShutdownEnqueuerJob.release = Queue.new

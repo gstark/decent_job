@@ -160,9 +160,23 @@ Daemon and idle verification: the full PostgreSQL suite passed 1,163 specs and 4
 
 Verification exposed an order-dependent BigDecimal spec import and an existing pool-test synchronization race; both test assumptions were corrected. The first full run also observed one unexplained foreground supervisor shutdown exit of 1. Failure diagnostics now retain stderr and callback errors. The full same-seed rerun and twelve consecutive focused supervisor process runs passed, but the original shutdown failure's cause remains unproven.
 
+### Rails and host integration
+
+- [x] Support `external`, `inline`, `async`, `async_server`, and `async_all`; detect Rails servers, Rack boot, Puma workers/requests, and JRuby Rack without enabling work in consoles, tasks, or a Puma master. Keep explicit configuration and standalone defaults clear.
+- [x] Add an optional Railtie with `config.decent_job` settings, Rails logger fallback, framework-ready startup, and safe handling of adapters created during boot. Do not load Rails or Active Record from standalone code or add either as a runtime dependency.
+- [x] Run jobs and cron callbacks inside the host execution context, retaining Active Job's reloader behavior and avoiding startup/reload deadlocks. Preserve retry/discard event details and process/fork/shutdown ownership.
+- [x] Verify actual Active Job 8.1 transaction deferral through job-class configuration, including commit, rollback, nested transactions, scheduled jobs, and bulk enqueue. Document the separate PostgreSQL connection and lack of cross-database atomicity; keep caller-owned DecentJob transaction behavior covered.
+- [x] Add reproducible optional Rails integration dependencies and real boot/process specs; independently review, run the full suite plus host suite, and verify the packaged gem without Rails.
+
+Active Job 8.1 uses the job class's `enqueue_after_transaction_commit` boolean for both ordinary and bulk enqueue; its Railtie installs the Active Record bridge. The adapter preference alone does not enable deferral in this target version. Host integration should use the framework's supported path and document that contract.
+
+Rails/host verification: the full core PostgreSQL suite passed 1,204 specs and 4,649 assertions with no failures or errors, seed 56797. The separate Rails 8.1.4 host suite passed 14 cases and 81 assertions, seed 7871. Four optional WEBrick specs skipped under Bundler passed separately with 17 assertions. Standard, gem build, and whitespace checks passed. Independent spec and quality reviews approved the slice after regressions for inherited adapter retirement and invalid false execution modes. The unpacked gem executed and drained an `async_all` job without loading Rails or Active Record, and its runtime dependency manifest still contains only Active Job and pg.
+
+Real host cases verify boot-time adapters, default and explicit configuration, logger selection, applications without Active Record, late Rails loading, cron autoloading, CLI pool suppression with follow-on enqueue, commit/rollback/savepoints, scheduled options, mixed bulk deferral, inline executor context, and changed-class reloading. Unit and process regressions also cover autoloading while configuring cron, callback execution context, reset/fork ownership, and CLI context restoration. The optional host bundle and sequential CI steps are checked in; remote CI has not run. A4, A7, and A9 are implemented. Worker scheduling/notification refinements, other lock strategies, dashboard features, and the full parity audit remain open.
+
 ### Remaining slices
 
-1. Operations: Rails integration and remaining worker lifecycle refinements.
+1. Operations: scheduled-job cache, notification controls, and remaining worker lifecycle refinements.
 2. Dashboard: authenticated job actions, histories, batches, schedules, processes and metrics.
 3. Compatibility: additional lock strategies, PgBouncer, benchmark and final parity audit.
 

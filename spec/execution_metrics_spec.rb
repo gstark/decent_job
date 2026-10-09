@@ -116,7 +116,7 @@ describe "execution metrics persistence" do
       MetricsCallbackJob.tick.call(11)
     end
     host = Module.new
-    application = Struct.new(:executor).new(executor)
+    application = Struct.new(:executor, :reloader).new(Object.new, executor)
     host.define_singleton_method(:application) { application }
     Object.const_set(:Rails, host)
     job = MetricsCallbackJob.perform_later

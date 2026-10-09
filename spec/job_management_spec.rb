@@ -383,7 +383,7 @@ describe "job management callbacks and transactions" do
   it "starts async retry execution after the surrounding transaction commits" do
     job = discarded_job
     events = Queue.new
-    adapter = DecentJob::Adapter.new(database: database, execution_mode: :async)
+    adapter = DecentJob::Adapter.new(database: database, execution_mode: :async_all)
     ManagementRetryJob.queue_adapter = adapter
     ManagementRetryJob.on_perform = ->(_) { events << true }
     database.transaction do

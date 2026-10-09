@@ -8,3 +8,8 @@ Rake::TestTask.new(:spec) do |task|
 end
 
 task default: :spec
+
+Rake::TestTask.new("spec:rails") do |task|
+  task.libs << "spec"
+  task.pattern = "integration/**/*_spec.rb"
+end
