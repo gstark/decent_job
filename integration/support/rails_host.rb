@@ -158,6 +158,17 @@ result = {events: HOST_EVENTS, mode: RailsHostJob.queue_adapter.execution_mode,
           active_record_loaded: defined?(ActiveRecord::Base) ? true : false}
 
 case HOST_SCENARIO
+when "global_controls"
+  result[:migrated] = DecentJob.migrated?
+  result[:shutdown_before] = DecentJob.shutdown?
+  RailsHostJob.perform_later("first")
+  RailsHostJob.perform_later("second")
+  result[:attempts] = DecentJob.perform_inline
+  result[:performed] = HOST_EVENTS.select { |event| event.first == "perform" }
+  DecentJob.start
+  result[:shutdown_running] = DecentJob.shutdown?
+  DecentJob.shutdown(timeout: 5)
+  result[:shutdown_after] = DecentJob.shutdown?
 when "heartbeat", "heartbeat_environment", "heartbeat_host", "heartbeat_explicit"
   result[:heartbeat_setting] = DecentJob.configuration.advisory_lock_heartbeat
   result[:worker_heartbeat_setting] = DecentJob.configuration.worker_options.fetch(:advisory_lock_heartbeat)

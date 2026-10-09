@@ -29,6 +29,8 @@ bundle exec decent_job migrate
 
 The database must already exist. Migrations install only DecentJob's tables in the connection's current schema. Installation is transactional and repeatable; no PostgreSQL extensions are required.
 
+Use `DecentJob.migrated?` to check that every SQL migration shipped with the gem is recorded as installed. Pass `database:` to inspect an explicit pool, or call `DecentJob::Schema.new(database).migrated?`. These queries respect the connection's search path and never install or alter tables. Missing metadata or versions return false; connection, permission, and malformed-metadata errors propagate. A missing metadata table does not abort an enclosing `database.transaction`. Extra future versions are allowed; this checks migration history, not whether someone manually changed an installed table.
+
 Create an application file, such as `jobs.rb`:
 
 ```ruby
@@ -121,7 +123,11 @@ Use `execution_mode = :async_all` to start background workers on the first enque
 
 Use `execution_mode = :inline` to run due jobs before enqueue returns. Future jobs stay persisted. Inline mode records and propagates unhandled job errors; handled retries and discards retain Active Job behavior. Nested inline jobs and immediate retries drain iteratively.
 
-`DecentJob.perform_inline(queues: "*", limit: 1000)` drains currently due jobs explicitly. It returns the number of attempted executions. `DecentJob.reset!` drains workers and cron callbacks, closes the global pool, and resets configuration. Existing adapter objects should be replaced after a reset.
+`DecentJob.perform_inline(queues: "*", limit: nil)` drains currently due jobs explicitly until no eligible job remains. It returns the number of attempted executions, including immediate retries. Pass a nonnegative integer to cap attempts; zero returns zero without opening the database. Future jobs remain pending until due, and unhandled errors propagate after their attempt is recorded. An unlimited drain can keep running while jobs keep arriving or retrying immediately, so use a finite limit when the caller needs a bound.
+
+`DecentJob.shutdown?` observes whether all globally registered workers and cron managers have drained, including their listeners, heartbeat monitors, and callbacks. It is true before startup and does not request shutdown. See [lifecycle inspection](docs/lifecycle.md#shutdown-completion).
+
+`DecentJob.reset!` drains workers and cron callbacks, closes the global pool, and resets configuration. Existing adapter objects should be replaced after a reset.
 
 For isolated instances:
 
@@ -304,7 +310,7 @@ bundle exec standardrb
 gem build decent_job.gemspec
 ```
 
-All tests use Minitest spec syntax. Database specs create and remove uniquely named schemas in the test database; the account needs schema-creation permission. Separate-connection specs exercise competing workers. Process specs cover SIGTERM/SIGINT, shutdown deadlines, and SIGKILL recovery. No production job database should be used for tests.
+All tests use Minitest spec syntax. Database specs create and remove uniquely named schemas in the test database. Run the full suite with a PostgreSQL superuser in an isolated test database: the readiness permission-error case also creates, assumes, and removes a temporary role. Separate-connection specs exercise competing workers. Process specs cover SIGTERM/SIGINT, shutdown deadlines, and SIGKILL recovery. No production job database should be used for tests.
 
 The separate PgBouncer suite starts an isolated transaction pool and requires the `pgbouncer` executable plus a test account that can create databases. Run `bundle exec rake spec:pgbouncer` sequentially with the other database suites. See [PgBouncer setup and verification](docs/pgbouncer.md).
 

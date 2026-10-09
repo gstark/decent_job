@@ -210,6 +210,28 @@ describe "PgBouncer transaction pooling" do
     observer&.finish
   end
 
+  it "checks migration readiness and drains explicitly through the transaction pool" do
+    DecentJob.configure { |config| config.database_url = @fixture.connection_options }
+    adapter = DecentJob::Adapter.new(database: DecentJob.database, execution_mode: :external)
+    [PgBouncerRecordingJob, PgBouncerRetryJob].each { |job| job.queue_adapter = adapter }
+    database.transaction do |connection|
+      connection.exec("SET TRANSACTION READ ONLY")
+      _(DecentJob.migrated?(database: database)).must_equal true
+    end
+    _(DecentJob.migrated?).must_equal true
+    _(DecentJob.shutdown?).must_equal true
+    PgBouncerRetryJob.perform_later("retry")
+    scheduled = PgBouncerRecordingJob.set(wait: 3600).perform_later("later")
+    _(Timeout.timeout(10) { DecentJob.perform_inline }).must_equal 2
+    _(PgBouncerRecordingJob.events.pop(true)).must_equal "retry"
+    _(@store.find(scheduled.provider_job_id).fetch("state")).must_equal "ready"
+    _(DecentJob.perform_inline).must_equal 0
+    DecentJob.start
+    _(DecentJob.shutdown?).must_equal false
+    _(DecentJob.shutdown(timeout: 5)).must_equal true
+    _(DecentJob.shutdown?).must_equal true
+  end
+
   it "performs immediate and scheduled work and preserves Active Job retry history" do
     immediate = PgBouncerRecordingJob.perform_later("immediate")
     scheduled = PgBouncerRecordingJob.set(wait: 3600).perform_later("scheduled")

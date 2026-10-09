@@ -64,6 +64,17 @@ describe "Rails 8.1 host integration" do
     _(result.fetch("events")).must_include ["early", false, false]
   end
 
+  it "inspects migration and shutdown readiness and drains explicitly through the host executor" do
+    result = run_host("global_controls")
+    _(result.fetch("migrated")).must_equal true
+    _(result.fetch("shutdown_before")).must_equal true
+    _(result.fetch("attempts")).must_equal 2
+    _(result.fetch("performed")).must_equal [["perform", "first", true], ["perform", "second", true]]
+    _(result.fetch("shutdown_running")).must_equal false
+    _(result.fetch("shutdown_after")).must_equal true
+    _(result.fetch("active_record_loaded")).must_equal false
+  end
+
   it "uses Rails environment defaults when no execution mode was configured" do
     {"test" => "inline", "development" => "async", "production" => "external"}.each do |environment, mode|
       result = run_host("boot", mode: nil, environment: environment)

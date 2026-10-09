@@ -8,6 +8,19 @@ module DecentJob
       @database = database
     end
 
+    def migrated?
+      # A savepoint protects callers' transactions when metadata is absent or
+      # concurrently dropped. Resolve the table through migrate's search_path.
+      versions = @database.transaction do |connection|
+        connection.exec("SELECT version FROM decent_job_schema_migrations").column_values(0).map(&:to_i)
+      end
+      Dir[File.join(MIGRATIONS_PATH, "*.sql")].all? do |path|
+        versions.include?(File.basename(path).split("_").first.to_i)
+      end
+    rescue PG::UndefinedTable
+      false
+    end
+
     def migrate
       @database.transaction do |connection|
         # Serialize installation before even creating the migrations table.

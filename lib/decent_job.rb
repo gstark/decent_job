@@ -126,6 +126,10 @@ module DecentJob
       Schema.new(database).migrate
     end
 
+    def migrated?(database: nil)
+      Schema.new(database || self.database).migrated?
+    end
+
     def pause(**target)
       Pauses.new(database).pause(**target)
     end
@@ -264,6 +268,11 @@ module DecentJob
       runtime_mutex.owned? ? @stopping : runtime_mutex.synchronize { @stopping }
     end
 
+    def shutdown?
+      resources = runtime_mutex.synchronize { @cron_managers.values + @workers }
+      resources.all?(&:shutdown?)
+    end
+
     def shutdown(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
       _revision, handles = begin_shutdown
@@ -381,11 +390,15 @@ module DecentJob
       )
     end
 
-    def perform_inline(queues: "*", limit: 1000)
-      raise ArgumentError, "limit must be positive" unless limit.is_a?(Integer) && limit.positive?
+    def perform_inline(queues: "*", limit: nil)
+      if !limit.nil? && (!limit.is_a?(Integer) || limit.negative?)
+        raise ArgumentError, "limit must be a nonnegative integer or nil"
+      end
+      return 0 if limit == 0
+
       performer = Performer.new(database: database)
       count = 0
-      count += 1 while count < limit && performer.perform_one(queues: queues, raise_errors: true)
+      count += 1 while (limit.nil? || count < limit) && performer.perform_one(queues: queues, raise_errors: true)
       count
     end
 

@@ -31,6 +31,19 @@ Cron managers are shared by database. Stopping an adapter also stops that databa
 
 Existing owners keep their queue and thread recipes across restart. Use reset and configuration, or construct a new directly owned worker, to change those recipes.
 
+## Shutdown completion
+
+`DecentJob.shutdown?` returns true before any registered resource starts and after every registered worker and cron manager drains. Running jobs, cron callbacks, listeners, and heartbeat cleanup keep it false even after a stop request. The query does not signal resources, open database connections, validate configuration, or change the lifecycle revision.
+
+```ruby
+DecentJob.shutdown(timeout: 0) # Request shutdown without waiting.
+DecentJob.shutdown?           # False while registered resources still drain.
+```
+
+The query snapshots the registry under its mutex, then inspects each owner outside that mutex. Concurrent startup or restart can change the result immediately after inspection. `stopping?` records the global stop gate and remains true after draining; `started?` and `connected?` become false when stopping begins, so neither establishes completion. An adapter restart makes shutdown completion false again while its worker runs.
+
+Only globally registered resources contribute. Inspect a directly constructed worker or cron manager with its own `shutdown?`; global completion does not certify that caller-owned resources or standalone executions have finished.
+
 ## Independent owners
 
 ```ruby
