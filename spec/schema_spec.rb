@@ -11,7 +11,7 @@ describe "schema installation" do
       tables = connection.exec("SELECT tablename FROM pg_tables WHERE schemaname = current_schema()").column_values(0)
       _(tables).must_include "decent_jobs"
       _(tables).must_include "decent_job_executions"
-      _(connection.exec("SELECT version FROM decent_job_schema_migrations ORDER BY version").column_values(0)).must_equal ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
+      _(connection.exec("SELECT version FROM decent_job_schema_migrations ORDER BY version").column_values(0)).must_equal ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]
     end
   end
 
@@ -20,7 +20,7 @@ describe "schema installation" do
     schema.migrate
     schema.migrate
     database.with_connection do |connection|
-      _(connection.exec("SELECT count(*) FROM decent_job_schema_migrations").getvalue(0, 0)).must_equal "10"
+      _(connection.exec("SELECT count(*) FROM decent_job_schema_migrations").getvalue(0, 0)).must_equal "11"
     end
   end
 
@@ -29,7 +29,7 @@ describe "schema installation" do
     workers = 3.times.map { Thread.new { DecentJob::Schema.new(database).migrate } }
     workers.each(&:value)
     database.with_connection do |connection|
-      _(connection.exec("SELECT count(*) FROM decent_job_schema_migrations").getvalue(0, 0)).must_equal "10"
+      _(connection.exec("SELECT count(*) FROM decent_job_schema_migrations").getvalue(0, 0)).must_equal "11"
     end
   end
 
@@ -63,7 +63,7 @@ describe "schema installation" do
     end
     DecentJob::Schema.new(database).migrate
     database.with_connection do |connection|
-      _(connection.exec("SELECT version FROM decent_job_schema_migrations ORDER BY version").column_values(0)).must_equal ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
+      _(connection.exec("SELECT version FROM decent_job_schema_migrations ORDER BY version").column_values(0)).must_equal ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]
     end
   end
   it "indexes finished records in cleanup cursor order" do

@@ -33,7 +33,7 @@ Timestamp heartbeats consider a process active until its heartbeat expires after
 
 Each tracker owns a monitor thread and a dedicated PostgreSQL connection. It does not borrow from the job connection pool or depend on LISTEN/NOTIFY. This lets heartbeats continue while every pooled connection is occupied. The monitor reconnects after a connection error, reports the error through `on_thread_error`, and restores the same process identity. It also recreates a process record deleted while registration is still active.
 
-Job session locks remain the execution authority. Losing a heartbeat connection does not release a live job's lock or concurrency grant. Process cleanup rechecks both process liveness and job ownership before changing either.
+Advisory and hybrid job session locks remain authoritative even when a heartbeat connection fails. SKIP LOCKED claims use persisted process ownership instead. Process cleanup rechecks process liveness and raw job session locks before releasing ownership or concurrency grants. See [lock strategies](locking.md).
 
 ## Shutdown and cleanup
 
@@ -49,7 +49,7 @@ Cleanup skips live or contended owners, clears abandoned job ownership, and rele
 
 Process and owned-job scans use bounded pages. Lock waits are capped at 100 milliseconds per transaction, respecting a tighter caller setting; a contended candidate rolls back and can be retried on a later sweep. Pass `stopping: -> { ... }` to stop between records or owned jobs. Workers allow one sweep at a time and stop cleanup when shutdown begins.
 
-A killed process using timestamp heartbeats can leave its process record visible until expiration. Job recovery can still proceed when its job session lock is gone. Process-record retention is separate from [job record preservation](record-preservation.md).
+A killed process using timestamp heartbeats can leave its process record visible until expiration. Advisory and hybrid job recovery can proceed when the job session lock is gone. SKIP LOCKED recovery waits for inactive-process cleanup to release the persisted claim. Process-record retention is separate from [job record preservation](record-preservation.md).
 
 ## Worker statistics and connection sizing
 
@@ -61,8 +61,10 @@ Each scheduler also reports `max_cache`, `active_cache`, and `available_cache`. 
 
 `DecentJob.stats` aggregates registered workers in the current process. `execution_at` records execution starts and completions, and `check_queue_at` records dequeue attempt starts. These fields also appear in persisted heartbeat state. See [worker activity and thread controls](worker-observability.md) for all aggregate fields, snapshot semantics, idle timing, and cooperative shutdown helpers.
 
-`Database#stats` reports configured pool size, allocated connections, active checkouts, and idle connections. The dedicated heartbeat and LISTEN connections are outside those counts. Reserve one additional connection for each active tracker, plus the listener when enabled. An idle worker keeps its tracker; a standalone performer only starts one after acquiring a candidate job.
+`Database#stats` reports configured pool size, allocated connections, active checkouts, and idle connections. The dedicated heartbeat and LISTEN connections are outside those counts. Reserve one additional connection for each active tracker, plus the listener when enabled. An idle worker keeps its tracker. A standalone performer registers after acquiring an advisory candidate, or before its row-claim transaction in SKIP LOCKED and hybrid modes. An empty row claim releases that temporary registration.
 
 With Active Support's fiber isolation enabled, concurrent fibers count as separate checkout owners. [Runtime resources](runtime-resources.md) lists the thread and session bounds and explains how scoped state and transactions follow that setting.
+
+Claim cleanup can temporarily use an independent connection after interruption or pool exhaustion. It waits for a caller's interrupted checkout to retire before clearing persisted ownership, so cleanup cannot wait on its own abandoned transaction.
 
 Create fresh database and worker objects after forking. Inherited pools and trackers are rejected instead of reusing the parent's connections or process identity. A child's rejected use must not remove the parent's process record.

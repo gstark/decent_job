@@ -49,7 +49,7 @@ module DecentJob
         SELECT count(*) FROM decent_jobs
         WHERE #{predicate(rule)} AND decent_jobs.id <> $2
           AND decent_jobs.state IN ('running', 'ready')
-          AND #{ConcurrencyClaims::JOB_LOCKED_SQL}
+          AND #{ConcurrencyClaims::EXECUTION_LOCKED_SQL}
           AND NOT EXISTS (
             SELECT 1 FROM decent_job_concurrency_claims
             WHERE job_id = decent_jobs.id AND scope = $3 AND state <> 'granted'

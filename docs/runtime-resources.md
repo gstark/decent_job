@@ -6,15 +6,16 @@ DecentJob uses Ruby threads and its own PostgreSQL pool. Active Job supplies Act
 
 | Owner | Threads | PostgreSQL connections |
 | --- | --- | --- |
-| Worker execution pools | The sum of the configured queue-pool thread counts | Checkouts from the shared pool, retained through each job's cleanup |
+| Worker execution pools | The sum of the configured queue-pool thread counts | Shared-pool checkouts; advisory and hybrid claims retain one through execution, while SKIP LOCKED returns the acquisition checkout before the body |
 | Worker notification listener | One when LISTEN/NOTIFY is enabled | One dedicated session |
 | Active process tracker | One monitor, shared by its registration leases | One dedicated session, including when every pooled connection is busy |
 | Cron entry | One timer and two delivery threads; one additional catch-up thread when enabled | Checkouts from its database's pool |
 | Record and process cleanup | Existing execution threads | Checkouts from the shared pool |
+| Interrupted or exhausted-pool claim cleanup | The thread releasing the claim | A temporary independent connection after its original checkout has unwound |
 | Default health probe | One server thread | None |
 | systemd watchdog | One when watchdog notifications are enabled | None |
 
-Standalone and inline performers register their tracker only while executing a claimed job. Idle polling does not retain a process record. Workers keep a registration while idle, and active registrations retain the monitor through shutdown. Multiple trackers using one database each need their own dedicated session.
+Standalone and inline performers register their tracker for a claim. Advisory mode registers after acquiring a candidate; row modes register before the claim transaction. An empty row claim releases its temporary registration. Workers keep a registration while idle, and active registrations retain the monitor through shutdown. Multiple trackers using one database each need their own dedicated session.
 
 Scheduled jobs use bounded caches and condition-variable deadlines on existing worker threads. They do not create a thread per job. Cron keeps one pending live occurrence per entry, and catch-up proceeds serially. A slow cron entry does not consume another entry's delivery threads.
 
@@ -43,7 +44,7 @@ DecentJob's execution-state storage belongs to one process. A child discards inh
 
 Pooled connections use the same isolation boundary. Nested calls in one context reuse their checkout. Under fiber isolation, two interleaved fibers use separate sessions and separate transaction callbacks, even when they run on the same Ruby thread. One fiber's commit cannot dispatch another fiber's callbacks or commit its work.
 
-The configured pool size bounds all pooled sessions. Size it for concurrent execution contexts, including application enqueues and cron callbacks. Listener and monitor sessions are additional to that limit. Changing the isolation setting while resources are live is unsupported; configure it before checkouts or scoped work begin.
+The configured pool size bounds all pooled sessions. Size it for concurrent execution contexts, including application enqueues and cron callbacks. Listener and monitor sessions are additional to that limit. Ownership cleanup after interruption or pool exhaustion can briefly open an independent connection for each affected claim. Changing the isolation setting while resources are live is unsupported; configure it before checkouts or scoped work begin.
 
 The process monitor owns its dedicated session. Registration, inspection, and job cleanup do not operate on that connection from another thread. Heartbeat state callbacks run inside the host executor, outside registration locks. Renewal remains independent of the pooled checkouts used by jobs and cron. Interrupted pooled sessions remain owned until application cleanup unwinds, then are retired as described in [forced shutdown](shutdown.md).
 

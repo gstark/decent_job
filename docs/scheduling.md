@@ -30,9 +30,9 @@ An explicitly ordered queue list such as `+urgent,default` takes precedence over
 
 An Active Job retry, direct self-reenqueue, or operator retry refreshes `created_at` in created-time mode, placing it after peers already waiting at the same priority. Scheduled-time mode preserves the original creation time. Attempt snapshots retain their original scheduling metadata. A backend retry after an unhandled error is not an Active Job reenqueue and preserves its timestamps. Management rescheduling changes the deadline without refreshing creation time; durable concurrency waiters also keep their own queue position.
 
-`queue_select_limit` defaults to 1,000. It bounds the eligible, queue-filtered, unpaused candidate set before advisory locks are attempted. Locked candidates count against this bound. If all candidates within it are locked, the attempt returns no job even when an unlocked job exists beyond the bound. Set the limit above the number of concurrently running jobs across workers to reduce this contention. Each attempt still executes at most one job.
+`queue_select_limit` defaults to 1,000. In advisory mode it bounds the eligible, queue-filtered, unpaused candidate set before advisory locks are attempted. Locked candidates count against this bound. If all candidates within it are locked, the attempt returns no job even when an unlocked job exists beyond the bound. Set the limit above the number of concurrently running jobs across workers to reduce this contention. Each attempt still executes at most one job. SKIP LOCKED and hybrid claims select one row directly and ignore this limit; see [lock strategies](locking.md).
 
-A limit of zero prevents ordinary dequeue attempts from selecting work. Explicitly targeted execution, including inline enqueue, still checks the requested job. This setting is separate from polling and the future-deadline cache; it does not disable their activity or stop existing jobs.
+A limit of zero prevents ordinary advisory dequeue attempts from selecting work. Explicitly targeted execution, including inline enqueue, still checks the requested job. SKIP LOCKED and hybrid claims are unaffected. This setting is separate from polling and the future-deadline cache; it does not disable their activity or stop existing jobs.
 
 Both controls are read when claiming work, so changes apply to an existing performer. Sort values accept the two named symbols or strings; limits accept nonnegative integers or decimal integer strings. Invalid values raise `ArgumentError` rather than silently becoming a different policy. Nil clears an explicit override.
 
@@ -50,7 +50,7 @@ Each execution holds a PostgreSQL session advisory lock until its claim unwinds.
 
 Claims release their own lock when execution returns or raises, or when registration or attempt creation fails. An interrupted acquisition whose result is unknown retires the connection, preventing an uncertain lock from returning to the pool. A connection failure during unlock preserves an already-propagating application exception. Recovery records an unfinished attempt as interrupted when a replacement claims it; see [execution recovery](execution-recovery.md).
 
-Eligibility is checked again under the job row lock. A candidate deleted or finished after selection cannot start another attempt. SKIP LOCKED and hybrid execution modes remain planned. The current mode requires direct PostgreSQL connections or session pooling.
+Eligibility is checked again under the job row lock. A candidate deleted or finished after selection cannot start another attempt. Advisory execution requires direct PostgreSQL connections or session pooling. [Lock strategies](locking.md) describes the row-based alternatives and mixed-worker ownership.
 
 ## Polling and deadlines
 

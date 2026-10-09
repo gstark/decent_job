@@ -11,7 +11,7 @@ module DecentJob
   class BatchStore
     # A normal failed attempt can retain its session lock while reconciling a
     # batch. A force-discarded attempt may still have application code running.
-    FORCE_DISCARD_LOCKED_SQL = "COALESCE(decent_jobs.error ->> 'force_discarded', 'false') = 'true' AND (#{ConcurrencyClaims::JOB_LOCKED_SQL})"
+    FORCE_DISCARD_LOCKED_SQL = "COALESCE(decent_jobs.error ->> 'force_discarded', 'false') = 'true' AND (#{ConcurrencyClaims::EXECUTION_LOCKED_SQL})"
     private_constant :FORCE_DISCARD_LOCKED_SQL
 
     ATTRIBUTES = %w[description on_finish on_success on_discard callback_queue_name callback_priority properties].freeze

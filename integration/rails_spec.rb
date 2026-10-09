@@ -27,6 +27,7 @@ describe "Rails 8.1 host integration" do
                    "HOST_SERVER" => server.to_s, "HOST_RESULT" => result_path, "RAILS_ENV" => environment, "HOST_ISOLATION" => isolation,
                    "DECENT_JOB_DEQUEUE_QUERY_SORT" => scenario.start_with?("dequeue") ? "created_at" : nil,
                    "DECENT_JOB_QUEUE_SELECT_LIMIT" => scenario.start_with?("dequeue") ? "5" : nil,
+                   "DECENT_JOB_LOCK_STRATEGY" => scenario.start_with?("lock_strategy") ? "hybrid" : nil,
                    "DECENT_JOB_EXECUTION_MODE" => nil, "DECENT_JOB_ENABLE_CRON" => "false"}
     Open3.popen3(environment, RbConfig.ruby, "-Ilib", "integration/support/rails_host.rb", pgroup: true) do |input, output, error, process|
       input.close
@@ -69,6 +70,17 @@ describe "Rails 8.1 host integration" do
     result = run_host("custom_logger")
     _(result.fetch("logger")).must_equal false
     _(result.fetch("custom_logger")).must_equal true
+  end
+
+  {"lock_strategy" => "skiplocked", "lock_strategy_explicit" => "advisory"}.each do |scenario, mode|
+    it "executes with #{mode} ownership through #{scenario} configuration" do
+      result = run_host(scenario, early_load: true)
+      _(result.fetch("lock_strategy")).must_equal mode
+      _(result.fetch("cleared_strategy")).must_equal "skiplocked"
+      _(result.fetch("lock_modes")).must_equal [["lock", "host mode", mode, true, true], ["lock", "changed mode", "hybrid", true, true]]
+      _(result.fetch("released")).must_equal [[nil, nil, nil], [nil, nil, nil]]
+      _(result.fetch("active_record_loaded")).must_equal false
+    end
   end
 
   it "uses host dequeue settings ahead of environment and applies a changed limit to the existing performer" do

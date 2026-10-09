@@ -34,7 +34,9 @@ Inline execution persists the outcome and raises the unhandled exception back to
 
 ## Interrupted attempts
 
-After process termination or a lost PostgreSQL session, another worker can acquire the job's advisory lock. It marks the previous unfinished attempt with `DecentJob::InterruptedError` and `error_event: "interrupted"`, then starts one replacement attempt. Recovery detection does not create a separate history entry of its own.
+In advisory and hybrid modes, process termination or a lost PostgreSQL session lets another worker acquire the job's advisory lock. SKIP LOCKED claims retain persisted ownership after a process crash until process cleanup confirms the owner is inactive and releases it. See [lock strategies](locking.md#recovery) for the recovery timing.
+
+A replacement marks the previous unfinished attempt with `DecentJob::InterruptedError` and `error_event: "interrupted"`, then starts one replacement attempt. Recovery detection does not create a separate history entry of its own.
 
 [Forced worker shutdown](shutdown.md) uses the same recovery path. It lets Ruby cleanup unwind before retiring the interrupted connection and releasing its job lock. Until a replacement claims the job, the abandoned attempt remains unfinished.
 

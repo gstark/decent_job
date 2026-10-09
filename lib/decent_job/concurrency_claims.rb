@@ -17,6 +17,15 @@ module DecentJob
       )
     SQL
 
+    # Skiplocked ownership survives the claiming transaction. Advisory and
+    # hybrid ownership ends with the session, even if its process still lives.
+    PERSISTED_LOCKED_SQL = "(decent_jobs.locked_by_id IS NOT NULL AND COALESCE(to_jsonb(decent_jobs)->>'lock_type' = 'skiplocked', false))"
+    EXECUTION_LOCKED_SQL = "((#{JOB_LOCKED_SQL}) OR #{PERSISTED_LOCKED_SQL})"
+
+    def self.lock_type_column?(connection)
+      connection.exec("SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'decent_jobs'::regclass AND attname = 'lock_type' AND NOT attisdropped)").getvalue(0, 0) == "t"
+    end
+
     def initialize(database)
       @database = database
     end
@@ -87,7 +96,7 @@ module DecentJob
           JOIN decent_jobs ON decent_jobs.id = job_id
           WHERE decent_jobs.state IN ('succeeded', 'discarded')
             OR (decent_job_concurrency_claims.state IN ('granted', 'promotion_pending')
-              AND NOT (#{JOB_LOCKED_SQL}))
+              AND NOT (#{EXECUTION_LOCKED_SQL}))
         SQL
         scopes.sort.each do |scope|
           @database.transaction do
@@ -95,7 +104,7 @@ module DecentJob
             rows = connection.exec_params(<<~SQL, [scope])
               DELETE FROM decent_job_concurrency_claims USING decent_jobs
               WHERE job_id = decent_jobs.id AND scope = $1 AND decent_job_concurrency_claims.state = 'granted'
-                AND (decent_jobs.state IN ('succeeded', 'discarded') OR NOT (#{JOB_LOCKED_SQL}))
+                AND (decent_jobs.state IN ('succeeded', 'discarded') OR NOT (#{EXECUTION_LOCKED_SQL}))
               RETURNING job_id
             SQL
             rows.ntuples.times { promote(connection, scope) }
@@ -103,7 +112,7 @@ module DecentJob
               SELECT job_id FROM decent_job_concurrency_claims
               JOIN decent_jobs ON decent_jobs.id = job_id
               WHERE scope = $1 AND decent_job_concurrency_claims.state = 'promotion_pending'
-                AND decent_jobs.state = 'ready' AND NOT (#{JOB_LOCKED_SQL})
+                AND decent_jobs.state = 'ready' AND NOT (#{EXECUTION_LOCKED_SQL})
               FOR UPDATE OF decent_job_concurrency_claims
             SQL
             pending.each do |row|
@@ -140,12 +149,13 @@ module DecentJob
         row = connection.exec_params("SELECT job_id FROM decent_job_concurrency_claims WHERE scope = $1 AND state = 'waiting' ORDER BY created_at, job_id LIMIT 1 FOR UPDATE", [scope]).first
         return unless row
         id = row.fetch("job_id")
-        state = connection.exec_params("SELECT state FROM decent_jobs WHERE id = $1 FOR UPDATE", [id]).first&.fetch("state")
+        job = connection.exec_params("SELECT state, #{EXECUTION_LOCKED_SQL} AS locked FROM decent_jobs WHERE id = $1 FOR UPDATE", [id]).first
+        state = job&.fetch("state")
         if !state || %w[succeeded discarded].include?(state)
           connection.exec_params("DELETE FROM decent_job_concurrency_claims WHERE scope = $1 AND job_id = $2", [scope, id])
           next
         end
-        promoted = state == "ready"
+        promoted = state == "ready" && job.fetch("locked") != "t"
         schedule(connection, id) if promoted
         connection.exec_params("UPDATE decent_job_concurrency_claims SET state = $3, updated_at = clock_timestamp() WHERE scope = $1 AND job_id = $2", [scope, id, promoted ? "promoted" : "promotion_pending"])
         return

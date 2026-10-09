@@ -32,6 +32,7 @@ module DecentJob
     alias_method :daemonize?, :daemonize
 
     def initialize
+      @environment_lock_strategy = normalize_lock_strategy(ENV["DECENT_JOB_LOCK_STRATEGY"])
       @environment_dequeue_query_sort = normalize_dequeue_query_sort(ENV["DECENT_JOB_DEQUEUE_QUERY_SORT"])
       @environment_queue_select_limit = normalize_queue_select_limit(ENV["DECENT_JOB_QUEUE_SELECT_LIMIT"])
       self.lower_thread_priority = ENV.fetch("DECENT_JOB_LOWER_THREAD_PRIORITY", "false") == "true"
@@ -84,6 +85,7 @@ module DecentJob
     def apply_rails_config(options, environment:, logger:)
       @rails_environment = environment
       @rails_poll_interval = options[:poll_interval]
+      @rails_lock_strategy = normalize_lock_strategy(options[:lock_strategy])
       @rails_dequeue_query_sort = normalize_dequeue_query_sort(options[:dequeue_query_sort])
       @rails_queue_select_limit = normalize_queue_select_limit(options[:queue_select_limit])
       @rails_default_execution_mode = {"development" => :async, "test" => :inline}.fetch(environment, :external)
@@ -91,11 +93,19 @@ module DecentJob
       @rails_logger = options[:logger] || logger
       previous = @rails_options || {}
       options.each do |name, value|
-        next if %i[execution_mode logger poll_interval dequeue_query_sort queue_select_limit].include?(name.to_sym) || (previous.key?(name) && previous[name] == value)
+        next if %i[execution_mode logger poll_interval dequeue_query_sort queue_select_limit lock_strategy].include?(name.to_sym) || (previous.key?(name) && previous[name] == value)
         public_send("#{name}=", value)
       end
       @rails_options = options.to_h.dup
       self
+    end
+
+    def lock_strategy
+      @lock_strategy || @rails_lock_strategy || @environment_lock_strategy || :advisory
+    end
+
+    def lock_strategy=(value)
+      @lock_strategy = normalize_lock_strategy(value)
     end
 
     def dequeue_query_sort
@@ -321,6 +331,15 @@ module DecentJob
     end
 
     private
+
+    def normalize_lock_strategy(value)
+      return if value.nil?
+      value = value.to_sym if value.is_a?(String)
+      unless %i[advisory skiplocked hybrid].include?(value)
+        raise ArgumentError, "lock_strategy must be advisory, skiplocked, or hybrid"
+      end
+      value
+    end
 
     def normalize_dequeue_query_sort(value)
       return if value.nil?

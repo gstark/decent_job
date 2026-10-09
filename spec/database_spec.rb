@@ -127,6 +127,19 @@ describe "database connections" do
     end
   end
 
+  it "runs every connection-release cleanup before propagating a cleanup failure" do
+    events = []
+    error = RuntimeError.new("first cleanup failed")
+    caught = _ do
+      database.with_connection do
+        database.after_connection_release { raise error }
+        database.after_connection_release { events << database.stats.fetch(:active) }
+      end
+    end.must_raise RuntimeError
+    _(caught).must_equal error
+    _(events).must_equal [0]
+  end
+
   it "runs after-commit callbacks only after the outer transaction commits" do
     events = []
     database.transaction do

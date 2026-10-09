@@ -75,7 +75,7 @@ module DecentJob
     def delete_job(id, cutoff, include_discarded)
       result = {jobs: 0, executions: 0}
       completed = without_waiting do |connection|
-        row = connection.exec_params("SELECT #{ConcurrencyClaims::JOB_KEY_SQL} AS lock_key, #{ConcurrencyClaims::JOB_LOCKED_SQL} AS locked FROM decent_jobs WHERE id = $1", [id]).first
+        row = connection.exec_params("SELECT #{ConcurrencyClaims::JOB_KEY_SQL} AS lock_key, #{ConcurrencyClaims::EXECUTION_LOCKED_SQL} AS locked FROM decent_jobs WHERE id = $1", [id]).first
         next unless row && row.fetch("locked") == "f"
         next unless connection.exec_params("SELECT pg_try_advisory_xact_lock($1::bigint)", [row.fetch("lock_key")]).getvalue(0, 0) == "t"
 
@@ -83,6 +83,7 @@ module DecentJob
           eligible = connection.exec_params(<<~SQL, [id, cutoff, include_discarded]).ntuples.positive?
             SELECT id FROM decent_jobs WHERE id = $1 AND finished_at <= $2::timestamptz
               AND (state = 'succeeded' OR ($3 AND state = 'discarded'))
+              AND NOT #{ConcurrencyClaims::PERSISTED_LOCKED_SQL}
           SQL
           next unless eligible
           @claims.release_all(connection, id)
@@ -107,7 +108,7 @@ module DecentJob
         # Retry of an individual member does not open a new batch generation.
         # Lock all members before deciding that it is safe to detach them.
         jobs = connection.exec_params(<<~SQL, [id])
-          SELECT state, finished_at, #{ConcurrencyClaims::JOB_LOCKED_SQL} AS locked FROM decent_jobs
+          SELECT state, finished_at, #{ConcurrencyClaims::EXECUTION_LOCKED_SQL} AS locked FROM decent_jobs
           WHERE batch_id = $1 OR batch_callback_id = $1 ORDER BY id FOR UPDATE NOWAIT
         SQL
         next if jobs.any? { |job| job["finished_at"].nil? || !%w[succeeded discarded].include?(job["state"]) || job["locked"] == "t" }

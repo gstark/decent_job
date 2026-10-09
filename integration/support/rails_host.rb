@@ -22,6 +22,7 @@ if HOST_SCENARIO == "dequeue_explicit"
   DecentJob.configuration.dequeue_query_sort = :created_at
   DecentJob.configuration.queue_select_limit = 3
 end
+DecentJob.configuration.lock_strategy = :advisory if HOST_SCENARIO == "lock_strategy_explicit"
 
 if HOST_SCENARIO == "logging"
   DecentJob::LogSubscriber.logger
@@ -48,6 +49,14 @@ class RailsImmediateJob < RailsHostJob
   self.enqueue_after_transaction_commit = false
 end
 
+class RailsLockHostJob < RailsHostJob
+  def perform(value)
+    record = DecentJob::Store.new(self.class.queue_adapter.database).find(provider_job_id)
+    HOST_EVENTS << ["lock", value, record.fetch("lock_type"), !record.fetch("locked_by_id").nil?, Rails.application.executor.active?]
+    super
+  end
+end
+
 class DecentJobHostApplication < Rails::Application
   config.root = HOST_ROOT
   config.eager_load = false
@@ -66,6 +75,7 @@ class DecentJobHostApplication < Rails::Application
     config.decent_job.dequeue_query_sort = "scheduled_at"
     config.decent_job.queue_select_limit = "0"
   end
+  config.decent_job.lock_strategy = "skiplocked" if HOST_SCENARIO.start_with?("lock_strategy")
   if HOST_SCENARIO == "cron_boot"
     config.decent_job.enable_cron = true
     config.decent_job.cron = {tick: {cron: "* * * * * *", class: "ScheduledHostJob"}}
@@ -117,6 +127,18 @@ result = {events: HOST_EVENTS, mode: RailsHostJob.queue_adapter.execution_mode,
           active_record_loaded: defined?(ActiveRecord::Base) ? true : false}
 
 case HOST_SCENARIO
+when "lock_strategy", "lock_strategy_explicit"
+  result[:lock_strategy] = DecentJob.configuration.lock_strategy
+  performer = DecentJob::Performer.new
+  first = RailsLockHostJob.perform_later("host mode")
+  performer.perform_one
+  DecentJob.configuration.lock_strategy = :hybrid
+  second = RailsLockHostJob.perform_later("changed mode")
+  performer.perform_one
+  DecentJob.configuration.lock_strategy = nil
+  result[:cleared_strategy] = DecentJob.configuration.lock_strategy
+  result[:lock_modes] = HOST_EVENTS.select { |event| event.first == "lock" }
+  result[:released] = [first, second].map { |job| store.find(job.provider_job_id).values_at("locked_by_id", "locked_at", "lock_type") }
 when "dequeue", "dequeue_explicit"
   result[:dequeue_sort] = DecentJob.configuration.dequeue_query_sort
   result[:candidate_limit] = DecentJob.configuration.queue_select_limit

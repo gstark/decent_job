@@ -203,6 +203,8 @@ describe "job management callbacks and transactions" do
   end
 
   it "does not release an advisory lock already held by the same connection" do
+    previous = DecentJob.configuration.lock_strategy
+    DecentJob.configuration.lock_strategy = :advisory
     job = new_job
     DecentJob::Claim.new(database).with_next do
       _(proc { job.discard_job("ordinary") }).must_raise DecentJob::Job::LockedError
@@ -211,6 +213,8 @@ describe "job management callbacks and transactions" do
       _(separate.exec_params("SELECT pg_try_advisory_lock($1::bigint)", [key]).getvalue(0, 0)).must_equal "f"
       separate.finish
     end
+  ensure
+    DecentJob.configuration.lock_strategy = previous
   end
   it "clears accepted return values and child identifiers if the surrounding transaction rolls back" do
     job = discarded_job

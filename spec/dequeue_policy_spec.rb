@@ -39,6 +39,7 @@ describe "dequeue policy" do
   end
 
   it "reads changed sort and limit settings on an existing performer" do
+    DecentJob.configuration.lock_strategy = :advisory
     enqueue_candidate("created first", created: 120, scheduled: 30)
     enqueue_candidate("scheduled first", created: 30, scheduled: 120)
     config = DecentJob.configuration
@@ -82,6 +83,7 @@ describe "dequeue policy" do
   end
 
   it "bounds candidates before advisory locking and releases the selected lock" do
+    DecentJob.configuration.lock_strategy = :advisory
     held = 2.times.map { |index| enqueue_candidate("held #{index}", created: 100 - index, scheduled: 100 - index) }
     available = enqueue_candidate("available", created: 30, scheduled: 30)
     separate = database.connect
@@ -101,6 +103,7 @@ describe "dequeue policy" do
   end
 
   it "bypasses a zero ordinary limit for targeted and inline execution while preserving eligibility" do
+    DecentJob.configuration.lock_strategy = :advisory
     DecentJob.configuration.queue_select_limit = 0
     direct = enqueue_candidate("direct")
     future = enqueue_candidate("future", scheduled: -3600)

@@ -11,9 +11,9 @@ module DecentJob
     class AdapterMismatchError < StandardError; end
     class DiscardJobError < StandardError; end
 
-    ATTRIBUTES = %w[id active_job_id queue_name job_class priority payload scheduled_at labels concurrency_keys batch_id batch_callback_id cron_key cron_at state execution_id locked_by_id locked_at executions_count created_at updated_at performed_at finished_at error error_event].freeze
+    ATTRIBUTES = %w[id active_job_id queue_name job_class priority payload scheduled_at labels concurrency_keys batch_id batch_callback_id cron_key cron_at state execution_id locked_by_id locked_at lock_type executions_count created_at updated_at performed_at finished_at error error_event].freeze
     attr_reader :database, :id
-    (ATTRIBUTES - ["id"]).each { |name| define_method(name) { @attributes.fetch(name) } }
+    (ATTRIBUTES - ["id", "lock_type"]).each { |name| define_method(name) { @attributes.fetch(name) } }
 
     def self.find(id, database: nil)
       database ||= Current.execution&.fetch(:database, nil) || DecentJob.database
@@ -29,6 +29,10 @@ module DecentJob
       @database = database
       @store = Store.new(database)
       @attributes = attributes.deep_dup if attributes
+    end
+
+    def lock_type
+      @attributes["lock_type"]
     end
 
     def attributes
@@ -94,9 +98,8 @@ module DecentJob
     end
 
     def running?
-      return false if finished?
       database.with_connection do |connection|
-        connection.exec_params("SELECT #{ConcurrencyClaims::JOB_LOCKED_SQL} FROM decent_jobs WHERE id = $1", [id]).first&.values&.first == "t"
+        connection.exec_params("SELECT (locked_by_id IS NOT NULL OR (#{ConcurrencyClaims::JOB_LOCKED_SQL})) FROM decent_jobs WHERE id = $1", [id]).first&.values&.first == "t"
       end
     end
 
@@ -225,30 +228,24 @@ module DecentJob
     def lock_row(connection, wait: false)
       row = connection.exec_params("SELECT * FROM decent_jobs WHERE id = $1 FOR UPDATE #{"NOWAIT" unless wait}", [id]).first
       raise KeyError, "Job #{id} was not found" unless row
+      raise LockedError, "Job #{id} is locked" if !wait && row["locked_by_id"] && row["lock_type"] == "skiplocked"
       @attributes = @store.decode(row)
     rescue PG::LockNotAvailable
       raise LockedError, "Job #{id} is locked"
     end
 
     def with_job_lock
-      database.with_connection do |connection|
+      database.transaction do |connection|
         row = connection.exec_params(<<~SQL, [id]).first
           SELECT #{ConcurrencyClaims::JOB_KEY_SQL} AS lock_key,
-            EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted AND pid = pg_backend_pid()
-              AND objsubid = 1 AND classid = ((#{ConcurrencyClaims::JOB_KEY_SQL} >> 32) & 4294967295)::oid
-              AND objid = (#{ConcurrencyClaims::JOB_KEY_SQL} & 4294967295)::oid) AS owned
+            #{ConcurrencyClaims::EXECUTION_LOCKED_SQL} AS locked
           FROM decent_jobs WHERE id = $1
         SQL
         raise KeyError, "Job #{id} was not found" unless row
-        raise LockedError, "Job #{id} is locked" if row.fetch("owned") == "t"
-        key = row.fetch("lock_key")
-        locked = connection.exec_params("SELECT pg_try_advisory_lock($1::bigint)", [key]).getvalue(0, 0) == "t"
+        raise LockedError, "Job #{id} is locked" if row.fetch("locked") == "t"
+        locked = connection.exec_params("SELECT pg_try_advisory_xact_lock($1::bigint)", [row.fetch("lock_key")]).getvalue(0, 0) == "t"
         raise LockedError, "Job #{id} is locked" unless locked
-        begin
-          yield
-        ensure
-          connection.exec_params("SELECT pg_advisory_unlock($1::bigint)", [key]) unless connection.finished? || connection.status != PG::CONNECTION_OK
-        end
+        yield
       end
     end
   end

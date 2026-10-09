@@ -111,6 +111,7 @@ module DecentJob
         parser.on("--pidfile PATH", "PID file for daemon mode") { |value| options[:pidfile] = value }
         parser.on("--idle-timeout SECONDS", Float, "Exit after this many idle seconds (single process)") { |value| options[:idle_timeout] = value }
         parser.on("--dequeue-query-sort COLUMN", "Order candidates by created_at (default) or scheduled_at") { |value| options[:dequeue_query_sort] = value }
+        parser.on("--lock-strategy STRATEGY", "Lock jobs using advisory (default), skiplocked, or hybrid") { |value| options[:lock_strategy] = value }
         parser.on("--queue-select-limit N", "Maximum candidates per dequeue (default: 1000)") { |value| options[:queue_select_limit] = value }
         parser.on("--queues EXPRESSION", "Queue selection and optional thread pools") { |value| options[:queues] = value }
         parser.on("--subprocesses N", Integer, "Fork and supervise N worker processes") { |value| options[:subprocesses] = value }

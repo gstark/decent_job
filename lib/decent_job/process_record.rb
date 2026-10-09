@@ -140,7 +140,7 @@ module DecentJob
           SQL
           next unless row
           claims.release(connection, {id: job_id, execution_id: row.fetch("execution_id")}) if row["execution_id"]
-          connection.exec_params("UPDATE decent_jobs SET locked_by_id = NULL, locked_at = NULL WHERE id = $1 AND locked_by_id = $2", [job_id, id])
+          connection.exec_params("UPDATE decent_jobs SET locked_by_id = NULL, locked_at = NULL #{", lock_type = NULL" if ConcurrencyClaims.lock_type_column?(connection)} WHERE id = $1 AND locked_by_id = $2", [job_id, id])
         end
       end
     end

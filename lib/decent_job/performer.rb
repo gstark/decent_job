@@ -179,19 +179,19 @@ module DecentJob
           stored_error = JSON.parse(current["error"] || "{}")
           error = Job::DiscardJobError.new(stored_error["message"]) if stored_error["class"] == "DecentJob::Job::DiscardJobError"
           forced = true
-          connection.exec_params("UPDATE decent_jobs SET locked_by_id = NULL, locked_at = NULL WHERE id = $1 AND execution_id = $2 AND locked_by_id = $3", [row.fetch("id"), row.fetch("execution_id"), row["locked_by_id"]])
+          connection.exec_params("UPDATE decent_jobs SET locked_by_id = NULL, locked_at = NULL #{", lock_type = NULL" if row.key?("lock_type")} WHERE id = $1 AND execution_id = $2 AND locked_by_id = $3", [row.fetch("id"), row.fetch("execution_id"), row["locked_by_id"]])
           next
         end
 
         state = "retried" if current["state"] == "ready" || (unhandled && DecentJob.configuration.retry_on_unhandled_error)
         if state == "retried"
           connection.exec_params(<<~SQL, [row.fetch("id"), details, error_event])
-            UPDATE decent_jobs SET state = 'ready', error = $2, error_event = $3, performed_at = NULL, locked_by_id = NULL, locked_at = NULL,
+            UPDATE decent_jobs SET state = 'ready', error = $2, error_event = $3, performed_at = NULL, locked_by_id = NULL, locked_at = NULL, #{"lock_type = NULL," if row.key?("lock_type")}
               updated_at = clock_timestamp() WHERE id = $1
           SQL
         else
           connection.exec_params(<<~SQL, [row.fetch("id"), state, details, error_event])
-            UPDATE decent_jobs SET state = $2, finished_at = clock_timestamp(), locked_by_id = NULL, locked_at = NULL,
+            UPDATE decent_jobs SET state = $2, finished_at = clock_timestamp(), locked_by_id = NULL, locked_at = NULL, #{"lock_type = NULL," if row.key?("lock_type")}
               updated_at = clock_timestamp(), error = $3, error_event = $4 WHERE id = $1
           SQL
         end

@@ -86,6 +86,7 @@ module DecentJob
       @available = ConditionVariable.new
       @borrowed = {}
       @transaction_callbacks = {}
+      @connection_release_callbacks = {}
       @idle = []
       @size = 0
       @fork_prepared = false
@@ -116,6 +117,7 @@ module DecentJob
       @idle = []
       @borrowed = {}
       @transaction_callbacks = {}
+      @connection_release_callbacks = {}
       @size = 0
       @closed = false
       @pid = @owner_pid = Process.pid
@@ -210,6 +212,17 @@ module DecentJob
     def after_rollback(&block)
       frames = @mutex.synchronize { @transaction_callbacks[@borrowed[ActiveSupport::IsolatedExecutionState.context]] }
       frames.last[:rollback] << block if frames && !frames.empty?
+    end
+
+    # Internal cleanup that must wait until this context releases its outer
+    # checkout, including application ensures and retirement of killed sessions.
+    def after_connection_release(&block)
+      connection = @mutex.synchronize do
+        current = @borrowed[ActiveSupport::IsolatedExecutionState.context]
+        (@connection_release_callbacks[current] ||= []) << block if current
+        current
+      end
+      block.call unless connection
     end
 
     # An independently owned connection for LISTEN and other session state.
@@ -311,7 +324,7 @@ module DecentJob
     def checkin(connection, owner:, interrupted: false)
       cancel_interrupted_query(connection) if interrupted
     ensure
-      @mutex.synchronize do
+      callbacks = @mutex.synchronize do
         @borrowed.delete(owner)
         @transaction_callbacks.delete(connection)
         if interrupted || @closed || @size > @pool_size || connection.finished? || connection.status != PG::CONNECTION_OK
@@ -321,7 +334,15 @@ module DecentJob
           @idle << connection
         end
         @available.signal
+        @connection_release_callbacks.delete(connection) || []
       end
+      failure = nil
+      callbacks.each do |callback|
+        callback.call
+      rescue Exception => error # standard:disable Lint/RescueException
+        failure ||= error
+      end
+      raise failure if failure
     end
   end
 end

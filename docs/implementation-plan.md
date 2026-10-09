@@ -335,11 +335,11 @@ Four real CLI cases verify the default creation order, scheduled-order override,
 ### Lock compatibility sequence
 
 - [x] Audit and harden advisory claims against same-session reentry, ambiguous acquisition failures, missing or finished candidates, and connection loss. Verify nested public execution in a separate process.
-- [ ] Add SKIP LOCKED and hybrid ownership, with configuration and persisted mode metadata. Update execution, recovery, management, cleanup, batches, and concurrency claims together so each recognizes live owners from every supported mode.
-- [ ] Verify mixed-mode workers in separate processes, including crash recovery, retries, force-discard, and rolling configuration changes.
+- [x] Add SKIP LOCKED and hybrid ownership, with configuration and persisted mode metadata. Update execution, recovery, management, cleanup, batches, and concurrency claims together so each recognizes live owners from every supported mode.
+- [x] Verify mixed-mode workers in separate processes, including crash recovery, retries, force-discard, and rolling configuration changes.
 - [ ] Verify PgBouncer transaction pooling with session-dependent features configured appropriately, and document the supported connection topology.
 
-Advisory hardening is the first checkpoint. Additional modes remain unsupported until their ownership and recovery paths pass review and real PostgreSQL verification.
+Advisory hardening was the first checkpoint. All three modes now have ownership and recovery coverage on direct PostgreSQL connections. PgBouncer transaction pooling remains a separate verification step.
 
 ### Advisory ownership checkpoint
 
@@ -351,10 +351,22 @@ New PostgreSQL regressions cover caller lock depth, nested execution, candidate 
 
 Advisory verification: `bundle exec rake` passed 1,617 specs and 6,869 assertions, seed 63832. Rails integration passed 20 cases and 126 assertions, seed 28862. The four optional WEBrick cases skipped under Bundler passed separately with 17 assertions, seed 48527. Independent spec and quality reviews, Standard, whitespace checks, gem build, and unpacked-gem execution passed. The package verified bounded same-session selection, preserved caller lock depth, nested targeted and ordinary execution, attempt histories, released process ownership, and the two runtime dependencies without Rails or Active Record. P4 is implemented. P5–P8, PgBouncer transaction pooling, aggregate statistics, and the remaining parity audit stay open. Dashboard work remains deferred.
 
+### SKIP LOCKED and hybrid ownership checkpoint
+
+Migration 011 adds nullable `lock_type` metadata. Configuration accepts advisory, skiplocked, and hybrid modes through explicit settings, CLI, Rails, or environment, in that precedence order. Each claim captures its mode. Before the optional migration, every requested mode falls back to advisory; an existing performer detects the upgrade on its next claim. Row modes select one eligible row and ignore advisory candidate limits, including zero.
+
+SKIP LOCKED commits process and execution ownership before returning its acquisition checkout. Hybrid combines the row claim with a session advisory lock. Advisory claims recheck persisted owners under the row lock, so mixed workers cannot claim an already-owned job. Concurrency recovery, management, force-discard, batch retry, cleanup, and scheduling recognize ownership from every mode. Running reports retain persisted ownership until release, including while a force-discarded body unwinds.
+
+Claim cleanup checks both execution and process identity. Killed checkouts retire after application cleanup, then release persisted ownership through an independent connection. Pool exhaustion, closed pools, or failed pooled SQL also use that fallback, preserving the original body exception. Deferred callbacks all run before their first failure propagates. Advisory and hybrid session loss permits immediate replacement; crashed SKIP LOCKED ownership waits for inactive-process cleanup.
+
+Fifteen real CLI process cases exercise all nine ordered owner/contender mode pairs, row-lock skipping, crashed SKIP LOCKED ownership, and cross-mode concurrency limits. Rails cases verify configuration precedence and changed modes on an existing performer. Focused regressions cover normal and nonlocal exits, excluded errors, force-discarded batch members, ambiguous hybrid acquisition, unlock failures, interruption after commit, blocked acquisition, pool exhaustion, and cancellation during independent cleanup. Deploy this ownership-aware build to every worker before enabling mixed strategies; older builds cannot safely coexist with SKIP LOCKED owners. See [job locking](locking.md).
+
+Lock-mode verification: `bundle exec rake` passed 1,667 specs and 7,243 assertions, seed 59860. Rails integration passed 22 cases and 140 assertions, seed 6645. The four optional WEBrick cases skipped under Bundler passed separately with 17 assertions, seed 19419. Independent spec and quality reviews, Standard, whitespace checks, gem build, and unpacked-gem execution passed. The package verified migration 011, pre-upgrade advisory fallback, every mode on the same performer, candidate-limit behavior, attempt history, cleared ownership, and the two direct runtime dependencies without Rails or Active Record. P5 through P8 are implemented. PgBouncer transaction pooling, aggregate statistics, the remaining configuration audit, benchmarks, and final library parity verification stay open. Dashboard work remains deferred.
+
 ### Remaining slices
 
 1. Operations: aggregate statistics and remaining configuration audit.
-2. Compatibility: additional lock strategies, PgBouncer, benchmark and final library parity audit.
+2. Compatibility: PgBouncer, benchmark and final library parity audit.
 3. Deferred at the user's request: dashboard, including authenticated job actions, histories, batches, schedules, processes and metrics.
 
 Each slice requires behavior specs before implementation, real PostgreSQL verification, and independent review. Completion of one slice does not imply completion of the full rebuild.
