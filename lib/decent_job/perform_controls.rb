@@ -13,6 +13,9 @@ module DecentJob
       return if rules.empty?
       exceeded = nil
       @claims.synchronize(context.fetch(:id), scopes: rules.map(&:scope)) do |connection|
+        current = connection.exec_params("SELECT finished_at, execution_id FROM decent_jobs WHERE id = $1", [context.fetch(:id)]).first
+        next unless current && current["finished_at"].nil? && current["execution_id"] == context.fetch(:execution_id)
+
         rules.each do |rule|
           limit = rule.perform_limit || rule.total_limit
           if limit && running_count(connection, rule, context) >= limit

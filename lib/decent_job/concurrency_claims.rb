@@ -3,6 +3,9 @@
 module DecentJob
   # All claim mutations take sorted scope locks before touching job rows.
   class ConcurrencyClaims
+    class ScopeChanged < StandardError; end
+    private_constant :ScopeChanged
+
     JOB_KEY_SQL = "hashtextextended(current_schema() || '.decent_jobs.' || decent_jobs.id::text, 0)"
     JOB_LOCKED_SQL = <<~SQL
       EXISTS (
@@ -18,12 +21,20 @@ module DecentJob
       @database = database
     end
 
-    def synchronize(job_id, scopes: [])
+    def synchronize(job_id, scopes: [], wait: true)
       @database.transaction do |connection|
         existing = connection.exec_params("SELECT scope FROM decent_job_concurrency_claims WHERE job_id = $1", [job_id]).column_values(0)
-        (scopes + existing).uniq.sort.each { |scope| lock(connection, scope) }
+        locked_scopes = (scopes + existing).uniq.sort
+        locked_scopes.each { |scope| lock(connection, scope) }
+        connection.exec_params("SELECT id FROM decent_jobs WHERE id = $1 FOR UPDATE #{"NOWAIT" unless wait}", [job_id])
+        current_scopes = connection.exec_params("SELECT scope FROM decent_job_concurrency_claims WHERE job_id = $1", [job_id]).column_values(0)
+        # A claim may have committed while we waited for the job row. Release
+        # this savepoint's locks and reacquire the complete scope set in order.
+        raise ScopeChanged unless (current_scopes - locked_scopes).empty?
         yield connection
       end
+    rescue ScopeChanged
+      retry
     end
 
     def grant(connection, scope, context)
@@ -39,6 +50,11 @@ module DecentJob
     def release(connection, context)
       rows = connection.exec_params("DELETE FROM decent_job_concurrency_claims WHERE job_id = $1 AND execution_id = $2 AND state = 'granted' RETURNING scope", [context.fetch(:id), context.fetch(:execution_id)])
       rows.each { |row| promote(connection, row.fetch("scope")) }
+    end
+
+    def release_all(connection, id)
+      rows = connection.exec_params("DELETE FROM decent_job_concurrency_claims WHERE job_id = $1 RETURNING scope, state", [id])
+      rows.each { |row| promote(connection, row.fetch("scope")) if row["state"] == "granted" }
     end
 
     def finish(context)

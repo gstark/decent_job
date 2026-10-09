@@ -51,9 +51,9 @@ module DecentJob
       end
     end
 
-    def reschedule(job, context)
+    def reschedule(job, context, payload: nil)
       @database.transaction do |connection|
-        payload = job.serialize
+        payload ||= job.serialize
         params = [context.fetch(:id), context.fetch(:execution_id), JSON.generate(payload),
           (job.scheduled_at || Time.now).utc.iso8601(6), job.queue_name, job.priority || 0,
           PG::TextEncoder::Array.new.encode(payload.fetch("decent_job_labels", [])),
@@ -61,8 +61,10 @@ module DecentJob
         result = connection.exec_params(<<~SQL, params)
           UPDATE decent_jobs SET state = 'ready', payload = $3, scheduled_at = $4,
             queue_name = $5, priority = $6, labels = $7, concurrency_keys = $8,
-            updated_at = clock_timestamp(), finished_at = NULL, error = NULL
-          WHERE id = $1 AND execution_id = $2
+            updated_at = clock_timestamp(), finished_at = NULL,
+            error = #{context[:manual_retry] ? "error" : "NULL"}, error_event = 'retried'
+          WHERE id = $1 AND execution_id IS NOT DISTINCT FROM $2::uuid
+            AND #{context[:manual_retry] ? "state = 'discarded'" : "finished_at IS NULL AND state IN ('ready', 'running')"}
         SQL
         raise ActiveJob::EnqueueError, "execution ownership lost" unless result.cmd_tuples == 1
         notify(connection)

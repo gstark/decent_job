@@ -66,7 +66,7 @@ module DecentJob
           if row["execution_id"]
             error = JSON.generate("class" => "DecentJob::InterruptedError", "message" => "Previous execution lost ownership", "backtrace" => [])
             connection.exec_params(<<~SQL, [row["execution_id"], error])
-              UPDATE decent_job_executions SET state = 'interrupted', finished_at = clock_timestamp(), error = $2
+              UPDATE decent_job_executions SET state = 'interrupted', error_event = 'interrupted', finished_at = clock_timestamp(), error = $2
               WHERE id = $1 AND state = 'running'
             SQL
           end

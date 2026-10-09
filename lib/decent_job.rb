@@ -19,6 +19,8 @@ require "decent_job/cron_store"
 require "decent_job/current"
 require "decent_job/database"
 require "decent_job/inline_buffer"
+require "decent_job/job"
+require "decent_job/job_retry"
 require "decent_job/pauses"
 require "decent_job/performer"
 require "decent_job/queue_selection"
@@ -143,6 +145,10 @@ module DecentJob
         end
       end
       stop_resources(managers, timeout: timeout)
+    end
+
+    def stopping?
+      MUTEX.synchronize { @stopping }
     end
 
     def shutdown(timeout: nil)

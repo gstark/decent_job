@@ -57,6 +57,26 @@ module DecentJob
       true
     end
 
+    def stopping?(active_job = nil)
+      context = Current.execution
+      context = nil unless context && !context[:manual_retry] && context[:database].equal?(database)
+      return :stopping if @worker_mutex.synchronize { @stopping } || DecentJob.stopping? || context&.fetch(:stopping, nil)&.call
+
+      matching = context && (!active_job || active_job.job_id == context[:job_id])
+      if matching && context[:execution_id]
+        finished = database.with_connection do |connection|
+          connection.exec_params("SELECT 1 FROM decent_job_executions WHERE id = $1 AND job_id = $2 AND finished_at IS NOT NULL", [context[:execution_id], context[:id]]).ntuples.positive?
+        end
+        return :force_discarded if finished
+      end
+      return false unless DecentJob.configuration.enable_pauses
+      return Pauses.new(database).paused?(active_job: active_job) if active_job
+      return false unless matching && context[:id]
+
+      row = store.find(context[:id])
+      row ? Pauses.new(database).reason(queue: row.fetch("queue_name"), job_class: row.fetch("job_class"), labels: row.fetch("labels")) : false
+    end
+
     def shutdown(timeout: nil)
       if !timeout.nil? && (!timeout.is_a?(Numeric) || !timeout.finite? || timeout.negative?)
         raise ArgumentError, "timeout must be a finite nonnegative number"
@@ -71,6 +91,20 @@ module DecentJob
       cron_stopped = !@database || DecentJob.stop_cron(database: @database, timeout: remaining_time(deadline))
       worker_stopped = !worker || worker.shutdown(timeout: remaining_time(deadline))
       cron_stopped && worker_stopped
+    end
+
+    def after_enqueue(ids)
+      if @execution_mode == :inline
+        database.after_commit do
+          Current.with(nil) do
+            Bulk.with_buffer(nil) do
+              CronEntry.with_context(nil) { Batch.with_context(nil) { InlineBuffer.perform(database, ids) } }
+            end
+          end
+        end
+      elsif @execution_mode == :async
+        database.after_commit { start_async&.wake }
+      end
     end
 
     private
@@ -105,11 +139,7 @@ module DecentJob
         job.enqueue_error = ActiveJob::EnqueueError.new("cron occurrence already enqueued") unless id
       end
       ids = ids.compact
-      if @execution_mode == :inline
-        database.after_commit { CronEntry.with_context(nil) { InlineBuffer.perform(database, ids) } }
-      elsif @execution_mode == :async
-        database.after_commit { start_async&.wake }
-      end
+      after_enqueue(ids)
       ids.size
     end
 

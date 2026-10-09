@@ -9,6 +9,11 @@ module DecentJob
   # requests have no foreign key or unique batch key, so finishing a job never
   # waits on a batch lock or on another completion request.
   class BatchStore
+    # A normal failed attempt can retain its session lock while reconciling a
+    # batch. A force-discarded attempt may still have application code running.
+    FORCE_DISCARD_LOCKED_SQL = "COALESCE(decent_jobs.error ->> 'force_discarded', 'false') = 'true' AND (#{ConcurrencyClaims::JOB_LOCKED_SQL})"
+    private_constant :FORCE_DISCARD_LOCKED_SQL
+
     ATTRIBUTES = %w[description on_finish on_success on_discard callback_queue_name callback_priority properties].freeze
 
     def initialize(database)
@@ -125,17 +130,17 @@ module DecentJob
 
     def retry_members(id)
       @database.transaction do |connection|
-        rows = connection.exec_params("SELECT * FROM decent_jobs WHERE batch_id = $1 AND state = 'discarded' ORDER BY id", [id]).to_a
+        rows = connection.exec_params("SELECT * FROM decent_jobs WHERE batch_id = $1 AND state = 'discarded' AND NOT (#{FORCE_DISCARD_LOCKED_SQL}) ORDER BY id", [id]).to_a
         retries = rows.map { |row| prepare_retry(row) }
         jobs = retries.flat_map { |prepared| prepared.fetch(:buffer).active_jobs }
         jobs.each { |job| validate_adapter(job.class) }
         lock_scopes(jobs)
         encoded_ids = PG::TextEncoder::Array.new.encode(rows.map { |row| row.fetch("id") })
-        locked = connection.exec_params("SELECT id, state, execution_id FROM decent_jobs WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE", [encoded_ids]).to_h { |row| [row.fetch("id"), row] }
+        locked = connection.exec_params("SELECT id, state, execution_id, #{FORCE_DISCARD_LOCKED_SQL} AS force_discard_locked FROM decent_jobs WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE", [encoded_ids]).to_h { |row| [row.fetch("id"), row] }
         ids = retries.filter_map do |prepared|
           previous = prepared.fetch(:row)
           current = locked[previous.fetch("id")]
-          next unless current && current["state"] == "discarded" && current["execution_id"] == previous["execution_id"]
+          next unless current && current["state"] == "discarded" && current["execution_id"] == previous["execution_id"] && current["force_discard_locked"] == "f"
 
           job = prepared[:job]
           if job
@@ -244,7 +249,7 @@ module DecentJob
 
     def prepare_retry(row)
       context = {database: @database, job_id: row.fetch("active_job_id"), id: row.fetch("id"), execution_id: row.fetch("execution_id"),
-                 batch_id: row["batch_id"], batch_callback_id: row["batch_callback_id"]}
+                 batch_id: row["batch_id"], batch_callback_id: row["batch_callback_id"], manual_retry: true}
       buffer = Bulk::Buffer.new
       retried_job = nil
       Current.with(context) do

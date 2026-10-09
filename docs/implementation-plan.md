@@ -60,9 +60,22 @@ Cron-entry verification: 765 specs, 2,186 assertions across the full suite; Stan
 
 Scheduler verification: 807 specs, 2,351 assertions across the full suite; Standard, gem build, and whitespace checks passed. An unpacked gem installed its schema, started automatic cron alongside a worker, executed a recurring job, retained its history, and shut down cleanly. Independent spec-compliance and code-quality reviews approved C4/C5 after regressions for clock rollback during scheduling and enable checks, and invalid timeout handling. Process specs cover two competing CLI schedulers, configuration overrides, restart catch-up excluding future records, and a blocked callback exhausting the shutdown deadline. The scheduler uses bounded threads and pending work per entry; docs explain resource sizing and lifecycle ownership. Full GoodJob parity remains open beyond this completed recurring-jobs slice.
 
+### Job management slice
+
+- [x] Add `DecentJob::Job.find(id, database:)`, reload, decoded attributes, execution history, Active Job deserialization, and status predicates.
+- [x] Implement retry, reschedule, discard, force-discard, and destroy with explicit state errors and the worker's advisory lock for ordinary actions.
+- [x] Preserve retry identity, locale, callbacks, execution history, cron/batch metadata, and transaction boundaries; tolerate unavailable arguments while rejecting unavailable job classes for retry.
+- [x] Make force-discard authoritative against a running job's later return or retry, finish open attempts, release concurrency claims, and reconcile batch completion.
+- [x] Expose adapter stopping reasons for shutdown, force-discard, and persistent pauses with both Active Job 8.1's no-argument call and the optional job argument.
+- [x] Verify lock conflicts and force-discard with separate PostgreSQL connections/processes; independently review, document, and run the full suite.
+
+This implements J6, A8, and the management API portion of J7. Dashboard retry locale behavior remains open with the dashboard. Retention and automatic cleanup remain the following operations work; dashboard actions will use the same public API.
+
+Job-management verification: 857 specs, 2,602 assertions across the full PostgreSQL suite; Standard, gem build, and whitespace checks passed. An unpacked gem installed migrations 1–6 and passed retry identity, error-event history, execution, and cascading destruction checks. Independent spec and quality reviews approved the slice after regressions for callback error classification, provisional enqueue cleanup, manual-retry stopping context, and immutable record identity. Process specs cover ordinary lock conflicts, authoritative force-discard despite return or retry, and cooperative CLI shutdown. The full suite also verified that normal failed batch members remain retryable while their workers finish reconciliation; only explicitly force-discarded, still-owned attempts are excluded. All tests use Minitest spec syntax, and direct runtime dependencies remain Active Job and pg.
+
 ### Remaining slices
 
-1. Operations: job management, retention, process heartbeats, supervisor, systemd, Rails integration.
+1. Operations: retention, process heartbeats, supervisor, systemd, Rails integration.
 2. Dashboard: authenticated job actions, histories, batches, schedules, processes and metrics.
 3. Compatibility: additional lock strategies, PgBouncer, benchmark and final parity audit.
 

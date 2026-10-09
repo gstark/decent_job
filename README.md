@@ -264,7 +264,16 @@ store.find(job.provider_job_id)
 store.executions(job.provider_job_id)
 ```
 
-Records are currently retained indefinitely. Automatic retention and management operations are tracked in the parity checklist.
+Use [job management](docs/job-management.md) to retry, reschedule, discard, or destroy persisted jobs:
+
+```ruby
+record = DecentJob::Job.find(job.provider_job_id)
+record.retry_job # Only discarded jobs are eligible.
+```
+
+Ordinary actions reject worker lock conflicts. Explicit force-discard remains authoritative when running code returns or attempts to retry; it does not terminate that code. The job's adapter exposes cooperative shutdown, force-discard, and pause reasons through `stopping?`.
+
+Records are currently retained indefinitely. Automatic retention and remaining operational features are tracked in the parity checklist.
 
 ## Development
 

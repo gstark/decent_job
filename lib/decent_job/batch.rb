@@ -63,14 +63,16 @@ module DecentJob
     def self.within_thread(batch_id: nil, batch_callback_id: nil, batch_ids: nil, database: nil)
       database ||= default_database
       database.transaction do
-        previous = current_context
-        Thread.current.thread_variable_set(:decent_job_batch_context, {batch_id: batch_id, batch_callback_id: batch_callback_id, batch_ids: batch_ids, database: database})
-        begin
-          yield
-        ensure
-          Thread.current.thread_variable_set(:decent_job_batch_context, previous)
-        end
+        with_context(batch_id: batch_id, batch_callback_id: batch_callback_id, batch_ids: batch_ids, database: database) { yield }
       end
+    end
+
+    def self.with_context(context)
+      previous = current_context
+      Thread.current.thread_variable_set(:decent_job_batch_context, context)
+      yield
+    ensure
+      Thread.current.thread_variable_set(:decent_job_batch_context, previous)
     end
 
     def self.enqueue_all(pairs)
