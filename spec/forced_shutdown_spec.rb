@@ -139,6 +139,7 @@ describe "forced worker shutdown" do
         end
       rescue
         raise unless rescued
+
         true
       end
 

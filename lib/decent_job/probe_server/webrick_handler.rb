@@ -96,6 +96,7 @@ module DecentJob
       def start
         @mutex.synchronize do
           return self if @thread&.alive?
+
           @stopping = false
           @ready = false
           @pid = Process.pid
@@ -159,6 +160,7 @@ module DecentJob
         server&.shutdown
         return true unless thread
         return false if thread == Thread.current || request_thread
+
         !!thread.join(timeout)
       end
 

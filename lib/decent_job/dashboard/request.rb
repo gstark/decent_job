@@ -60,6 +60,7 @@ module DecentJob
             body = input.read(MAX_BODY_BYTES + 1) || ""
             input.rewind if input.respond_to?(:rewind)
             raise PayloadTooLarge, "The request body is too large." if body.bytesize > MAX_BODY_BYTES
+
             decode(body)
           else
             {}
@@ -73,6 +74,7 @@ module DecentJob
         @cookies ||= env.fetch("HTTP_COOKIE", "").to_s.split(/;\s*/).each_with_object({}) do |pair, result|
           name, value = pair.split("=", 2)
           next unless name && value
+
           result[name.strip] = URI.decode_www_form_component(value.strip)
         rescue ArgumentError
           next

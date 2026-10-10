@@ -14,6 +14,7 @@ class BatchPropertiesRecord
 
   def self.find(id)
     raise KeyError, "record no longer exists" if id == "missing"
+
     new(id)
   end
 

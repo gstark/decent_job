@@ -32,6 +32,7 @@ module DecentJob
     EVENTS.each do |event|
       define_method(event) do |&block|
         raise ArgumentError, "a lifecycle hook block is required" unless block
+
         lifecycle_hooks.fetch(event) << block
       end
     end

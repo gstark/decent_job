@@ -49,6 +49,7 @@ module DecentJob
         def digital_time
           value = take(/(?:2[0-4]|[0-1]?[0-9]):[0-5][0-9]/i)
           return unless value
+
           hour, minute = value.split(":").map(&:to_i)
           adjusted_time(hour, minute, meridian)
         end
@@ -61,6 +62,7 @@ module DecentJob
         def named_time
           name = take(Vocabulary::HOUR_PATTERN)
           return unless name
+
           take(/[ \t]*dark/i)
           minute_name = attempt { take(/[ \t]+/) && take(Vocabulary::MINUTE_PATTERN) }
           # The reference recognizes names without regard to case, then looks
@@ -81,6 +83,7 @@ module DecentJob
         def point
           unit = take(/(?:minutes?|mins?|seconds?|secs?|hours?|hou|h)[ \t]+/i)
           return unless unit
+
           values = list(:count, Vocabulary::JOIN)
           return unless values
 
@@ -101,6 +104,7 @@ module DecentJob
         def time_span
           first = attempt(:time_object)
           return unless first && keyword("to")
+
           last = attempt(:time_object)
           return unless last
 

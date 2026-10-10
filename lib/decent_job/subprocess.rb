@@ -113,6 +113,7 @@ module DecentJob
     # pipe means the supervisor is gone, so the child stops.
     def report_readiness
       return unless @readiness_writer && DecentJob.started? && DecentJob.connected?
+
       @readiness_writer.write_nonblock("1", exception: false)
     rescue IOError, Errno::EPIPE
       @stopped = true

@@ -52,6 +52,7 @@ module DecentJob
       def register(database)
         @registry_mutex.synchronize do
           raise ForkInProgress, "databases are preparing to fork" if @fork_prepared
+
           @registry[database] = true
         end
       end
@@ -80,6 +81,7 @@ module DecentJob
         Thread.handle_interrupt(Object => :never) do
           @registry_mutex.synchronize do
             raise ForkInProgress, "databases are already preparing to fork" if @fork_prepared
+
             @fork_prepared = true
             acquired = true
             databases = @registry.keys
@@ -133,6 +135,7 @@ module DecentJob
 
       @mutex.synchronize do
         raise ForkInProgress, "database has borrowed or connecting sessions" unless @size == @idle.size
+
         @fork_prepared = true
         @idle.each { |connection| connection.finish unless connection.finished? }
         @idle.clear
@@ -156,6 +159,7 @@ module DecentJob
     # @api private
     def reset_after_fork
       raise ForkInProgress, "pool must be prepared in the parent before resetting in its child" unless @fork_prepared && @pid != Process.pid
+
       # Parent preparation closed every owned connection before the fork. Never
       # send PostgreSQL termination packets from an inherited child connection.
       @mutex = Mutex.new
@@ -288,6 +292,7 @@ module DecentJob
             next if Thread.current.status == "aborting"
 
             raise TransactionAborted, "PostgreSQL transaction was aborted" if connection.transaction_status == PG::PQTRANS_INERROR
+
             connection.exec(nested ? "RELEASE SAVEPOINT #{savepoint}" : "COMMIT")
             committed = true
             result
@@ -384,6 +389,7 @@ module DecentJob
     # @note {#close} and fork preparation do not track or close it.
     def connect
       raise ForkedDatabase, "create a new Database after forking" if @pid != Process.pid
+
       PG.connect(@url)
     end
 
@@ -438,6 +444,7 @@ module DecentJob
 
           remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
           raise ConnectionTimeout, "database checkout timed out" unless remaining.positive?
+
           @available.wait(@mutex, remaining)
         end
       end
@@ -446,6 +453,7 @@ module DecentJob
 
       @mutex.synchronize do
         raise ClosedDatabase, "database is closed" if @closed
+
         @borrowed[owner] = connection
         registered = true
       end
@@ -483,8 +491,10 @@ module DecentJob
       loop do
         state = cancellation.poll
         return if state == PG::PGRES_POLLING_OK || state == PG::PGRES_POLLING_FAILED
+
         remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
         return unless remaining.positive?
+
         socket = cancellation.socket_io
         readable = (state == PG::PGRES_POLLING_READING) ? [socket] : nil
         writable = (state == PG::PGRES_POLLING_WRITING) ? [socket] : nil

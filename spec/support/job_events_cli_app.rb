@@ -8,6 +8,7 @@ class JobEventsProcessJob < ActiveJob::Base
 
   def perform(action)
     raise "retry once" if action == "retry" && executions == 1
+
     false
   end
 end

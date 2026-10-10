@@ -15,6 +15,7 @@ class SchedulerFutureRetryJob < SchedulerLocalJob
 
   def perform(value)
     raise "retry later" if executions == 1
+
     super
   end
 end

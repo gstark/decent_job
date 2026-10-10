@@ -28,6 +28,7 @@ class BatchFacadeRetryJob < BatchFacadeJob
 
   def perform
     raise "retry batch member" if fail_execution
+
     events << "retried"
   end
 end

@@ -88,6 +88,7 @@ module DecentJob
     def paused?(job_instance: nil, **target)
       if job_instance
         raise ArgumentError, "provide only one target" unless target.values.compact.empty?
+
         labels = job_instance.respond_to?(:decent_job_labels) ? job_instance.decent_job_labels : []
         reason(queue: job_instance.queue_name, job_class: job_instance.class.name, labels: labels)
       elsif target.values.compact.empty?
@@ -111,6 +112,7 @@ module DecentJob
       return :queue_name_paused if values.fetch(:queues).include?(queue.to_s)
       return :job_class_paused if values.fetch(:job_classes).include?(job_class.to_s)
       return :label_paused unless (Array(labels).map { |label| label.to_s.strip } & values.fetch(:labels)).empty?
+
       false
     end
 
@@ -119,9 +121,11 @@ module DecentJob
     def target_pair(queue: nil, job_class: nil, label: nil)
       pairs = {"queues" => queue, "job_classes" => job_class, "labels" => label}.reject { |_, value| value.nil? }
       raise ArgumentError, "provide exactly one of queue, job_class or label" unless pairs.size == 1
+
       kind, value = pairs.first
       key = value.to_s.strip
       raise ArgumentError, "pause target cannot be blank" if key.empty?
+
       [kind, key]
     end
   end

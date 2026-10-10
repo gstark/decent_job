@@ -158,6 +158,7 @@ module DecentJob
     # @return [Boolean] true when shutdown began and no thread is alive
     def shutdown?
       return true unless @threads
+
       @mutex.synchronize { @stopping && @threads.none?(&:alive?) }
     end
 
@@ -212,6 +213,7 @@ module DecentJob
         targets = @mutex.synchronize do
           threads.select do |thread|
             next false if thread == Thread.current || !thread.alive? || interrupted_threads.key?(thread)
+
             interrupted_threads[thread] = true
           end
         end
@@ -220,6 +222,7 @@ module DecentJob
       end
 
       raise failure if failure
+
       threads.none?(&:alive?)
     end
 
@@ -270,6 +273,7 @@ module DecentJob
       while occurrence && wait_until(occurrence)
         following = next_occurrence(entry, previously_at: occurrence)
         break unless submit(state, occurrence)
+
         occurrence = following
       end
     rescue => error
@@ -282,6 +286,7 @@ module DecentJob
       @mutex.synchronize do
         @condition.wait(@mutex) while !@stopping && !state[:pending].empty?
         return false if @stopping
+
         state[:pending] << occurrence
         @condition.broadcast
       end
@@ -294,10 +299,12 @@ module DecentJob
         occurrence = @mutex.synchronize do
           @condition.wait(@mutex) while !@stopping && state[:pending].empty?
           break if @stopping
+
           state[:pending].shift.tap { @condition.broadcast }
         end
 
         break unless occurrence
+
         deliver(entry, occurrence) if wait_until(occurrence)
       end
     end
@@ -337,6 +344,7 @@ module DecentJob
         in_context do
           entry.each_within(beginning...started_at, previously_at: last_at) do |occurrence|
             break unless running?
+
             deliver(entry, occurrence, historical: true)
           end
         end
@@ -354,6 +362,7 @@ module DecentJob
 
             if !historical && occurrence > Time.now
               break unless wait_until(occurrence)
+
               next
             end
 
@@ -373,6 +382,7 @@ module DecentJob
         until @stopping
           delay = occurrence - Time.now
           return true unless delay.positive?
+
           deadline = monotonic_time + [delay, 0.25].min
           remaining = deadline - monotonic_time
           @condition.wait(@mutex, remaining) if remaining.positive?

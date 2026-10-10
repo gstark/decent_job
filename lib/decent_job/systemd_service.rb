@@ -42,6 +42,7 @@ module DecentJob
     def start
       generation = @mutex.synchronize do
         return self if @active || @drains.positive?
+
         @active = true
         @generation += 1
         @starting = Thread.current
@@ -83,6 +84,7 @@ module DecentJob
       notify = @mutex.synchronize do
         @condition.wait(@mutex) while @starting && @starting != Thread.current
         next false if @stopping
+
         @stopping = true
       end
 
@@ -151,8 +153,10 @@ module DecentJob
         stopped = @mutex.synchronize do
           loop do
             break if @watchdog_stop || @generation != generation
+
             remaining = deadline - monotonic_time
             break unless remaining.positive?
+
             @condition.wait(@mutex, [remaining, 3600].min)
           end
 
@@ -160,6 +164,7 @@ module DecentJob
         end
 
         break if stopped
+
         safely { SdNotify.watchdog }
         deadline = monotonic_time + interval
       end

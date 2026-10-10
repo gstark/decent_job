@@ -131,6 +131,7 @@ module DecentJob
       @database.with_connection do |connection|
         candidates(connection, selection, job_id).each do |candidate|
           return nil if stopping.call
+
           key = candidate.fetch("lock_key")
 
           # A session lock is reentrant. Skip keys already owned by this

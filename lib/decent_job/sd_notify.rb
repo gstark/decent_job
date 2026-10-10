@@ -101,10 +101,13 @@ module DecentJob
       def watchdog_interval
         pid = ENV["WATCHDOG_PID"]
         return 0.0 if pid && pid != Process.pid.to_s
+
         value = ENV["WATCHDOG_USEC"]
         return 0.0 unless value&.match?(/\A[0-9]+\z/)
+
         microseconds = Integer(value, 10)
         return 0.0 if microseconds > Float::MAX
+
         interval = microseconds / 1_000_000.0
         (microseconds.positive? && interval.finite?) ? interval : 0.0
       end

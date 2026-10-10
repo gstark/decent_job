@@ -47,6 +47,7 @@ module DecentJob
       def start
         @mutex.synchronize do
           return self if @thread&.alive?
+
           @socket = TCPServer.new("0.0.0.0", @configured_port)
           @socket.listen(16)
           @port = @socket.addr[1]
@@ -82,6 +83,7 @@ module DecentJob
 
         return true unless thread
         return false if thread == Thread.current
+
         !!thread.join(timeout)
       end
 
@@ -113,6 +115,7 @@ module DecentJob
         loop do
           listener = @mutex.synchronize { @stopping ? nil : @socket }
           break unless listener
+
           client = listener.accept
 
           accepted = @mutex.synchronize do
@@ -183,9 +186,11 @@ module DecentJob
         until input.include?("\r\n\r\n")
           remaining = deadline - monotonic_time
           raise BadRequest unless remaining.positive? && IO.select([client], nil, nil, remaining)
+
           part = client.read_nonblock(4096, exception: false)
           next if part == :wait_readable
           raise BadRequest unless part
+
           input << part
           raise BadRequest if input.bytesize > Response::MAX_HEADER_BYTES
         end
@@ -193,6 +198,7 @@ module DecentJob
         lines = input.split("\r\n\r\n", 2).first.split("\r\n")
         match = /\A([A-Z]+) (\/[^\x00-\x20\x7f#]*) HTTP\/(1\.[01])\z/.match(lines.shift)
         raise BadRequest unless match
+
         method, target, version = match.captures
         path, query = target.split("?", 2)
         env = {"REQUEST_METHOD" => method, "PATH_INFO" => path, "QUERY_STRING" => query || "",
@@ -203,12 +209,15 @@ module DecentJob
         lines.each do |line|
           key, value = line.split(":", 2)
           raise BadRequest unless key && value && Response::TOKEN.match?(key) && !value.match?(/[\x00-\x08\x0a-\x1f\x7f]/)
+
           name = "HTTP_#{key.upcase.tr("-", "_")}"
           raise BadRequest if env.key?(name)
+
           env[name] = value.strip
         end
 
         raise BadRequest if env["HTTP_TRANSFER_ENCODING"] || (env["HTTP_CONTENT_LENGTH"] && env["HTTP_CONTENT_LENGTH"] != "0")
+
         env
       end
 
@@ -221,6 +230,7 @@ module DecentJob
         while offset < bytes.bytesize
           remaining = deadline - monotonic_time
           return unless remaining.positive? && IO.select(nil, [client], nil, remaining)
+
           written = client.write_nonblock(bytes.byteslice(offset, bytes.bytesize - offset), exception: false)
           offset += written unless written == :wait_writable
         end

@@ -101,6 +101,7 @@ module DecentJob
         # A claim may have committed while we waited for the job row. Release
         # this savepoint's locks and reacquire the complete scope set in order.
         raise ScopeChanged unless (current_scopes - locked_scopes).empty?
+
         yield connection
       end
     rescue ScopeChanged
@@ -270,6 +271,7 @@ module DecentJob
       loop do
         row = connection.exec_params("SELECT job_id FROM decent_job_concurrency_claims WHERE scope = $1 AND state = 'waiting' ORDER BY created_at, job_id LIMIT 1 FOR UPDATE", [scope]).first
         return unless row
+
         id = row.fetch("job_id")
         job = connection.exec_params("SELECT state, #{EXECUTION_LOCKED_SQL} AS locked FROM decent_jobs WHERE id = $1 FOR UPDATE", [id]).first
         state = job&.fetch("state")

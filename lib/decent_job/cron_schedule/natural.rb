@@ -70,8 +70,10 @@ module DecentJob
       # @api private
       def compile
         return if @source.empty? || @source.length > 256 || duration?
+
         components = list(:element, /(?:[ \t]+|[ \t]*,[ \t]*)/)
         return unless components && @position == @source.length
+
         Compiler.new(components).compile
       end
 
@@ -92,6 +94,7 @@ module DecentJob
       def take(pattern)
         match = pattern.match(@source, @position)
         return unless match && match.begin(0) == @position
+
         @position = match.end(0)
         match[0]
       end
@@ -118,6 +121,7 @@ module DecentJob
       def list(method, separator)
         first = attempt(method)
         return unless first
+
         result = [first]
 
         loop do
@@ -126,6 +130,7 @@ module DecentJob
           end
 
           break unless item
+
           result << item
         end
 
@@ -148,6 +153,7 @@ module DecentJob
       # reference does.
       def every
         return unless keyword("every")
+
         objects = list(:every_object, CONJUNCTION)
         objects&.first
       end
@@ -177,6 +183,7 @@ module DecentJob
       def weekday_span
         first = attempt(:weekday)
         return if first.nil? || !take(RANGE)
+
         last = attempt(:weekday)
         component(:weekday, "#{first}-#{last}") unless last.nil?
       end
@@ -191,6 +198,7 @@ module DecentJob
       def every_monthdays
         days = list(:ordinal, JOIN)
         return unless days && take(/[ \t]+of the month/)
+
         component(:monthday, days.first)
       end
 
@@ -201,6 +209,7 @@ module DecentJob
         count = take(/\d+/) || "1"
         unit = take(/[ \t]*(?:seconds?|minutes?|hours?|days?|months?|sec|min|s|m|h|d|M)/)
         return unless unit
+
         unit = unit.strip
         value = (count == "1") ? "*" : "*/#{count}"
 
@@ -241,6 +250,7 @@ module DecentJob
         keyword("the")
         first = attempt(:ordinal)
         return unless first && keyword("to")
+
         keyword("the")
         last = attempt(:ordinal)
         component(:monthday, "#{first}-#{last}") if last
@@ -248,6 +258,7 @@ module DecentJob
 
       def on
         return unless keyword("on")
+
         list(:on_object, /[ \t]*and[ \t]+/i)
       end
 
@@ -257,6 +268,7 @@ module DecentJob
 
       def on_days
         return unless keyword("days?")
+
         days = list(:monthday, JOIN)
         days&.map { |day| component(:monthday, day) }
       end
@@ -268,8 +280,10 @@ module DecentJob
 
       def on_minutes
         return unless keyword("minute")
+
         minute = take(/[0-5]?[0-9]/)
         return unless minute
+
         minutes = [minute]
 
         loop do
@@ -281,6 +295,7 @@ module DecentJob
           end
 
           break unless value
+
           minutes << value
         end
 
@@ -293,12 +308,14 @@ module DecentJob
 
       def the_ordinals
         return unless keyword("the")
+
         list(:ordinal, JOIN)&.map { |day| component(:monthday, day) }
       end
 
       def on_clock_unit
         text = take(/[ \t]*the[ \t]+(?:hour|minute)[ \t]*/i)
         return unless text
+
         text.match?(/hour/i) ? component(:time, 0, "*", strong: 0) : component(:time, "*", "*", strong: 1)
       end
 

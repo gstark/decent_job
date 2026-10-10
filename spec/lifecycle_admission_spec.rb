@@ -162,6 +162,7 @@ describe "performer admission release" do
       operation = Thread.current[:maintenance_exit]
       Thread.current[:maintenance_exit] = nil
       raise IOError, "maintenance failed" if operation == :raise
+
       throw :maintenance_exit, :returned if operation == :throw
       super(&block)
     end

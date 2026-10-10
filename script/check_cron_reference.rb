@@ -39,6 +39,7 @@ count.times do
   end
 
   next unless reference
+
   after = Time.utc(2026, random.rand(1..12), random.rand(1..28), random.rand(0..23), random.rand(0..59), random.rand(0..59))
   expected = reference.next_time(after).to_i
   actual = schedule.next_at(after: after).to_i

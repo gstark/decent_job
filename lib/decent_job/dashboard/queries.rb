@@ -187,6 +187,7 @@ module DecentJob
       def job(id)
         row = query("SELECT decent_jobs.*, (#{STATUS_SQL}) AS status FROM decent_jobs WHERE id = $1", [id]).first
         return unless row
+
         @store.decode(row).merge("status" => row.fetch("status"))
       end
 

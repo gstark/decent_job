@@ -54,6 +54,7 @@ module DecentJob
         raise ForkInProgress, "runtime is preparing to fork" if @forking
         next nil if @runtime_transition && (automatic || skip_during_fork)
         raise LifecycleInProgress, "runtime is #{@runtime_transition}" if @runtime_transition
+
         block.call
       }
 
@@ -81,6 +82,7 @@ module DecentJob
         runtime_mutex.synchronize do
           raise LifecycleInProgress, "runtime is #{@runtime_transition}" if @runtime_transition
           raise ForkInProgress, "runtime is preparing to fork" if @forking
+
           @runtime_transition = name
           acquired = true
         end
@@ -129,18 +131,21 @@ module DecentJob
         previous = runtime_mutex.synchronize do
           raise ForkInProgress, "runtime is already preparing to fork" if @forking
           raise LifecycleInProgress, "runtime is #{@runtime_transition}" if @runtime_transition
+
           @forking = true
           [@stopping, @cron_stopping]
         end
       end
 
       raise ForkInProgress, "workers or cron did not drain before fork" unless shutdown(timeout: configuration.shutdown_timeout)
+
       run_lifecycle_hooks(:before_supervisor_fork)
       live_worker = ObjectSpace.each_object(Worker).any? { |worker| !worker.shutdown? }
       live_cron = ObjectSpace.each_object(CronManager).any? { |manager| !manager.shutdown? }
       live_tracker = ObjectSpace.each_object(ProcessTracker).any? { |tracker| !tracker.shutdown? }
       live_performer = ObjectSpace.each_object(Performer).any?(&:active?)
       raise ForkInProgress, "manually owned workers, cron, process trackers, or executions must drain before fork" if live_worker || live_cron || live_tracker || live_performer
+
       Database.with_prepared_fork { yield }
     ensure
       if previous && Process.pid == owner

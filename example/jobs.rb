@@ -16,6 +16,7 @@ module Example
 
     while Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
       return :stopped if job && job.class.queue_adapter.stopping?(job)
+
       sleep 0.2
     end
 
@@ -67,6 +68,7 @@ class BrokenImportJob < DecentJob::Base
 
   def perform(source)
     raise Example::InvalidPayload, "#{source} has no header row" if source.end_with?(".bad")
+
     parse(source)
   end
 

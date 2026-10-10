@@ -176,6 +176,7 @@ module DecentJob
 
         parser.on("--in-batches-of N", Integer, "Cleanup page size") do |value|
           raise OptionParser::InvalidArgument, "in-batches-of must be positive" unless value.positive?
+
           (options[:cleanup] ||= {})[:in_batches_of] = value
         end
 

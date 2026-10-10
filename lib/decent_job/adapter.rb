@@ -257,6 +257,7 @@ module DecentJob
     def restart(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
       return false if @worker_mutex.synchronize { @retired }
+
       revision, handles = begin_shutdown
       return false unless ResourceShutdown.prepare_restart(handles, deadline: deadline, force: force, timeout: timeout)
 
@@ -274,6 +275,7 @@ module DecentJob
             end
 
             return false unless handles.map(&:restart).all?
+
             @lifecycle_revision += 1
             @stopping = false
             DecentJob.locally_resume_worker(@worker, database: @database)
@@ -403,6 +405,7 @@ module DecentJob
         return unless @database || DecentJob.configuration.database_url
 
         return if @worker_mutex.synchronize { @stopping }
+
         connection_pool = @database || DecentJob.database(automatic: true)
         return unless connection_pool
 
@@ -464,6 +467,7 @@ module DecentJob
       end
 
       raise EnqueueError, "cron occurrence already enqueued" unless job.provider_job_id
+
       job.provider_job_id
     end
 

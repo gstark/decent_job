@@ -55,6 +55,7 @@ describe "runtime monitor utilities" do
       state: -> {
         attempts += 1
         raise "state failed" if attempts == 1
+
         {attempt: attempts}
       }, on_thread_error: ->(error) {
         reports << error.message

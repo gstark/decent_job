@@ -6,6 +6,7 @@ require "json"
 class RuntimeEventsProcessJob < ActiveJob::Base
   def perform(action)
     raise "runtime worker failure" if action == "fail"
+
     action
   end
 end

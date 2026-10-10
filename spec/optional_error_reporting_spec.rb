@@ -50,6 +50,7 @@ describe "disabled error reporting" do
 
     pids&.each do |pid|
       next if Process.waitpid(pid, Process::WNOHANG)
+
       Process.kill("KILL", pid)
       Process.waitpid(pid)
     rescue Errno::ESRCH, Errno::ECHILD

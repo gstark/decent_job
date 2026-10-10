@@ -216,6 +216,7 @@ describe DecentJob::Worker do
     database.define_singleton_method(:with_connection) do |&block|
       attempts << true
       raise PG::ConnectionBad, "temporarily disconnected" if attempts.size == 1
+
       super(&block)
     end
 

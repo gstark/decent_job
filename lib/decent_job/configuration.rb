@@ -327,6 +327,7 @@ module DecentJob
     #   returned as is, so validation can reject it
     def enable_cron
       return @enable_cron unless @enable_cron == true
+
       @cron.is_a?(Hash) && !@cron.empty?
     end
 
@@ -365,6 +366,7 @@ module DecentJob
     #   environment value wins over the Rails environment default.
     def execution_mode
       return @execution_mode unless @execution_mode.nil?
+
       @rails_execution_mode || @environment_execution_mode || @rails_default_execution_mode || :external
     end
 
@@ -376,6 +378,7 @@ module DecentJob
     # @return [#call, nil] a callable that receives the exception, or nil
     def on_thread_error
       return @on_thread_error if defined?(@on_thread_error)
+
       ->(error) { logger.error("#{error.class}: #{error.message}") }
     end
 
@@ -432,6 +435,7 @@ module DecentJob
           if options.key?(name)
             # Preserve supported edits through mutable getters until the host value changes.
             next if previous.key?(name) && previous[name] == options[name]
+
             public_send("#{name}=", copy_containers(options[name]))
           elsif previous.key?(name)
             if @baseline_options.key?(name)
@@ -514,6 +518,7 @@ module DecentJob
       return @poll_interval unless @poll_interval.nil?
       return @rails_poll_interval unless @rails_poll_interval.nil?
       return @environment_poll_interval unless @environment_poll_interval.nil?
+
       (@rails_environment == "development" && ASYNC_MODES.include?(execution_mode)) ? -1 : 10
     end
 
@@ -537,6 +542,7 @@ module DecentJob
     # @raise [ArgumentError] for any other value
     def max_cache=(value)
       raise ArgumentError, "max_cache must be a nonnegative integer" unless value.is_a?(Integer) && value >= 0
+
       @max_cache = value
     end
 
@@ -560,6 +566,7 @@ module DecentJob
       value = true if value == "true"
       value = false if value == "false"
       raise ArgumentError, "daemonize must be true or false" unless [true, false].include?(value)
+
       @daemonize = value
     end
 
@@ -596,6 +603,7 @@ module DecentJob
     # @raise [ArgumentError] for a negative or non-integer value
     def subprocesses=(value)
       raise ArgumentError, "subprocesses must be a nonnegative integer" unless value.is_a?(Integer) && value >= 0
+
       @subprocesses = value
     end
 
@@ -681,6 +689,7 @@ module DecentJob
     # @raise [ArgumentError] when the value is not callable
     def probe_app=(value)
       raise ArgumentError, "probe_app must be callable or nil" unless value.nil? || value.respond_to?(:call)
+
       @probe_app = value
     end
 
@@ -706,6 +715,7 @@ module DecentJob
       value = true if value == "true"
       value = false if value == "false"
       raise ArgumentError, "cleanup_discarded_jobs must be true or false" unless [true, false].include?(value)
+
       @cleanup_discarded_jobs = value
     end
 
@@ -747,6 +757,7 @@ module DecentJob
       @handled_exceptions.map do |value|
         klass = value.is_a?(String) ? Support.constantize(value) : value
         raise ArgumentError, "handled_exceptions must contain exception classes or class names" unless klass.is_a?(Class) && klass <= Exception
+
         klass
       rescue NameError
         raise ArgumentError, "handled_exceptions contains an unknown exception class: #{value.inspect}"
@@ -769,6 +780,7 @@ module DecentJob
     # @raise [ArgumentError] with all messages joined by "; " when they are not
     def validate!
       raise ArgumentError, errors.full_messages.join("; ") unless valid?
+
       self
     end
 
@@ -783,8 +795,10 @@ module DecentJob
 
       @cron.map do |key, attributes|
         raise ArgumentError, "cron entry #{key} must be a Hash" unless attributes.is_a?(Hash)
+
         entry = CronEntry.new(attributes.merge(key: key), database: database)
         raise ArgumentError, "invalid cron entry #{key}: #{entry.errors.inspect}" unless entry.valid?
+
         entry
       end
     end
@@ -844,6 +858,7 @@ module DecentJob
     def environment_boolean(name, default:)
       value = ENV[name]
       return default if value.nil?
+
       !["", "0", "f", "F", "false", "FALSE", "off", "OFF"].include?(value)
     end
 
@@ -872,6 +887,7 @@ module DecentJob
 
     def normalize_lock_strategy(value)
       return if value.nil?
+
       value = value.to_sym if value.is_a?(String)
 
       unless %i[advisory skiplocked hybrid].include?(value)
@@ -883,6 +899,7 @@ module DecentJob
 
     def normalize_dequeue_query_sort(value)
       return if value.nil?
+
       value = value.to_sym if value.is_a?(String)
 
       unless %i[created_at scheduled_at].include?(value)
@@ -894,6 +911,7 @@ module DecentJob
 
     def normalize_queue_select_limit(value)
       return if value.nil?
+
       value = Integer(value, 10) if value.is_a?(String) && value.match?(/\A[0-9]+\z/)
 
       unless value.is_a?(Integer) && value >= 0
@@ -906,8 +924,10 @@ module DecentJob
     # Splits {#queues} on pipes into subprocess queue groups.
     def queue_groups
       raise ArgumentError, "queues must be a nonempty string" unless @queues.is_a?(String) && !@queues.strip.empty?
+
       groups = @queues.split("|", -1).map(&:strip)
       raise ArgumentError, "queue groups must not be empty" if groups.any?(&:empty?)
+
       groups
     end
 
@@ -932,6 +952,7 @@ module DecentJob
     def cleanup_interval(value, default:, integer: false)
       return default if value.nil? || value == "" || value == true
       return false if [false, "false", 0, "0"].include?(value)
+
       value = integer ? Integer(value, 10) : Float(value) if value.is_a?(String)
       name = integer ? :cleanup_interval_jobs : :cleanup_interval_seconds
       CleanupTracker.new(**{name => value})

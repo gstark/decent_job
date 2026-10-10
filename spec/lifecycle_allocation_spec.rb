@@ -112,6 +112,7 @@ describe "lifecycle allocation failures" do
 
       replacement = lambda do |*args, &block|
         raise failure unless created.empty?
+
         factory.call(*args, &block).tap { |thread| created << thread }
       end
 

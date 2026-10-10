@@ -121,6 +121,7 @@ module DecentJob
 
         rows.each do |row|
           return nil if stopping&.call
+
           yield row.fetch("id")
         end
 
@@ -148,6 +149,7 @@ module DecentJob
               AND NOT #{ConcurrencyClaims::PERSISTED_LOCKED_SQL}
           SQL
           next unless eligible
+
           @claims.release_all(connection, id)
           executions = connection.exec_params("SELECT count(*) FROM decent_job_executions WHERE job_id = $1", [id]).getvalue(0, 0).to_i
           jobs = connection.exec_params("DELETE FROM decent_jobs WHERE id = $1", [id]).cmd_tuples
@@ -164,11 +166,13 @@ module DecentJob
       completed = without_waiting do |connection|
         locked = connection.exec_params("SELECT pg_try_advisory_xact_lock(hashtextextended(current_schema() || '.decent_job.batch.' || $1, 0))", [id]).getvalue(0, 0) == "t"
         next unless locked
+
         row = connection.exec_params(<<~SQL, [id, cutoff, include_discarded]).first
           SELECT id FROM decent_job_batches WHERE id = $1 AND finished_at <= $2::timestamptz
             AND ($3 OR discarded_at IS NULL) FOR UPDATE NOWAIT
         SQL
         next unless row
+
         # Retry of an individual member does not open a new batch generation.
         # Lock all members before deciding that it is safe to detach them.
         jobs = connection.exec_params(<<~SQL, [id])
@@ -177,6 +181,7 @@ module DecentJob
         SQL
         next if jobs.any? { |job| job["finished_at"].nil? || !%w[succeeded discarded].include?(job["state"]) || job["locked"] == "t" }
         next if connection.exec_params("SELECT 1 FROM decent_job_batch_events WHERE batch_id = $1 AND dispatched_at IS NULL LIMIT 1", [id]).ntuples.positive?
+
         connection.exec_params("DELETE FROM decent_job_batch_updates WHERE batch_id = $1", [id])
         count = connection.exec_params("DELETE FROM decent_job_batches WHERE id = $1", [id]).cmd_tuples
       end
@@ -204,6 +209,7 @@ module DecentJob
         end
 
         break if ids.size < size
+
         cursor = ids.max
       end
     end

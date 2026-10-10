@@ -14,6 +14,7 @@ class RetryingJob < RecordingJob
 
   def perform(value)
     raise "try again" if executions == 1
+
     super
   end
 end

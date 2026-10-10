@@ -99,6 +99,7 @@ module DecentJob
 
     def self.deliver(receipt)
       return if observing?(receipt.resource)
+
       scope = ExecutionState[:lifecycle_observers]
       resources = owned?(scope) ? scope.receipts : []
       current = Scope.new(pid: Process.pid, owner: IsolatedState.context, receipts: (resources + [receipt.resource]).freeze)

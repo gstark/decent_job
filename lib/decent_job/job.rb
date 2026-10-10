@@ -127,6 +127,7 @@ module DecentJob
       end
     rescue NameError, ArgumentError
       raise unless ignore_deserialization_errors
+
       nil
     end
 
@@ -137,6 +138,7 @@ module DecentJob
       expected = scheduled_at || created_at
       now = Time.now
       return if expected >= now
+
       (performed_at || finished_at || now) - expected
     end
 
@@ -165,6 +167,7 @@ module DecentJob
       return state.to_sym if finished?
       return :running if running?
       return :queued if scheduled_at <= Time.now
+
       error ? :retried : :scheduled
     end
 
@@ -225,12 +228,14 @@ module DecentJob
         database.transaction do
           reload
           raise StateMismatchError, "Only discarded jobs can be retried" unless discarded?
+
           prepared = JobRetry.new(self).prepare
           scopes = ConcurrencyControls.new(database).scopes_for(prepared.fetch(:buffer).jobs.reject { |job| job.job_id == active_job_id })
 
           ConcurrencyClaims.new(database).synchronize(id, scopes: scopes, wait: false) do |connection|
             lock_row(connection)
             raise StateMismatchError, "Only discarded jobs can be retried" unless discarded?
+
             job = prepared[:job]
 
             if job
@@ -309,6 +314,7 @@ module DecentJob
     def destroy_job
       manage do |connection|
         raise StateMismatchError, "Only finished jobs can be destroyed" unless finished?
+
         ConcurrencyClaims.new(database).release_all(connection, id)
         connection.exec_params("DELETE FROM decent_jobs WHERE id = $1", [id])
         self
@@ -385,6 +391,7 @@ module DecentJob
       row = connection.exec_params("SELECT * FROM decent_jobs WHERE id = $1 FOR UPDATE #{"NOWAIT" unless wait}", [id]).first
       raise KeyError, "Job #{id} was not found" unless row
       raise LockedError, "Job #{id} is locked" if !wait && row["locked_by_id"] && row["lock_type"] == "skiplocked"
+
       @attributes = @store.decode(row)
     rescue PG::LockNotAvailable
       raise LockedError, "Job #{id} is locked"
@@ -402,8 +409,10 @@ module DecentJob
         SQL
         raise KeyError, "Job #{id} was not found" unless row
         raise LockedError, "Job #{id} is locked" if row.fetch("locked") == "t"
+
         locked = connection.exec_params("SELECT pg_try_advisory_xact_lock($1::bigint)", [row.fetch("lock_key")]).getvalue(0, 0) == "t"
         raise LockedError, "Job #{id} is locked" unless locked
+
         yield
       end
     end

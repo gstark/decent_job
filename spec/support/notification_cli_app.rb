@@ -16,6 +16,7 @@ class NotificationRetryProcessJob < NotificationProcessJob
 
   def perform(value)
     raise "retry once" if executions == 1
+
     super
   end
 end

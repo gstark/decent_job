@@ -64,6 +64,7 @@ module DecentJob
           # The reference cannot combine whole-hour points with a stronger
           # minute constraint. Reject it through the public parse contract.
           raise ArgumentError, "incompatible whole-hour point" unless value.is_a?(String)
+
           match = /\A(\d+)-(\d+)\z/.match(value)
           match&.captures&.map(&:to_i)
         end
@@ -94,6 +95,7 @@ module DecentJob
           return left if other.weak == index || other.weak == true
           return right if weak == index || weak == true
           return ["*"] if left == "*" && right == "*"
+
           ((left == "*") ? [] : Array(left)) + ((right == "*") ? [] : Array(right))
         end
       end

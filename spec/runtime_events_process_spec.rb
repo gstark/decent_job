@@ -60,6 +60,7 @@ describe "worker runtime events across CLI processes" do
 
       await do
         raise "Worker stopped: #{stderr.value}\n#{stdout.value}" unless process.alive?
+
         !events("notifier_listen.decent_job").empty? && !events("finished_job_task.decent_job").empty?
       end
 

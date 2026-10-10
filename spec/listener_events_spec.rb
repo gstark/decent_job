@@ -146,6 +146,7 @@ describe "listener events" do
       connection.define_singleton_method(:exec) do |sql, *args|
         connection_used << connection if sql == "LISTEN decent_job"
         raise IOError, "unlisten failed" if sql == "UNLISTEN decent_job"
+
         original.call(sql, *args)
       end
     end
@@ -200,6 +201,7 @@ describe "listener events" do
 
       connection.define_singleton_method(:exec) do |sql, *args|
         raise IOError, "cleanup failed" if sql == "UNLISTEN decent_job"
+
         original_exec.call(sql, *args)
       end
 

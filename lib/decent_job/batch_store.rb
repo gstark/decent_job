@@ -76,6 +76,7 @@ module DecentJob
 
       @database.with_connection do |connection|
         return find(id) if values.empty?
+
         assignments = values.keys.each_with_index.map { |key, index| "#{key} = $#{index + 2}" }
         row = connection.exec_params("UPDATE decent_job_batches SET #{assignments.join(", ")}, updated_at = clock_timestamp() WHERE id = $1 RETURNING *", [id, *values.values]).first
         raise KeyError, "Batch not found: #{id}" unless row
@@ -200,6 +201,7 @@ module DecentJob
         previous = connection.exec_params("SELECT batch_id FROM decent_jobs WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE", [encoded]).column_values(0)
         result = connection.exec_params("UPDATE decent_jobs SET batch_id = $2, updated_at = clock_timestamp() WHERE id = ANY($1::uuid[])", [encoded, id])
         raise KeyError, "Some batch jobs are missing" unless result.cmd_tuples == ids.size
+
         request(connection, [id, *previous])
       end
     end
@@ -310,6 +312,7 @@ module DecentJob
     def request(connection, ids, job_id: nil, discarded: false)
       ids = Array(ids).compact.uniq
       return if ids.empty?
+
       connection.exec_params(<<~SQL, [PG::TextEncoder::Array.new.encode(ids), job_id, discarded])
         INSERT INTO decent_job_batch_updates (batch_id, generation, job_id, discarded)
         SELECT id, generation, $2, $3 FROM decent_job_batches WHERE id = ANY($1::uuid[])
@@ -506,6 +509,7 @@ module DecentJob
     def create_event(connection, row, event)
       klass = row["on_#{event}"]
       return unless klass
+
       connection.exec_params(<<~SQL, [row.fetch("id"), row.fetch("generation"), event, klass, row["callback_queue_name"], row["callback_priority"]])
         INSERT INTO decent_job_batch_events (batch_id, generation, event, job_class, queue_name, priority)
         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING
@@ -520,6 +524,7 @@ module DecentJob
     def dispatch(connection, id, errors)
       events = connection.exec_params("SELECT * FROM decent_job_batch_events WHERE batch_id = $1 AND dispatched_at IS NULL ORDER BY generation, event", [id]).to_a
       return if events.empty?
+
       batch = Batch.find(id, database: @database)
 
       pairs = events.filter_map do |event|
@@ -557,6 +562,7 @@ module DecentJob
           pairs.each do |event, job|
             next unless buffer.jobs.include?(job)
             next unless job.provider_job_id && job.successfully_enqueued?
+
             connection.exec_params(<<~SQL, [id, event.fetch("generation"), event.fetch("event"), job.provider_job_id])
               UPDATE decent_job_batch_events SET job_id = $4, dispatched_at = clock_timestamp()
               WHERE batch_id = $1 AND generation = $2 AND event = $3
@@ -568,6 +574,7 @@ module DecentJob
 
     def delete_updates(connection, updates)
       return if updates.empty?
+
       connection.exec_params("DELETE FROM decent_job_batch_updates WHERE id = ANY($1::bigint[])", [PG::TextEncoder::Array.new.encode(updates.map { |update| update.fetch("id") })])
     end
 

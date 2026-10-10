@@ -27,9 +27,11 @@ module DecentJob
         if name&.match?(/\A[+-]/)
           match = /\A([+-])([01]\d|2[0-3]):?(00|15|30|45)\z/.match(name)
           raise ArgumentError, "invalid timezone" unless match
+
           @offset = (match[2].to_i * 3600 + match[3].to_i * 60) * ((match[1] == "-") ? -1 : 1)
         elsif name
           raise ArgumentError, "invalid timezone" unless name.match?(/\A[A-Z][a-zA-Z0-9+-]+(?:\/[A-Z][a-zA-Z0-9+\-_]+){0,2}\z/)
+
           @timezone = TZInfo::Timezone.get(name)
         end
       rescue TZInfo::InvalidTimezoneIdentifier
@@ -42,6 +44,7 @@ module DecentJob
       def local(time)
         offset = @local ? LocalZone.offset : @offset
         return time.getlocal(offset) if offset
+
         timezone = @local ? LocalZone.timezone : @timezone
         timezone ? timezone.to_local(time) : time.getlocal
       end
@@ -61,9 +64,11 @@ module DecentJob
       def at(year, month, day = 1, hour = 0)
         offset = @local ? LocalZone.offset : @offset
         return Time.new(year, month, day, hour, 0, 0, offset) if offset
+
         wall = Time.utc(year, month, day, hour)
         timezone = @local ? LocalZone.timezone : @timezone
         return LocalZone.at(wall) unless timezone
+
         periods = timezone.periods_for_local(wall)
 
         if periods.empty?
@@ -76,6 +81,7 @@ module DecentJob
           end
 
           raise ArgumentError, "timezone has no valid local time" unless transition
+
           return Time.at(transition.at.to_i).utc
         end
 

@@ -81,6 +81,7 @@ describe "persistent pauses" do
       loop do
         pids << connections.pop until connections.empty?
         break if !pids.empty? && @admin.exec_params("SELECT 1 FROM pg_stat_activity WHERE pid = ANY($1::int[]) AND query = 'LISTEN decent_job'", [PG::TextEncoder::Array.new.encode(pids)]).ntuples.positive?
+
         sleep 0.01
       end
     end

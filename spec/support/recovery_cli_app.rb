@@ -35,6 +35,7 @@ end
 class RecoveryProcessErrorJob < ActiveJob::Base
   def perform(completed, fail_execution)
     raise NotImplementedError, "process job not implemented" if fail_execution
+
     File.write(completed, provider_job_id)
   end
 end

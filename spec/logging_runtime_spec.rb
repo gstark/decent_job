@@ -27,6 +27,7 @@ class RuntimeLoggingJob < ActiveJob::Base
 
   def perform(block = false)
     return unless block
+
     started << true
     Queue.new.pop
   end

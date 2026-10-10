@@ -63,6 +63,7 @@ module DecentJob
       end
 
       raise ArgumentError, "probe app must be callable" if app && !app.respond_to?(:call)
+
       @on_thread_error = on_thread_error
       klass = handler_class(handler)
       @handler = klass.new(app || self.class.default_app(state: state), port: port,

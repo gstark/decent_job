@@ -88,6 +88,7 @@ module DecentJob
       [["scheduled_at >=", from&.iso8601(6)], ["scheduled_at <", to&.iso8601(6)],
         ["job_class =", job_class], ["queue_name =", queue_name]].each do |predicate, value|
         next if value.nil?
+
         values << value
         conditions << "#{predicate} $#{values.length}"
       end

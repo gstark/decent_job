@@ -80,6 +80,7 @@ module DecentJob
       end.all?
 
       raise failure if failure
+
       stopped
     end
 
@@ -127,6 +128,7 @@ module DecentJob
     # @raise [Exception] the capture failure, or a fatal error of the run
     def wait(deadline: nil, force: false, timeout: nil)
       raise @failure if @failure
+
       began = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       payload = {timeout: timeout, force: force}
 

@@ -186,6 +186,7 @@ module DecentJob
 
           if !entry.callbacks_run && !entry.job.provider_job_id && ConcurrencyControls.controlled?(entry.job)
             next if callbacks_prepared[identity]
+
             callbacks_prepared[identity] = true
             captured = self.class.new
             captured.capture { entry.job.enqueue }
@@ -194,6 +195,7 @@ module DecentJob
             @children.concat(captured.children)
           else
             next if added[identity]
+
             added[identity] = true
             prepared.add(entry.job, queue_adapter: entry.adapter, callbacks_run: entry.callbacks_run)
           end

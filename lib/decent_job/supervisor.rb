@@ -113,6 +113,7 @@ module DecentJob
       @configuration.validate!
       @recipes = @configuration.subprocess_configs
       raise ArgumentError, "supervisor requires at least one subprocess" if @recipes.empty?
+
       @mutex = Mutex.new
       @subprocesses = {}
       @pending = []
@@ -179,6 +180,7 @@ module DecentJob
     # @note Must run on the main thread because Ruby runs trap handlers there.
     def start(on_start: nil, on_shutdown: nil)
       raise ArgumentError, "supervisor must run on the main thread" unless Thread.current == Thread.main
+
       @supervisor_pid = Process.pid
       @reader, @writer = IO.pipe
       @previous_traps = {}
@@ -189,6 +191,7 @@ module DecentJob
 
       @recipes.each_with_index do |recipe, index|
         break if @stopped
+
         spawn_subprocess(recipe, index: index)
       end
 
@@ -335,12 +338,14 @@ module DecentJob
         end
 
         next unless result
+
         @mutex.synchronize { @subprocesses.delete(pid) }
         handle.close_reader
         status = result.last
         @shutdown_timed_out = true if @stopped && !@immediate && status&.exitstatus == DRAIN_TIMEOUT_STATUS
         instrument_cleanup("cluster_reap", pid: pid, index: handle.index, status: status&.exitstatus, signal: status&.termsig)
         next if @stopped
+
         count = (self.class.monotonic - handle.started_at < MIN_HEALTHY_UPTIME) ? handle.restart_count + 1 : 0
         delay = (count < 2) ? 0 : [2**[count - 2, 5].min, MAX_BACKOFF_DELAY].min
         @pending << {recipe: handle.recipe, index: handle.index, restart_count: count, at: self.class.monotonic + delay}
@@ -353,6 +358,7 @@ module DecentJob
 
       due.each do |entry|
         break if @stopped
+
         spawn_subprocess(entry[:recipe], index: entry[:index], restart_count: entry[:restart_count])
       end
     end
@@ -370,6 +376,7 @@ module DecentJob
       ready.each do |reader|
         data = reader.read_nonblock(4096, exception: false)
         next if reader == @reader
+
         handle = handles.find { |candidate| candidate.readiness_reader == reader }
 
         if data.nil?
@@ -397,12 +404,15 @@ module DecentJob
       until subprocesses.empty?
         reap_children
         break if subprocesses.empty?
+
         remaining = deadline - self.class.monotonic
         break unless remaining.positive? && !@immediate
+
         wait_for_wakeup([remaining, 0.05].min)
       end
 
       return if subprocesses.empty?
+
       @shutdown_timed_out = true unless @immediate
       signal_children("KILL")
 
@@ -421,6 +431,7 @@ module DecentJob
     # inherit its socket. Each child closes that copy after fork.
     def start_probe
       return unless @configuration.probe_port
+
       @probe_server = ProbeServer.new(port: @configuration.probe_port, handler: @configuration.probe_handler,
         app: @configuration.probe_app || ProbeServer.cluster_app(self))
       @probe_server.start

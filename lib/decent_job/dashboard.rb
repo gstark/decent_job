@@ -233,6 +233,7 @@ module DecentJob
         kind = {"queue" => :queue, "job_class" => :job_class, "label" => :label}[form["kind"]]
         key = form["key"].to_s.strip
         raise BadRequest, "Choose a queue, job class, or label, and give its name." if kind.nil? || key.empty?
+
         pauses = Pauses.new(database)
         (form["action"] == "unpause") ? pauses.unpause(kind => key) : pauses.pause(kind => key)
         redirect(view, view.url("/pauses"), notice: "#{(form["action"] == "unpause") ? "Resumed" : "Paused"} #{form["kind"].tr("_", " ")} #{key}")
@@ -267,6 +268,7 @@ module DecentJob
 
     def job_page(id, queries)
       raise NotFound unless id.match?(UUID)
+
       job = queries.job(id) || raise(NotFound)
       {job: job, executions: queries.executions(id), claims: queries.claims(id),
        batch: job["batch_id"] && queries.batch(job["batch_id"])}
@@ -278,6 +280,7 @@ module DecentJob
 
     def batch_page(id, queries)
       raise NotFound unless id.match?(UUID)
+
       batch = queries.batch(id) || raise(NotFound)
       {batch: batch, jobs: queries.batch_jobs(id), callbacks: queries.batch_jobs(id, callbacks: true)}
     end
@@ -291,6 +294,7 @@ module DecentJob
       to = parse_time(request.query["to"]) || Time.now.utc
       from = parse_time(request.query["from"]) || (to - range_seconds(request.query["range"]))
       raise BadRequest, "The start of the range must come before its end." unless from < to
+
       job_class = request.query["job_class"].to_s.strip
       job_class = nil if job_class.empty?
       metric = %w[execution queue total].include?(request.query["metric"]) ? request.query["metric"] : "execution"
@@ -360,6 +364,7 @@ module DecentJob
 
     def load_job(id)
       raise NotFound unless id.to_s.match?(UUID)
+
       Job.find(id, database: database)
     rescue KeyError
       raise NotFound
@@ -407,6 +412,7 @@ module DecentJob
 
       mount = request.script_name.empty? ? "/" : request.script_name
       return path if path&.start_with?(mount)
+
       fallback || "#{request.script_name}/"
     end
 
@@ -437,6 +443,7 @@ module DecentJob
       token = request.form["authenticity_token"].to_s
       expected = request.cookies[CSRF_COOKIE].to_s
       return if !expected.empty? && token.bytesize == expected.bytesize && secure_compare(token, expected)
+
       raise BadRequest, "The form token did not match. Reload the page and try again."
     end
 
@@ -451,8 +458,10 @@ module DecentJob
     # value, which shows the first page.
     def cursor(value)
       return unless value.is_a?(String)
+
       created_at, id = value.split("|", 2)
       return unless id&.match?(UUID)
+
       Time.iso8601(created_at)
       [created_at, id]
     rescue ArgumentError
@@ -463,6 +472,7 @@ module DecentJob
     # input. Returns nil for a blank value.
     def parse_time(value)
       return unless value.is_a?(String) && !value.strip.empty?
+
       Time.iso8601(value.strip)
     rescue ArgumentError
       begin

@@ -578,6 +578,7 @@ describe "claim interruption boundaries" do
           @observer.exec("SELECT pg_stat_clear_snapshot()")
           blocked = @observer.exec("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%SELECT started_at FROM decent_job_executions%')").getvalue(0, 0) == "t"
           break if blocked
+
           sleep 0.01
         end
       end

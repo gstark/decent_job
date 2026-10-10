@@ -48,11 +48,14 @@ module DecentJob
       # @api private
       def values
         raise ArgumentError, "empty cron field" if @expression.empty?
+
         parts = @expression.split(",").reject(&:empty?)
         raise ArgumentError, "empty cron field" if parts.empty?
+
         result = parts.flat_map { |part| parse_part(part) }
         return (result.empty? ? nil : result.uniq.sort) if @kind == :weekdays
         return nil if result.include?(nil)
+
         result.map { |value| (@kind == :hours && value == 24) ? 0 : value }.uniq.sort
       end
 
@@ -64,13 +67,16 @@ module DecentJob
         if @kind == :weekdays && (match = /\A(#{token})(?:#(-?[1-5]|last|l)|%(\d+)(?:\+(\d+))?)\z/i.match(part))
           day = number(match[1]) % 7
           return [[day, number(match[2])]] if match[2]
+
           modulo = match[3].to_i
           raise ArgumentError, "weekday modulo must be positive" if modulo.zero?
+
           return [[day, [modulo, match[4].to_i]]]
         end
 
         match = /\A(?:(\*)|(#{token})(?:-(#{token}))?)?(?:\/(\d{1,2}))?\z/i.match(part)
         raise ArgumentError, "invalid cron field #{part.inspect}" unless match && !part.empty?
+
         first = match[2] && number(match[2])
         last = match[3] && number(match[3])
         step = match[4]&.to_i
@@ -78,10 +84,12 @@ module DecentJob
         return weekday_values(first, last, step) if @kind == :weekdays
         return [nil] if first.nil? && step.nil?
         return [first] if first && last.nil? && step.nil?
+
         first ||= @min
         last = @max if last.nil? || (last < 0 && first > 0)
         return [nil] if first == @min && last == @max && (step || 1) == 1
         raise ArgumentError, "mixed positive and negative bounds" if first < 0 && last > 0
+
         lower, upper = (first < 0) ? [-@max, -1] : [@min, @max]
         expanded = []
         current = first
@@ -89,6 +97,7 @@ module DecentJob
         (2 * @max + 1).times do
           expanded << current
           break if current == last
+
           current += 1
 
           if current > upper
@@ -98,6 +107,7 @@ module DecentJob
         end
 
         raise ArgumentError, "invalid cron range" unless expanded.last == last
+
         expanded.each_with_index.filter_map { |value, index| value if index % (step || 1) == 0 }
       end
 
@@ -122,6 +132,7 @@ module DecentJob
         return -1 if %w[l last].include?(normalized)
         return MONTHS.index(normalized) + 1 if @kind == :months && MONTHS.include?(normalized)
         return WEEKDAYS.index(normalized) if @kind == :weekdays && WEEKDAYS.include?(normalized)
+
         Integer(normalized, 10)
       end
     end

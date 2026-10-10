@@ -33,6 +33,7 @@ describe "global shutdown inspection" do
     [worker, manager].each do |resource|
       resource.define_singleton_method(:shutdown?) do
         raise "registry mutex held during inspection" if DecentJob.runtime_mutex.owned?
+
         DecentJob.stopping?
         super()
       end

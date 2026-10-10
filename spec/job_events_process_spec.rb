@@ -54,6 +54,7 @@ describe "job events from a standalone CLI worker" do
           raise "Worker stopped: #{stderr.value}\n#{stdout.value}" unless process.alive?
           break if events.count { |event| event.fetch("name") == "perform_job.decent_job" } == 3 &&
             database.with_connection { |connection| connection.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0) == "0" }
+
           sleep 0.01
         end
       end

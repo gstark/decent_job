@@ -110,6 +110,7 @@ module DecentJob
       #   its title
       def time(value, relative: true)
         return "" unless value
+
         iso = value.utc.iso8601
         label = relative ? relative_time(value) : value.utc.strftime("%Y-%m-%d %H:%M:%S UTC")
         %(<time datetime="#{h(iso)}" title="#{h(value.utc.strftime("%Y-%m-%d %H:%M:%S.%3N UTC"))}">#{h(label)}</time>)
@@ -132,6 +133,7 @@ module DecentJob
         end
 
         return text if text == "now"
+
         past ? "#{text} ago" : "in #{text}"
       end
 
@@ -139,6 +141,7 @@ module DecentJob
       # @return [String] for example "<1 ms", "250 ms", or "2m 3s"
       def duration(seconds)
         return "" if seconds.nil?
+
         seconds = seconds.to_f
 
         if seconds < 0.001 then "<1 ms"
@@ -224,6 +227,7 @@ module DecentJob
       #   escaped.
       def error_summary(error)
         return "" unless error.is_a?(Hash)
+
         "#{error["class"]}: #{truncate(error["message"], 160)}"
       end
 
@@ -264,6 +268,7 @@ module DecentJob
         @templates[name] ||= begin
           path = File.join(TEMPLATES, "#{name}.erb")
           raise ArgumentError, "unknown template #{name}" unless File.file?(path)
+
           ERB.new(File.read(path), trim_mode: "-")
         end
       end

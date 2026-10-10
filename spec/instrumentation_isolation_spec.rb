@@ -48,6 +48,7 @@ describe "notification payload isolation" do
         DecentJob::Instrumentation.instrument("isolation.decent_job", {}, database: @database) do |payload|
           payload[:value] = 42
           raise error if raises
+
           42
         end
       end

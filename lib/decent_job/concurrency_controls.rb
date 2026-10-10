@@ -75,6 +75,7 @@ module DecentJob
       jobs.flat_map do |job|
         next [] unless job.respond_to?(:decent_job_resolved_concurrency_rules)
         next [] if job.respond_to?(:decent_job_enqueue_concurrency_enabled?) && !job.decent_job_enqueue_concurrency_enabled?
+
         job.decent_job_resolved_concurrency_rules(stage: :metadata).map(&:scope)
       end
     end

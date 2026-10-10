@@ -39,15 +39,18 @@ module DecentJob
       def self.build(app, env)
         status, headers, body = app.call(env)
         raise ArgumentError, "invalid response status" unless status.is_a?(Integer) && (200..599).cover?(status)
+
         result = {}
         bytes = 0
 
         headers.each do |key, value|
           key, value = String(key), String(value)
           raise ArgumentError, "invalid response header" unless TOKEN.match?(key) && !value.match?(/[\x00-\x1f\x7f]/)
+
           bytes += key.bytesize + value.bytesize + 4
           raise ArgumentError, "response headers too large" if bytes > MAX_HEADER_BYTES
           next if %w[content-length connection transfer-encoding].include?(key.downcase)
+
           result[key] = value
         end
 
@@ -56,6 +59,7 @@ module DecentJob
         body.each do |part|
           part = String(part)
           raise ArgumentError, "response body too large" if content.bytesize + part.bytesize > MAX_BODY_BYTES
+
           content << part.b
         end
 

@@ -247,6 +247,7 @@ describe "cron manager" do
 
     recurring = entry(cron: ->(previous) {
       raise "schedule failed" if previous
+
       start
     })
 
@@ -261,6 +262,7 @@ describe "cron manager" do
     recurring = entry(cron: ->(previous) {
       calls += 1
       raise "historical schedule failed" if calls == 2
+
       "* * * * * * UTC"
     })
 

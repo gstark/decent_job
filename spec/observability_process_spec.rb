@@ -51,6 +51,7 @@ describe "worker observability through the CLI" do
 
       await do
         raise "Worker stopped: #{stderr.value}\n#{stdout.value}" unless process.alive?
+
         snapshot(@started)
       end
 

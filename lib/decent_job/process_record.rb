@@ -117,6 +117,7 @@ module DecentJob
 
         rows.each do |row|
           return deleted if stopping&.call
+
           record = new(row)
           deleted += 1 if record.cleanup(database, in_batches_of: in_batches_of, stopping: stopping)
         end
@@ -214,6 +215,7 @@ module DecentJob
 
         jobs.each do |job_id|
           return false if stopping&.call
+
           release_job(database, claims, job_id)
         end
 
@@ -225,6 +227,7 @@ module DecentJob
 
       without_waiting(database) do |connection|
         next false unless lock_inactive(connection)
+
         connection.exec_params(<<~SQL, [id]).ntuples.positive?
           DELETE FROM decent_job_processes WHERE id = $1
             AND NOT EXISTS (SELECT 1 FROM decent_jobs WHERE locked_by_id = $1) RETURNING id
@@ -238,11 +241,13 @@ module DecentJob
       without_waiting(database) do |connection|
         claims.synchronize(job_id, wait: false) do
           next unless lock_inactive(connection)
+
           row = connection.exec_params(<<~SQL, [job_id, id]).first
             SELECT execution_id FROM decent_jobs WHERE id = $1 AND locked_by_id = $2
               AND NOT (#{ConcurrencyClaims::JOB_LOCKED_SQL})
           SQL
           next unless row
+
           claims.release(connection, {id: job_id, execution_id: row.fetch("execution_id")}) if row["execution_id"]
           connection.exec_params("UPDATE decent_jobs SET locked_by_id = NULL, locked_at = NULL #{", lock_type = NULL" if ConcurrencyClaims.lock_type_column?(connection)} WHERE id = $1 AND locked_by_id = $2", [job_id, id])
         end

@@ -55,6 +55,7 @@ module DecentJob
     #   valid expression (also for a non-String, such as a Time)
     def self.parse(expression)
       return expression if expression.is_a?(self)
+
       new(expression)
     rescue ArgumentError
       nil
@@ -68,6 +69,7 @@ module DecentJob
     #   expression, or when a natural phrase hits a reference error
     def initialize(expression)
       raise ArgumentError, "cron expression must be a string" unless expression.is_a?(String)
+
       @original = expression
 
       begin
@@ -75,6 +77,7 @@ module DecentJob
       rescue ArgumentError
         normalized = Natural.compile(expression)
         raise ArgumentError, "invalid cron expression" unless normalized
+
         parse_numeric(normalized)
         @original = normalized
       end
@@ -154,6 +157,7 @@ module DecentJob
       loop do
         cursor = next_at(after: cursor)
         break if cursor >= range.end
+
         result << cursor
       end
 
@@ -174,14 +178,17 @@ module DecentJob
       end
 
       raise ArgumentError, "invalid cron expression" if normalized.match?(/[\r\n]/)
+
       # Whitespace is allowed before trailing commas and between repeated
       # commas, but never between a list separator and its following value.
       normalized = normalized.gsub(/,(?:[ \t]*,)+/, ",")
       raise ArgumentError, "invalid comma spacing" if normalized.match?(/[ \t]+,[^ \t&]/)
+
       parts = normalized.gsub(/[ \t]+,/, ",").split(/[ \t]+/)
       zone_name = parts.pop if parts.size > 5 && timezone_suffix?(parts.last)
       @zone = Zone.new(zone_name)
       raise ArgumentError, "expected five or six cron fields" unless [5, 6].include?(parts.size)
+
       parts.unshift("0") if parts.size == 5
       @day_and = parts[3].end_with?("&") || parts[5].end_with?("&")
       parts[3] = parts[3].delete_suffix("&")
@@ -208,6 +215,7 @@ module DecentJob
     # at parse time instead of during a search.
     def compact_days
       return unless @months && @monthdays
+
       @months = @months.select { |month| @monthdays.any? { |day| day <= MAXIMUM_MONTH_DAYS[month] } }
       @monthdays = @monthdays.select { |day| @months.any? { |month| day <= MAXIMUM_MONTH_DAYS[month] } }
       raise ArgumentError, "cron expression has no possible calendar day" if @months.empty? || @monthdays.empty?
@@ -233,6 +241,7 @@ module DecentJob
       end
 
       return monthday || weekday if @monthdays && @weekdays && !@day_and
+
       monthday && weekday
     end
   end

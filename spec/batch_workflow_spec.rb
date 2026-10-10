@@ -21,6 +21,7 @@ class WorkflowRetryCallbackJob < WorkflowCallbackJob
 
   def perform(*)
     raise "first callback attempt" if executions == 1
+
     super
   end
 end
@@ -30,6 +31,7 @@ class WorkflowDiscardOnceJob < WorkflowMemberJob
 
   def perform(value)
     raise ArgumentError, "discard first attempt" if executions == 1
+
     super
   end
 end
@@ -104,6 +106,7 @@ class WorkflowFailOnceCallbackJob < WorkflowCallbackJob
   def perform(*)
     self.class.attempts += 1
     raise "first callback failed" if self.class.attempts == 1
+
     super
   end
 end

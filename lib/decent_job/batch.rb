@@ -191,8 +191,10 @@ module DecentJob
       batches = pairs.map(&:first)
       raise ArgumentError, "All batches must be new Batch instances" unless batches.all? { |batch| batch.is_a?(self) && !batch.persisted? }
       raise ArgumentError, "Each batch must appear only once" unless batches.uniq.size == batches.size
+
       database = batches.first.database
       raise ArgumentError, "All batches must use the same database" unless batches.all? { |batch| batch.database.equal?(database) }
+
       pairs.each { |batch, jobs| batch.send(:validate_members, jobs) }
       member_batches(pairs)
       snapshots = batches.map { |batch| batch.instance_variable_get(:@row).dup }

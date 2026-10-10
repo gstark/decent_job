@@ -28,6 +28,7 @@ describe "dequeue policy" do
 
   def perform_value(**options)
     return unless @performer.perform_one(**options)
+
     RecordingJob.events.pop(true)
   end
 

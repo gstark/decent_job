@@ -71,6 +71,7 @@ describe "health probes" do
     probe = server(on_thread_error: ->(error) { errors << error }, app: ->(_) {
       count += 1
       raise "app failed" if count == 1
+
       [200, {}, ["fine"]]
     })
 
@@ -153,6 +154,7 @@ describe "systemd notifications" do
     loop do
       message = @socket.recv_nonblock(4096, exception: false)
       break if message == :wait_readable
+
       messages << message
     end
 
@@ -354,6 +356,7 @@ describe "systemd notifications" do
     DecentJob::SdNotify.stub(:watchdog, lambda {
       calls += 1
       raise DecentJob::SdNotify::NotifyError, "transient" if calls == 1
+
       senders << Thread.current
     }) do
       @service.start

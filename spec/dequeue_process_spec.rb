@@ -57,6 +57,7 @@ describe "dequeue policy across CLI processes" do
 
       await do
         raise "Worker stopped: #{stderr.value}\n#{stdout.value}" unless process.alive?
+
         records.any?
       end
 

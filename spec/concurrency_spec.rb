@@ -348,10 +348,12 @@ describe "concurrency controls" do
     ControlledJob.decent_job_control_concurrency_with(
       enqueue_limit: -> {
         raise "enqueue only" unless executions.zero?
+
         2
       },
       perform_limit: -> {
         raise "perform only" if executions.zero?
+
         1
       }
     )

@@ -139,6 +139,7 @@ module DecentJob
       with_runtime_transition(:configuring) do
         candidate = runtime_mutex.synchronize do
           raise ArgumentError, "configure before opening the database; call reset! to restart" if @database
+
           @configuration.dup
         end
 
@@ -174,6 +175,7 @@ module DecentJob
         candidate = runtime_mutex.synchronize do
           return if automatic && (@runtime_transition || @stopping || @forking)
           raise LifecycleInProgress, "runtime is #{@runtime_transition}" if @runtime_transition && !@database
+
           @configuration
         end
 
@@ -186,6 +188,7 @@ module DecentJob
           return if automatic && !candidate.database_url
           raise LifecycleInProgress, "runtime is #{@runtime_transition}" if @runtime_transition && !@database
           raise ArgumentError, "set DECENT_JOB_DATABASE_URL or configure database_url" unless candidate.database_url
+
           @database ||= Database.new(url: candidate.database_url, pool_size: candidate.pool_size)
         end
 
@@ -259,6 +262,7 @@ module DecentJob
     def start
       revision = synchronize_resource_start do
         return false if @stopping && (@workers + @cron_managers.values).any? { |resource| !resource.shutdown? }
+
         @lifecycle_revision ||= 0
       end
 
@@ -267,6 +271,7 @@ module DecentJob
       worker, started_revision = synchronize_resource_start do
         return false unless revision == @lifecycle_revision
         raise ForkInProgress, "runtime is preparing to fork" if @forking
+
         @lifecycle_revision = (@lifecycle_revision || 0) + 1
         @stopping = false
         @cron_stopping = false
@@ -370,10 +375,12 @@ module DecentJob
       revision = synchronize_resource_start(automatic: automatic || !expected_revision.nil?) do
         return false if expected_revision && expected_revision != (@lifecycle_revision || 0)
         return if automatic && (@stopping || @cron_stopping || @cron_stopped_databases[database])
+
         @lifecycle_revision ||= 0
       end
 
       return if revision.nil?
+
       connection_pool = database || self.database
       # Resolve configuration outside the registry lock: constant loading and
       # adapter lookup may call back into DecentJob.
@@ -383,6 +390,7 @@ module DecentJob
         klass = entry.job_class
         klass = Support.constantize(klass) if klass.is_a?(String)
         next unless Integrations.job_class?(klass)
+
         adapter = klass.queue_adapter
 
         unless adapter.is_a?(Adapter) && adapter.database.equal?(connection_pool)
@@ -529,6 +537,7 @@ module DecentJob
 
         restarted = restart_handles.map do |handle|
           next true if @locally_stopped_workers&.include?(handle.resource) || locally_stopped_cron.include?(handle.resource)
+
           handle.restart
         end.all?
 
@@ -596,6 +605,7 @@ module DecentJob
     def start_worker(worker)
       synchronize_resource_start(automatic: true) do
         return if @stopping
+
         register_exit_hook
         @workers << worker unless @workers.include?(worker)
         worker.start(automatic: true)
@@ -631,6 +641,7 @@ module DecentJob
 
         unless stopped
           raise failure if failure
+
           return false
         end
 
@@ -638,6 +649,7 @@ module DecentJob
 
         if pool && manually_owned_database?(pool)
           raise failure if failure
+
           return false
         end
 
@@ -670,6 +682,7 @@ module DecentJob
         # Adapter.new takes the runtime lock, so clear outside it.
         @default_adapter_mutex.synchronize { @default_adapter = nil }
         raise failure if failure
+
         true
       end
     end
@@ -734,6 +747,7 @@ module DecentJob
     # registry lock.
     def register_exit_hook
       return if @exit_hook_registered
+
       at_exit { DecentJob.shutdown(timeout: DecentJob.configuration.shutdown_timeout) }
       @exit_hook_registered = true
     end

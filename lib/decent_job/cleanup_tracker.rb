@@ -77,6 +77,7 @@ module DecentJob
 
     def validate_interval!(value, integer: false)
       return if value == false
+
       valid = value.is_a?(Numeric) && value.real? && value.finite? && (value == -1 || value.positive?)
       valid &&= value.is_a?(Integer) if integer
       raise ArgumentError, "cleanup interval must be positive, -1 (always), or false (disabled)" unless valid

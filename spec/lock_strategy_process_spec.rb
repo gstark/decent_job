@@ -55,6 +55,7 @@ describe "lock strategies across worker processes" do
       until yield
         @workers.each do |worker|
           next if worker.fetch(:process).alive?
+
           raise "Worker stopped: #{worker.fetch(:stderr).value}\n#{worker.fetch(:stdout).value}"
         end
 

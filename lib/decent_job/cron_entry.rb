@@ -278,6 +278,7 @@ module DecentJob
       loop do
         cursor = parsed.next_at(after: cursor)
         break if cursor >= period.end
+
         yield cursor
       end
     end
@@ -433,6 +434,7 @@ module DecentJob
     def enqueue_definition
       klass = resolve_value(job_class)
       return if Support.blank?(klass)
+
       klass = Support.constantize(klass) if klass.is_a?(String)
       return klass unless klass.is_a?(Class)
 
@@ -453,6 +455,7 @@ module DecentJob
 
     def display_property(value)
       return "None" if value.nil?
+
       value.respond_to?(:call) ? "Lambda/Callable" : value
     end
   end

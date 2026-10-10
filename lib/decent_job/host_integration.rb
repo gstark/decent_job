@@ -76,6 +76,7 @@ module DecentJob
     def register_adapter(adapter)
       registration = lambda do
         raise ForkInProgress, "runtime is preparing to fork" if @forking
+
         (@adapters ||= ObjectSpace::WeakMap.new)[adapter] = true
         @runtime_transition == :resetting
       end

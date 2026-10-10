@@ -45,6 +45,7 @@ module DecentJob
     def check(job, context)
       rules = job.decent_job_resolved_concurrency_rules(stage: :perform).select { |rule| rule.perform_limit || rule.total_limit || rule.perform_throttle }
       return if rules.empty?
+
       exceeded = nil
 
       @claims.synchronize(context.fetch(:id), scopes: rules.map(&:scope)) do |connection|

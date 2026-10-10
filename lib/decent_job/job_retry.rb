@@ -51,6 +51,7 @@ module DecentJob
       payload = nil
       job = @record.job_instance(ignore_deserialization_errors: true)
       raise Job::DeserializationError, "Cannot deserialize #{@record.job_class}" unless job
+
       integration = Integrations.for_job(job)
       validate_adapter(job)
       job.executions = (job.executions || 0) + 1
@@ -103,6 +104,7 @@ module DecentJob
       details = @record.error || {}
       klass = Support.constantize(details.fetch("class"))
       raise TypeError, "Stored error is not an exception" unless klass <= Exception
+
       klass.new(details["message"]).tap { |error| error.set_backtrace(details["backtrace"]) }
     rescue
       StandardError.new([details["class"], details["message"]].compact.join(": "))

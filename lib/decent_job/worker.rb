@@ -243,6 +243,7 @@ module DecentJob
     #   Fork checks find such objects through ObjectSpace.
     def shutdown?
       return true unless @threads
+
       @mutex.synchronize { @threads.none?(&:alive?) && (!@process_tracker || @process_tracker.shutdown?) }
     end
 
@@ -291,6 +292,7 @@ module DecentJob
 
       @mutex.synchronize do
         return self if @stopping
+
         remaining = state.fetch(:count, 1)
         broad = state.empty?
         future = state[:scheduled_at] && state[:scheduled_at] > Time.now
@@ -433,6 +435,7 @@ module DecentJob
       interrupt_executions(**interruption) if force && deadline && ResourceShutdown.remaining(deadline).zero?
       failure = @mutex.synchronize { @failure if @process_tracker.equal?(tracker) } || failure
       raise failure if failure
+
       threads.none?(&:alive?) && monitor_stopped
     end
 
@@ -534,6 +537,7 @@ module DecentJob
     def normalize_hint(state)
       return {} if state.nil?
       raise ArgumentError, "notification must be an object" unless state.is_a?(Hash)
+
       state = state.transform_keys { |key| key.is_a?(String) ? key.to_sym : key }
 
       unless (state.keys - %i[queue_name count fanout scheduled_at]).empty?
@@ -562,6 +566,7 @@ module DecentJob
           Time.iso8601(value)
         when Numeric
           raise ArgumentError, "notification scheduled_at must be finite and real" unless value.real? && value.finite?
+
           Time.at(value)
         else
           raise ArgumentError, "notification scheduled_at must be a time"
@@ -749,6 +754,7 @@ module DecentJob
           report_error(reported_error) if reported_error
           instrument_pool("finished_job_task", index, result: result, error: task_error, time: completed_at)
           raise task_error if task_error
+
           reported_error = nil
 
           if result
@@ -763,6 +769,7 @@ module DecentJob
         rescue Exception => error # standard:disable Lint/RescueException
           report_error(error) unless error.equal?(reported_error)
           raise if error.equal?(execution_error) || !error.is_a?(StandardError)
+
           wait(retry_interval)
           retry_attempt = true
         ensure
@@ -834,6 +841,7 @@ module DecentJob
 
         loop do
           return false if @stopping
+
           now = Time.now
 
           if cache.due?(now) && monotonic_time >= cache.due_retry_at
@@ -871,6 +879,7 @@ module DecentJob
       revision = @mutex.synchronize do
         cache = @caches.fetch(index)
         next unless !@stopping && cache.refresh?
+
         cache.refreshing = true
         cache.revision
       end
@@ -903,6 +912,7 @@ module DecentJob
       due = @mutex.synchronize do
         now = monotonic_time
         next false if @stopping || @process_cleanup_running || now < @process_cleanup_at
+
         @process_cleanup_running = true
         @process_cleanup_at = now + ProcessRecord::STALE_INTERVAL
         true
@@ -979,6 +989,7 @@ module DecentJob
 
             100.times do
               break if stopping?
+
               pending = connection.wait_for_notify(0) { |_channel, _pid, payload| receive_notification(payload) }
               break unless pending
             end
@@ -1035,8 +1046,10 @@ module DecentJob
       # pg represents a PostgreSQL NOTIFY with no payload as nil.
       payload = "" if payload.nil?
       raise ArgumentError, "notification payload is too large" if payload.bytesize > Notifier::MAX_PAYLOAD_BYTES
+
       state = payload.empty? ? nil : JSON.parse(payload, max_nesting: 4)
       raise ArgumentError, "notification must be an object" if !payload.empty? && !state.is_a?(Hash)
+
       application = Rails.application if defined?(Rails) && Rails.respond_to?(:application)
 
       if application&.respond_to?(:executor)

@@ -73,9 +73,11 @@ module DecentJob
     # @note On any failure it calls {#cleanup} and re-raises.
     def daemonize
       return self if @file && @owner_pid == Process.pid
+
       close_inherited_descriptor
       raise "native daemonization is unavailable on this platform" unless Process.respond_to?(:daemon)
       raise ArgumentError, "PID file directory does not exist: #{File.dirname(pidfile)}" unless Dir.exist?(File.dirname(pidfile))
+
       acquire_pidfile
 
       DecentJob.with_prepared_fork do
@@ -121,6 +123,7 @@ module DecentJob
     # @note Never unlocks or deletes the file. See the class header for why.
     def close_inherited_descriptor
       return if @owner_pid == Process.pid
+
       @file&.close unless @file&.closed?
       @file = nil
     end
@@ -145,6 +148,7 @@ module DecentJob
       end
 
       raise ArgumentError, "PID file was replaced during startup" unless same_file?
+
       pid = read_pid
       raise AlreadyRunning, "A process is already running with PID #{pid}; check #{pidfile}" if pid && live_pid?(pid)
     rescue Errno::ELOOP
@@ -158,6 +162,7 @@ module DecentJob
       value = @file.read(128).to_s.strip
       return unless @file.eof?
       return unless value.match?(/\A[0-9]+\z/)
+
       pid = value.to_i
       pid if pid.positive? && pid <= 2_147_483_647
     end
@@ -183,6 +188,7 @@ module DecentJob
 
     def write_pid
       raise ArgumentError, "PID file was replaced during startup" unless same_file?
+
       @file.rewind
       @file.write(@owner_pid.to_s)
       @file.truncate(@file.pos)

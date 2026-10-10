@@ -84,6 +84,7 @@ describe "worker task and poll events" do
 
     subscribe("finished_job_task") do |event|
       next unless event.payload[:result]
+
       order << [:event, event.payload[:error], event.payload[:result]]
       event.payload[:result] = nil
       event.payload[:error] = RuntimeError.new("changed")

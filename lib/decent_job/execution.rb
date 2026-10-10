@@ -39,6 +39,7 @@ module DecentJob
       database.with_connection do |connection|
         row = connection.exec_params("SELECT * FROM decent_job_executions WHERE id = $1", [id]).first
         raise KeyError, "Execution #{id} was not found" unless row
+
         new(Store.new(database).decode(row), database: database)
       end
     end

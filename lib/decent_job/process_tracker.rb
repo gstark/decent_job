@@ -85,6 +85,7 @@ module DecentJob
     #   Thread#raise or Thread#kill cannot leak a lease.
     def register(stopping: -> { false }, wait_for_monitor: true)
       raise ForkedDatabase, "create a new process tracker after forking" if @pid != Process.pid
+
       registered = false
 
       loop do
@@ -110,6 +111,7 @@ module DecentJob
 
         break if registered
         return nil unless previous
+
         previous.join
       end
 
@@ -148,6 +150,7 @@ module DecentJob
       # ObjectSpace scans can find an instance whose initialize raised before
       # @mutex was set.
       return true unless @mutex
+
       @mutex.synchronize { !@monitor&.alive? }
     end
 
@@ -185,6 +188,7 @@ module DecentJob
     #   forked child.
     def join(timeout = nil)
       return true if @pid != Process.pid
+
       monitor = @mutex.synchronize { @monitor }
       !monitor || (monitor != Thread.current && !!monitor.join(timeout))
     end

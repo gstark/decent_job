@@ -99,6 +99,7 @@ begin
   loop do
     Seed.round(number)
     break unless loop_mode
+
     number += 1
     sleep 20
   end

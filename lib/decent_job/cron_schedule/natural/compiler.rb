@@ -66,6 +66,7 @@ module DecentJob
         # and returns the first group as [hours, minutes].
         def first_time_group
           return [["*"], ["*"]] if @times.empty?
+
           times = @times.dup
 
           while times.size > 1 && (index = times.index(&:graded?))

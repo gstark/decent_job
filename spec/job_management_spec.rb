@@ -402,6 +402,7 @@ describe "job management callbacks and transactions" do
       loop do
         waiting = @admin.exec_params("SELECT 1 FROM pg_stat_activity WHERE wait_event = 'transactionid' AND query LIKE $1", ["%decent_jobs WHERE id =%FOR UPDATE%"]).ntuples.positive?
         break if waiting
+
         sleep 0.01
       end
     end

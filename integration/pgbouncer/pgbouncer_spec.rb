@@ -20,6 +20,7 @@ class PgBouncerRetryJob < PgBouncerRecordingJob
 
   def perform(value)
     raise "first attempt" if executions == 1
+
     super
   end
 end
@@ -111,6 +112,7 @@ describe "PgBouncer transaction pooling" do
       until yield
         @workers.each do |worker|
           next if worker.fetch(:process).alive? || worker[:stopping]
+
           raise "Worker exited: #{worker.fetch(:stderr).value}"
         end
 
