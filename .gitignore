@@ -5,3 +5,4 @@
 *.gem
 /example/Gemfile.lock
 /example/.bundle/
+/mise.local.toml

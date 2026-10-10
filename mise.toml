@@ -1,0 +1,3 @@
+# Project environment. Secrets go in mise.local.toml, which git ignores.
+[env]
+DEPOT_ORG = "wbdrpp7bkj"

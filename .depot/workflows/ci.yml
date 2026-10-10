@@ -48,6 +48,7 @@ jobs:
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       DECENT_JOB_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/decent_job_test
+      BUNDLE_WITHOUT: lint
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
