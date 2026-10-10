@@ -71,9 +71,12 @@ describe "persistent pauses" do
       super().tap { |connection| connections << connection.backend_pid }
     end
     worker = DecentJob::Worker.new(database: database, max_threads: 1, poll_interval: 60).start
-    listener_pid = Timeout.timeout(5) { connections.pop }
+    # The listener and the heartbeat monitor each open a session; either may connect first.
+    pids = []
     Timeout.timeout(5) do
-      until @admin.exec_params("SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND query = 'LISTEN decent_job'", [listener_pid]).ntuples.positive?
+      loop do
+        pids << connections.pop until connections.empty?
+        break if !pids.empty? && @admin.exec_params("SELECT 1 FROM pg_stat_activity WHERE pid = ANY($1::int[]) AND query = 'LISTEN decent_job'", [PG::TextEncoder::Array.new.encode(pids)]).ntuples.positive?
         sleep 0.01
       end
     end
