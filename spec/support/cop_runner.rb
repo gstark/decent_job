@@ -2,7 +2,7 @@
 
 require "rubocop"
 
-%w[statement_spacing empty_lines_around_multiline_statement empty_line_before_return].each do |name|
+%w[statement_spacing empty_lines_around_multiline_statement empty_line_before_return empty_line_after_guard_clause].each do |name|
   require File.expand_path("../../rubocop/cop/decent_job/#{name}", __dir__)
 end
 
