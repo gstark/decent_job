@@ -266,11 +266,36 @@ input[type="search"] { width: 100%; }
 
 @media (max-width: 720px) {
   .masthead, .page, .flash, .colophon { padding-left: 1rem; padding-right: 1rem; }
-  .masthead { gap: 1rem; }
+  .masthead { gap: .5rem 1rem; align-items: center; }
+  .nav { order: 1; flex-basis: 100%; gap: .4rem 1rem; }
   .ribbon-legend { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .ribbon-legend .legend-count, .page-overview .ribbon-legend .legend-count { font-size: 1.6rem; }
-  .ledger { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .ledger .col-error, .jobs-table td:nth-child(5), .jobs-table th:nth-child(5) { display: none; }
+
+  /* Ledger rows become cards: the first cell is the title, the rest wrap as labelled values. */
+  .ledger, .ledger tbody { display: block; }
+  .ledger thead { display: block; border-bottom: 1px solid var(--rule-strong); }
+  .ledger thead tr { display: block; }
+  .ledger thead th { display: none; }
+  .ledger thead th.col-check { display: flex; gap: .5rem; align-items: center; width: auto; border: 0; font-weight: 400; }
+  .ledger thead th.col-check::after { content: "Select all on this page"; }
+  .ledger tbody tr { display: flex; flex-wrap: wrap; gap: .35rem 1.25rem; position: relative; padding: .6rem 0; border-bottom: 1px solid var(--rule); }
+  .ledger tbody td, .ledger tbody th, .ledger.compact tbody td, .ledger.compact tbody th { display: block; padding: 0; border: 0; }
+  .ledger .num, .ledger .col-actions { text-align: left; }
+  .ledger .col-job, .ledger .col-error { max-width: 100%; }
+  .ledger .col-error { flex-basis: 100%; min-width: 0; }
+  td .error-text { max-width: 100%; }
+  .ledger tbody tr > :first-child, .ledger .col-check + td { flex-basis: 100%; min-width: 0; }
+  .ledger [data-label]::before { content: attr(data-label); display: block; color: var(--slate); font-size: .85rem; }
+  .ledger tr > :first-child::before, .ledger .col-check + td::before, .ledger .col-actions::before { content: none; }
+  .ledger .is-blank { display: none; }
+  .ledger .col-actions { flex-basis: 100%; }
+  .ledger .col-progress { flex-basis: 100%; width: auto; }
+  .ledger tbody tr:has(.col-check) { padding-left: 2rem; }
+  .ledger tbody .col-check { position: absolute; left: 0; top: .6rem; width: auto; }
+
+  .discard-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 1rem; }
+  .discard-list .error-text { grid-column: 1 / -1; order: 1; }
+  .worker-name { min-width: 0; }
   .timeline-row { grid-template-columns: 5rem 1fr; }
   .timeline-axis { margin-left: 6rem; }
   .facts { grid-template-columns: 1fr; gap: 0 }
