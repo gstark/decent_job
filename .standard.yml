@@ -1,0 +1,2 @@
+# Lint for the gemspec minimum so Ruby 4 only idioms are not suggested.
+ruby_version: 3.2
