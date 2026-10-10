@@ -1,0 +1,11 @@
+# Project cops loaded into Standard through `extend_config` in .standard.yml.
+require:
+  - ./rubocop/cop/decent_job/statement_spacing.rb
+  - ./rubocop/cop/decent_job/empty_lines_around_multiline_statement.rb
+  - ./rubocop/cop/decent_job/empty_line_before_return.rb
+
+DecentJob/EmptyLinesAroundMultilineStatement:
+  Enabled: true
+
+DecentJob/EmptyLineBeforeReturn:
+  Enabled: true
