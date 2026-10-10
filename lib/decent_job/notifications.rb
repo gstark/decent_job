@@ -113,7 +113,7 @@ module DecentJob
       #
       # @param pattern [String, Regexp] exact event name, or a pattern
       # @yieldparam event [Event] the finished event
-      # @return [Subscription] pass to {#unsubscribe}
+      # @return [Subscription] pass to {.unsubscribe}
       # @raise [ArgumentError] when no block is given
       # @note Thread safe. The callback runs on the publishing thread.
       def subscribe(pattern, &callback)
@@ -126,7 +126,7 @@ module DecentJob
 
       # Removes a subscriber. Events already started still reach it.
       #
-      # @param subscription [Subscription] the value from {#subscribe}
+      # @param subscription [Subscription] the value from {.subscribe}
       # @return [void]
       def unsubscribe(subscription)
         @mutex.synchronize { @subscriptions = (@subscriptions - [subscription]).freeze }

@@ -8,7 +8,7 @@ module DecentJob
     # {Core#perform_now} calls {#rescue_with_handler} when an error escapes
     # perform. retry_on and discard_on are rescue_from handlers, so the order
     # rules are the same for all three. Handlers live in the inherited
-    # rescue_handlers class setting. Each call appends a new frozen array.
+    # rescue_handlers class setting. Each call stores a new frozen array.
     #
     # The outcome goes to {Core#decent_job_outcome}. {Integrations::Native}
     # turns it into the execution state and error_event: :retried becomes
@@ -58,7 +58,7 @@ module DecentJob
             raise ArgumentError, "#{klass.inspect} must be an Exception class or a class name"
           end
 
-          self.rescue_handlers = rescue_handlers + [Handler.new(classes: classes.freeze, callback: callback)]
+          self.rescue_handlers = (rescue_handlers + [Handler.new(classes: classes.freeze, callback: callback)]).freeze
         end
 
         # Enqueues the job again when one of the errors escapes perform.
@@ -87,6 +87,9 @@ module DecentJob
         # @note A retry writes the job row again through {#retry_job} and
         #   records the outcome as :retried. When attempts run out, the outcome
         #   is :retry_stopped.
+        # @note retry_on does not check wait. A Symbol other than
+        #   :polynomially_longer, or a String, raises ArgumentError from the
+        #   handler when the error first occurs.
         def retry_on(*exceptions, wait: 3, attempts: 5, queue: nil, priority: nil, jitter: JITTER_DEFAULT, &block)
           rescue_from(*exceptions) do |error|
             executions = executions_for(exceptions)
@@ -138,7 +141,7 @@ module DecentJob
         def after_discard(&block)
           raise ArgumentError, "after_discard needs a block" unless block
 
-          self.after_discard_procs = after_discard_procs + [block]
+          self.after_discard_procs = (after_discard_procs + [block]).freeze
         end
       end
 

@@ -14,8 +14,8 @@ require "decent_job/thread_status"
 module DecentJob
   # Runs jobs from one or more queue pools on a fixed set of owned threads.
   #
-  # The global runtime ({DecentJob.start}), an async {Adapter}, the CLI, or
-  # application code creates a worker and calls {#start}. Each run allocates:
+  # The global runtime ({DecentJob.start}, which the CLI calls), an async
+  # {Adapter}, or application code creates a worker and calls {#start}. Each run allocates:
   #
   # - one execution thread per configured pool thread. Each thread loops in
   #   {#run_registered}, waits for a permit from its pool's {SchedulerCache},
@@ -341,6 +341,7 @@ module DecentJob
     # @param force [Boolean] see {#shutdown}
     # @return [Worker, false] self after a new run started. False when the drain
     #   did not finish, or when another start or stop happened during the drain.
+    # @raise [ArgumentError] if timeout is negative, infinite, or not numeric
     # @raise [Exception] the first fatal error of an owned thread
     def restart(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)

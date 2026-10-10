@@ -93,10 +93,10 @@ module DecentJob
     #   revision still has this value; {ResourceShutdown#restart} uses it
     # @param automatic [Boolean] true for an automatic start; it never reopens
     #   a manager that was started and then stopped
-    # @return [CronManager, false, nil] self when started or already
-    #   running. false when refused, including when stopped threads from the
-    #   last run are still alive. nil when the runtime skipped an automatic
-    #   start during a transition.
+    # @return [CronManager, false] self when started or already running, and
+    #   also when the runtime skipped an automatic start during a transition.
+    #   false when refused, including when stopped threads from the last run
+    #   are still alive.
     # @raise [ForkInProgress] when the process is preparing to fork
     # @raise [LifecycleInProgress] when an explicit start runs during a
     #   configure or reset transition

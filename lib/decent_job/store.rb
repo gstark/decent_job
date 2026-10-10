@@ -62,6 +62,8 @@ module DecentJob
     #   block runs inside the transaction.
     # @return [Array<String, nil>] one entry for each job: its id, or nil when
     #   the insert was skipped as a duplicate
+    # @raise [PG::UniqueViolation] when skip_duplicates is false and a row
+    #   conflicts on a unique key other than (cron_key, cron_at)
     # @note NOTIFY is transactional, so workers receive it only after the
     #   outermost transaction commits. {Notifier.notify_jobs} sends nothing
     #   when LISTEN/NOTIFY is disabled.

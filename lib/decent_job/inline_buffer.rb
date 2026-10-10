@@ -3,8 +3,8 @@
 module DecentJob
   # Runs inline-mode jobs on the enqueuing thread, one at a time.
   #
-  # {Adapter} (inline execution mode) and {Batch} call {.perform} after the
-  # enqueue transaction commits. Nested enqueues append work to the current
+  # {Adapter} (inline execution mode) calls {.perform} after the enqueue
+  # transaction commits. {Batch} reaches it through {Adapter#after_enqueue}. Nested enqueues append work to the current
   # drain instead of recursing. The buffer lives in {ExecutionState} under
   # +:inline_buffer+, so it is scoped to the current thread or fiber.
   #

@@ -6,8 +6,9 @@ module DecentJob
   # Enforces enqueue-time concurrency limits and throttles, and takes the
   # scope locks that enqueue paths need.
   #
-  # {Adapter} wraps each insert in {#enqueue}. {Batch}, {BatchStore}, and
-  # {CronEntry} call {#lock_scopes} before they persist captured jobs.
+  # {Adapter} wraps each insert in {#enqueue}. {BatchStore} and {CronEntry}
+  # call {#lock_scopes} before they persist captured jobs. {Batch} reaches it
+  # through {BatchStore#lock_scopes}.
   # {Job#retry_job} passes {#scopes_for} to {ConcurrencyClaims#synchronize}.
   # Perform-time limits belong to {PerformControls}.
   #
@@ -23,8 +24,8 @@ module DecentJob
 
     # @param job [Object] a job instance
     # @return [Boolean] true when bulk enqueue must admit the job on its own:
-    #   an Active Job class that includes the concurrency extension, or a
-    #   native class that sets limits or rules
+    #   a class that includes the concurrency extension and sets limits or
+    #   rules. Plain Active Job classes lack the extension.
     def self.controlled?(job)
       job.respond_to?(:decent_job_concurrency_controlled?) && job.decent_job_concurrency_controlled?
     end

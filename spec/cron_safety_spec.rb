@@ -52,12 +52,14 @@ describe "cron enqueue safety" do
     previous = I18n.available_locales
     I18n.available_locales = [:en, :fr]
     CronSafetyControlledJob.callback_locales = []
+    CronSafetyControlledJob.decent_job_control_concurrency_with(total_limit: 10)
     entry = DecentJob::CronEntry.new(key: :locale, cron: "@daily", class: -> { ActiveJob.perform_all_later(CronSafetyControlledJob.new) }, database: database)
     I18n.with_locale(:fr) { entry.enqueue(@at) }
     _(CronSafetyControlledJob.callback_locales).must_equal [I18n.default_locale]
     _(entry.last_job.fetch("payload").fetch("locale")).must_equal I18n.default_locale.to_s
   ensure
     I18n.available_locales = previous
+    CronSafetyControlledJob.decent_job_concurrency_config = {}
   end
 
   it "rejects a foreign adapter bulk before either adapter writes" do

@@ -113,6 +113,9 @@ module DecentJob
     # @raise [EnqueueError] for native jobs when the insert fails
     # @raise [ActiveJob::EnqueueError] for Active Job classes, with the
     #   original error as the cause
+    # @raise [ConcurrencyControls::AdmissionRejected] when an enqueue limit or
+    #   throttle rejects the job. Active Job and {Base} enqueue paths rescue
+    #   it; a direct adapter caller gets it.
     # @note Writes decent_jobs and sends NOTIFY in the caller's transaction
     #   when one is open. Inline execution and async wakeups wait for commit.
     def enqueue(job)
@@ -145,7 +148,9 @@ module DecentJob
     #   controlled jobs already ran, for example in {Bulk::Buffer#prepare}
     # @return [Integer] the number of jobs accepted. A bulk capture accepts all
     #   jobs and returns their count.
-    # @raise (see #enqueue)
+    # @raise [EnqueueError] for native jobs when the insert fails
+    # @raise [ActiveJob::EnqueueError] for Active Job classes, with the
+    #   original error as the cause
     # @note Sets provider_job_id, successfully_enqueued, and enqueue_error on
     #   each job. A plain job that hits a duplicate key gets an enqueue_error
     #   instead of raising.
@@ -347,7 +352,9 @@ module DecentJob
     # @param scheduled_at [Numeric, nil] the run time in seconds since the
     #   epoch, for the instrumentation event only
     # @return [String] the provider job ID
-    # @raise (see #enqueue)
+    # @raise [EnqueueError] for native jobs when the insert fails
+    # @raise [ActiveJob::EnqueueError] for Active Job classes, with the
+    #   original error as the cause
     # @api private
     def reschedule(job, context, payload: nil, attributes: nil, scheduled_at: nil)
       raising_integration_errors(job) { reschedule_job(job, context, payload: payload, attributes: attributes, scheduled_at: scheduled_at) }

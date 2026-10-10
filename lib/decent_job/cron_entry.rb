@@ -101,7 +101,8 @@ module DecentJob
     # @return [Array<Object>] +jobs+
     # @raise [ArgumentError] when a job is not a job object or uses another
     #   adapter or database
-    # @raise [KeyError] when there is no current cron context
+    # @note Call this only inside a cron context. Every caller checks
+    #   {.current_context} first; without a context this raises NoMethodError.
     # @api private
     def self.validate_jobs(jobs)
       database = current_context.fetch(:database)

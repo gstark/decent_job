@@ -77,7 +77,8 @@ module DecentJob
     #   passes false and joins under its own shutdown deadline.
     # @yieldparam process_id [String] the process UUID
     # @return [Object, nil] the block result. Nil without a yield when the
-    #   tracker is stopped, a fork is being prepared, or stopping returned true.
+    #   tracker is stopped, a fork is being prepared, a configure or reset
+    #   transition is active, or stopping returned true.
     # @raise [ForkedDatabase] when called in a process other than the creator
     # @raise [Exception] the error that ended the monitor thread
     # @note Thread safe. The lease count changes with interrupts deferred, so

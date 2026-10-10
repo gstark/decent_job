@@ -216,6 +216,14 @@ describe "concurrency controls" do
     _(jobs.last.successfully_enqueued?).must_equal false
   end
 
+  it "bulk inserts jobs of an extended class without limits or rules, without enqueue callbacks" do
+    jobs = [CallbackLabeledJob.new("first"), CallbackLabeledJob.new("second")]
+
+    _(@adapter.enqueue_all(jobs)).must_equal 2
+    _(jobs.map(&:successfully_enqueued?)).must_equal [true, true]
+    _(jobs.first.decent_job_labels).must_equal []
+  end
+
   it "lets an explicit enqueue limit override the total limit at enqueue" do
     ControlledJob.decent_job_control_concurrency_with(total_limit: 0, enqueue_limit: 1)
     _(ControlledJob.perform_later("allowed to queue")).must_be_kind_of ControlledJob

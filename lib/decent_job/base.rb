@@ -236,16 +236,6 @@ module DecentJob
     include JobExtensions::Batches
     include JobExtensions::Cron
 
-    # Every native job includes {JobExtensions::Concurrency}, so only a class
-    # that sets limits or rules needs individual bulk admission. The others
-    # go in the SQL bulk insert without enqueue callbacks.
-    #
-    # @return [Boolean]
-    # @api private
-    def decent_job_concurrency_controlled?
-      !self.class.decent_job_concurrency_config.empty? || !self.class.decent_job_concurrency_rules.empty?
-    end
-
     private
 
     # Native jobs check concurrency after every enqueue callback has run, so

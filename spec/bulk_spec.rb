@@ -279,6 +279,7 @@ describe DecentJob::Bulk do
   end
 
   it "prepares a duplicated controlled job object only once" do
+    ControlledBulkJob.decent_job_control_concurrency_with(total_limit: 10)
     job = ControlledBulkJob.new("same object")
     buffer = DecentJob::Bulk::Buffer.new
     buffer.add([job, job])

@@ -5,8 +5,10 @@ require "time"
 
 module DecentJob
   class Dashboard
-    # Read-only SQL for dashboard pages. Every list is bounded and uses keyset
-    # pagination on (created_at, id) so ties never skip or repeat rows.
+    # Read-only SQL for dashboard pages. {#jobs} and {#batches} use keyset
+    # pagination on (created_at, id) so ties never skip or repeat rows. Most
+    # other lists have a fixed LIMIT. {#processes}, {#executions}, and
+    # {#claims} have no limit; their row counts stay small.
     #
     # {Dashboard} builds one per request. Each method checks out a connection
     # from the {Database} pool for one statement and returns it. There is no

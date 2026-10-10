@@ -65,14 +65,47 @@ module DecentJob
     JOB_ACTIONS = %w[retry reschedule discard force_discard destroy].freeze
     UUID = /\A\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\z/
 
+    # Base class for errors that {#call} turns into an error page. The
+    # subclass picks the HTTP status and the message.
+    class HttpError < StandardError
+      # @return [Integer] the HTTP status of the error page
+      def status
+        500
+      end
+
+      # @param request [Request] the request that failed
+      # @return [String] the text for the error page
+      def page_message(request)
+        message
+      end
+    end
+
     # Raised by routes and pages. {#call} turns it into a 404 page.
-    class NotFound < StandardError; end
+    class NotFound < HttpError
+      def status
+        404
+      end
+
+      def page_message(request)
+        "There is no page at #{request.path}."
+      end
+    end
+
     # Raised for invalid input or a bad CSRF token. {#call} turns it into a
     # 400 page that shows the message.
-    class BadRequest < StandardError; end
+    class BadRequest < HttpError
+      def status
+        400
+      end
+    end
+
     # Raised when a form body is over {Request::MAX_BODY_BYTES}. {#call}
     # turns it into a 413 page.
-    class PayloadTooLarge < BadRequest; end
+    class PayloadTooLarge < BadRequest
+      def status
+        413
+      end
+    end
 
     # @param database [Database, nil] the pool to read and write. nil uses
     #   {DecentJob.database} on each request.
@@ -129,11 +162,9 @@ module DecentJob
       cookies << headers.delete("set-cookie-extra") if headers["set-cookie-extra"]
       headers["set-cookie"] = cookies.compact.join("\n")
       [status, headers, [body]]
-    rescue NotFound
-      [404, default_headers(request).merge("content-type" => "text/html; charset=utf-8"), [view ? view.layout("error", status: 404, message: "There is no page at #{request.path}.") : "Not found"]]
-    rescue BadRequest => error
-      status = error.is_a?(PayloadTooLarge) ? 413 : 400
-      [status, default_headers(request).merge("content-type" => "text/html; charset=utf-8"), [view ? view.layout("error", status: status, message: error.message) : error.message]]
+    rescue HttpError => error
+      message = error.page_message(request)
+      [error.status, default_headers(request).merge("content-type" => "text/html; charset=utf-8"), [view ? view.layout("error", status: error.status, message: message) : message]]
     end
 
     # ----- routing ----------------------------------------------------------

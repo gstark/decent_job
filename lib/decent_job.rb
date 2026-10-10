@@ -422,6 +422,8 @@ module DecentJob
     #   deadline
     # @return [Boolean] true when every selected manager drained
     # @raise [ArgumentError] when timeout is negative or not finite
+    # @raise [Exception] the first error from a resource thread, after every
+    #   resource finished its wait; see {ResourceShutdown.wait_all}
     def stop_cron(timeout: nil, database: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
       ResourceShutdown.wait_all(begin_cron_shutdown(database: database), deadline: deadline, force: force, timeout: timeout)
@@ -483,6 +485,8 @@ module DecentJob
     # @return [Boolean] true when every resource drained, false when work
     #   still runs; a later call can wait again
     # @raise [ArgumentError] when timeout is negative or not finite
+    # @raise [Exception] the first error from a resource thread, after every
+    #   resource finished its wait; see {ResourceShutdown.wait_all}
     def shutdown(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
       _revision, handles = begin_shutdown
@@ -501,6 +505,11 @@ module DecentJob
     #   drain was incomplete, a newer lifecycle operation won, or a resource
     #   refused to restart
     # @raise [ArgumentError] when timeout is negative or not finite
+    # @raise [Exception] the first error from a resource thread, after every
+    #   resource finished its wait; see {ResourceShutdown.wait_all}
+    # @raise [ForkInProgress] while the runtime prepares to fork
+    # @raise [LifecycleInProgress] when a configure or reset transition is
+    #   active
     def restart(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
       revision, handles, restart_handles = begin_shutdown(restarting: true)

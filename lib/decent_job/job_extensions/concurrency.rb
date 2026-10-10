@@ -110,12 +110,15 @@ module DecentJob
         super + self.class.decent_job_concurrency_rules.filter_map { |rule| rule.applied_label(self) }
       end
 
+      # Only a class that sets limits or rules needs individual bulk
+      # admission. The others go in the SQL bulk insert without enqueue
+      # callbacks, as Active Job's perform_all_later does.
+      #
       # @return [Boolean] true when bulk enqueue must admit this job on its
-      #   own, with its enqueue callbacks. Including this extension opts in.
-      #   {Base} overrides it, because every native job includes it.
+      #   own, with its enqueue callbacks
       # @api private
       def decent_job_concurrency_controlled?
-        true
+        !self.class.decent_job_concurrency_config.empty? || !self.class.decent_job_concurrency_rules.empty?
       end
 
       # @return [Boolean] false when enqueue admission must be skipped: the

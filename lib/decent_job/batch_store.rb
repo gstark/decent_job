@@ -332,13 +332,17 @@ module DecentJob
     #
     # @param id [String] the batch UUID
     # @return [void]
+    # @raise [KeyError] when the batch row disappears before callbacks are
+    #   dispatched
     # @note Callback resolution errors go to {Configuration#on_thread_error}
     #   after commit and never raise. Database errors still raise.
     # @note Holds the batch advisory lock for the whole run. Call it after
     #   the job's transaction commits. Enqueued callback jobs carry
     #   batch_callback_id.
     def reconcile(id)
-      errors = locked([id]) do |connection|
+      errors = []
+
+      locked([id]) do |connection|
         snapshot = completion_snapshot(connection, id)
 
         unless snapshot
@@ -364,7 +368,7 @@ module DecentJob
           create_event(connection, row, "finish")
         end
 
-        failures = dispatch(connection, id)
+        dispatch(connection, id, errors)
         row = find(id)
         pending = connection.exec_params("SELECT 1 FROM decent_job_batch_events WHERE batch_id = $1 AND dispatched_at IS NULL LIMIT 1", [id]).ntuples.positive?
 
@@ -373,10 +377,10 @@ module DecentJob
         end
 
         delete_updates(connection, updates)
-        failures
       end
 
-      Array(errors).each { |error| report(error) }
+      # Report after commit, so on_thread_error never runs under the batch lock.
+      errors.each { |error| report(error) }
     end
 
     # Reconciles batches with pending updates or undelivered events.
@@ -389,7 +393,9 @@ module DecentJob
     #
     # @param limit [Integer] the most batches to reconcile in this call
     # @return [Integer] the number of batches tried
-    # @note Errors go to {Configuration#on_thread_error} and never raise.
+    # @raise [PG::Error] when the candidate SELECT fails
+    # @note Errors from one batch go to {Configuration#on_thread_error} and do
+    #   not stop the loop.
     def reconcile_pending(limit: 100)
       ids = @database.with_connection do |connection|
         connection.exec_params(<<~SQL, [limit]).column_values(0)
@@ -468,18 +474,19 @@ module DecentJob
     # class, or clear the setting to drop the event. A dropped event leaves no
     # pending work, so request a reconcile that can finish the batch.
     def retarget_events(connection, id, values)
-      dropped = values.slice("on_success", "on_discard", "on_finish").sum do |key, klass|
+      deleted = false
+
+      values.slice("on_success", "on_discard", "on_finish").each do |key, klass|
         event = key.delete_prefix("on_")
 
         if klass
           connection.exec_params("UPDATE decent_job_batch_events SET job_class = $3 WHERE batch_id = $1 AND event = $2 AND dispatched_at IS NULL", [id, event, klass])
-          0
-        else
-          connection.exec_params("DELETE FROM decent_job_batch_events WHERE batch_id = $1 AND event = $2 AND dispatched_at IS NULL", [id, event]).cmd_tuples
+        elsif connection.exec_params("DELETE FROM decent_job_batch_events WHERE batch_id = $1 AND event = $2 AND dispatched_at IS NULL", [id, event]).cmd_tuples.positive?
+          deleted = true
         end
       end
 
-      request(connection, [id]) if dropped.positive?
+      request(connection, [id]) if deleted
     end
 
     def validate_adapter(klass)
@@ -505,17 +512,15 @@ module DecentJob
       SQL
     end
 
-    # Enqueues callback jobs for undelivered events and returns the errors
-    # from events whose class could not be resolved. An event is marked
+    # Enqueues callback jobs for undelivered events and appends to +errors+
+    # the errors from events whose class could not be resolved. An event is marked
     # dispatched only when its job is accepted, so a rejected or unresolved
     # callback stays pending for {#reconcile_pending}. Each event resolves on
     # its own, so one bad class does not block the other callbacks.
-    def dispatch(connection, id)
+    def dispatch(connection, id, errors)
       events = connection.exec_params("SELECT * FROM decent_job_batch_events WHERE batch_id = $1 AND dispatched_at IS NULL ORDER BY generation, event", [id]).to_a
-      return [] if events.empty?
+      return if events.empty?
       batch = Batch.find(id, database: @database)
-
-      errors = []
 
       pairs = events.filter_map do |event|
         klass = Support.constantize(event.fetch("job_class"))
@@ -559,8 +564,6 @@ module DecentJob
           end
         end
       end
-
-      errors
     end
 
     def delete_updates(connection, updates)

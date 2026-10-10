@@ -40,6 +40,10 @@ module DecentJob
         AND objid = (#{KEY_SQL} & 4294967295)::oid)
     SQL
     ACTIVE_SQL = "((heartbeat_mode = 'advisory' AND (#{LOCKED_SQL})) OR (heartbeat_mode = 'heartbeat' AND updated_at > clock_timestamp() - interval '300 seconds'))"
+    # Every query that builds a record must start with this. {#initialize}
+    # reads the database_now column, which decent_job_processes does not have.
+    SELECT_SQL = "SELECT *, clock_timestamp() AS database_now FROM decent_job_processes"
+    private_constant :SELECT_SQL
 
     # @return [String] the process UUID
     # @return [Hash{String => Object}] the parsed state JSON (string keys)
@@ -104,7 +108,7 @@ module DecentJob
       until stopping&.call
         rows = database.with_connection do |connection|
           connection.exec_params(<<~SQL, [cursor, in_batches_of]).to_a
-            SELECT *, clock_timestamp() AS database_now FROM decent_job_processes WHERE NOT (#{ACTIVE_SQL})
+            #{SELECT_SQL} WHERE NOT (#{ACTIVE_SQL})
               AND ($1::uuid IS NULL OR id > $1::uuid) ORDER BY id LIMIT $2
           SQL
         end
@@ -131,12 +135,13 @@ module DecentJob
 
     def self.records(database, predicate, parameters = [])
       resolve_database(database).with_connection do |connection|
-        connection.exec_params("SELECT *, clock_timestamp() AS database_now FROM decent_job_processes WHERE #{predicate} ORDER BY created_at, id", parameters).map { |row| new(row) }
+        connection.exec_params("#{SELECT_SQL} WHERE #{predicate} ORDER BY created_at, id", parameters).map { |row| new(row) }
       end
     end
     private_class_method :records
 
-    # @param row [Hash{String => String}] a decent_job_processes row from pg
+    # @param row [Hash{String => String}] a decent_job_processes row from pg,
+    #   selected with {SELECT_SQL} so it has the database_now column
     # @api private
     def initialize(row)
       @id = row.fetch("id").dup.freeze

@@ -78,8 +78,9 @@ module DecentJob
     # @param argv [Array<String>] command line arguments. Not modified.
     # @return [Integer] the exit status: 0, 1, or 2 (see the class header)
     # @note start can daemonize (fork and detach), fork a supervisor cluster,
-    #   bind probe and dashboard sockets, and trap INT and TERM. Errors are
-    #   printed to stderr, not raised, except non-StandardError exceptions.
+    #   bind probe and dashboard sockets, and trap INT and TERM. StandardError,
+    #   LoadError, and OptionParser errors are printed to stderr, not raised.
+    #   Other exceptions propagate.
     def run(argv)
       DecentJob.with_cli_application { run_command(argv) }
     end
