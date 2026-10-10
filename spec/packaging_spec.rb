@@ -18,7 +18,7 @@ describe "standalone gem packaging" do
       _(status.success?).must_equal true, output
 
       package = Gem::Package.new(artifact)
-      _(package.spec.runtime_dependencies.map(&:name)).must_equal %w[pg]
+      _(package.spec.runtime_dependencies.map(&:name)).must_equal %w[bigdecimal logger pg tzinfo]
       _(package.spec.executables).must_equal ["decent_job"]
       unpacked = File.join(directory, "unpacked")
       package.extract_files(unpacked)

@@ -218,7 +218,7 @@ module DecentJob
       entries = @configuration.cron_entries(database: connection_pool)
       entries.each do |entry|
         klass = entry.job_class
-        klass = klass.constantize if klass.is_a?(String)
+        klass = Support.constantize(klass) if klass.is_a?(String)
         next unless Integrations.job_class?(klass)
         adapter = klass.queue_adapter
         unless adapter.is_a?(Adapter) && adapter.database.equal?(connection_pool)

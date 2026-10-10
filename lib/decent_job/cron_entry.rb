@@ -170,7 +170,7 @@ module DecentJob
       Bulk.with_buffer(nil) do
         connection_pool.transaction do
           self.class.with_context(key: key, at: cron_at, database: connection_pool) do
-            I18n.with_locale(I18n.default_locale) do
+            with_default_locale do
               buffer.capture { result = enqueue_definition }
               buffer.prepare
               self.class.validate_jobs(buffer.jobs)
@@ -201,6 +201,11 @@ module DecentJob
     end
 
     private
+
+    # Cron enqueues run in the default locale when I18n is loaded.
+    def with_default_locale(&block)
+      defined?(::I18n) ? ::I18n.with_locale(::I18n.default_locale, &block) : yield
+    end
 
     def store
       CronStore.new(database)

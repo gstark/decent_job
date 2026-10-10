@@ -39,16 +39,16 @@ module DecentJob
           @run_id = (@run_id || 0) + 1
           @interrupted_threads = {}
           started_at = Time.now
-          zone = Time.zone
+          zone = Time.zone if Time.respond_to?(:zone)
           @threads = []
           allocated = false
           begin
             Thread.handle_interrupt(Object => :never) do
               cron_entries.each do |entry|
                 state = {pending: [], ready: false}
-                allocate_thread { Time.use_zone(zone) { run(entry, state, started_at) } }
-                2.times { allocate_thread { Time.use_zone(zone) { dispatch(entry, state) } } }
-                allocate_thread { Time.use_zone(zone) { replay(entry, state, started_at) } } if @graceful_restart_period
+                allocate_thread { with_zone(zone) { run(entry, state, started_at) } }
+                2.times { allocate_thread { with_zone(zone) { dispatch(entry, state) } } }
+                allocate_thread { with_zone(zone) { replay(entry, state, started_at) } } if @graceful_restart_period
               end
             end
             allocated = true
@@ -121,6 +121,11 @@ module DecentJob
     end
 
     private
+
+    # Threads start with the main thread's Active Support time zone when one is set.
+    def with_zone(zone, &block)
+      zone ? Time.use_zone(zone, &block) : yield
+    end
 
     def allocate_thread(&block)
       @threads << Thread.new do

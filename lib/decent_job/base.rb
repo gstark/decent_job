@@ -118,6 +118,7 @@ module DecentJob
 
     require "decent_job/job_extensions/batches"
     require "decent_job/job_extensions/concurrency"
+    require "decent_job/job_extensions/interrupt_errors"
     require "decent_job/job_extensions/notify_options"
     include JobExtensions::Labels
     include JobExtensions::NotifyOptions

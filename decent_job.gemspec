@@ -11,5 +11,8 @@ Gem::Specification.new do |spec|
   spec.bindir = "exe"
   spec.executables = ["decent_job"]
   spec.require_paths = ["lib"]
+  spec.add_dependency "bigdecimal", ">= 3.1"
+  spec.add_dependency "logger", ">= 1.6"
   spec.add_dependency "pg", "~> 1.7"
+  spec.add_dependency "tzinfo", "~> 2.0"
 end
