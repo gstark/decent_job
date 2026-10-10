@@ -1,0 +1,7 @@
+class <%= migration_class_name %> < ActiveRecord::Migration[<%= ActiveRecord::Migration.current_version %>]
+  # Applies DecentJob's packaged SQL migrations through version <%= @version %>.
+  # Versions that are already recorded in decent_job_schema_migrations are skipped.
+  def up
+    DecentJob::Schema.apply(connection.raw_connection, through: <%= @version %>)
+  end
+end

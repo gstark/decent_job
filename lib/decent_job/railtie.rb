@@ -26,6 +26,18 @@ module DecentJob
     # Load the Active Job bridge only for applications that use Active Job.
     ActiveSupport.on_load(:active_job) { require "decent_job/active_job" }
 
+    # Keep DecentJob's migration versions in Rails schema dumps.
+    ActiveSupport.on_load(:active_record) do
+      require "active_record/schema_dumper"
+      require "decent_job/schema_dump"
+      ActiveRecord::SchemaDumper.prepend(DecentJob::SchemaDump::Ruby)
+    end
+
+    ActiveSupport.on_load(:active_record_postgresqladapter) do
+      require "decent_job/schema_dump"
+      prepend DecentJob::SchemaDump::Sql
+    end
+
     initializer "decent_job.configure", before: "active_job.set_configs" do |application|
       DecentJob.configure_rails(application, validate: false)
     end

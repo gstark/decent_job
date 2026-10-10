@@ -27,6 +27,8 @@ export DECENT_JOB_DATABASE_URL=postgres://localhost/my_application
 bundle exec decent_job migrate
 ```
 
+Rails applications can instead run `bin/rails generate decent_job:migration` and `bin/rails db:migrate`, so the tables appear in the Rails schema. See [Rails integration](docs/rails-integration.md#active-record-migrations).
+
 The database must already exist. Migrations install only DecentJob's tables in the connection's current schema. Installation is transactional and repeatable; no PostgreSQL extensions are required.
 
 Use `DecentJob.migrated?` to check that every SQL migration shipped with the gem is recorded as installed. Pass `database:` to inspect an explicit pool, or call `DecentJob::Schema.new(database).migrated?`. These queries respect the connection's search path and never install or alter tables. Missing metadata or versions return false; connection, permission, and malformed-metadata errors propagate. A missing metadata table does not abort an enclosing `database.transaction`. Extra future versions are allowed; this checks migration history, not whether someone manually changed an installed table.

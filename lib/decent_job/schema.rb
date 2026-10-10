@@ -36,9 +36,7 @@ module DecentJob
         connection.exec("SELECT version FROM decent_job_schema_migrations").column_values(0).map(&:to_i)
       end
 
-      Dir[File.join(MIGRATIONS_PATH, "*.sql")].all? do |path|
-        versions.include?(File.basename(path).split("_").first.to_i)
-      end
+      self.class.migrations.keys.all? { |version| versions.include?(version) }
     rescue PG::UndefinedTable
       false
     end
@@ -48,31 +46,51 @@ module DecentJob
     # @return [Schema] self
     # @raise [PG::Error] when a migration fails; the transaction rolls back
     #   all migrations from this call
-    # @note All migrations run in one transaction. A transaction-scoped
-    #   advisory lock, keyed by the current schema name, serializes concurrent
-    #   installers, so two processes cannot apply the same version.
+    # @note All migrations run in one transaction. See {.apply} for the lock.
     def migrate
-      @database.transaction do |connection|
-        # Serialize installation before even creating the migrations table.
-        connection.exec("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || '.decent_job_schema', 0))")
+      @database.transaction { |connection| self.class.apply(connection) }
+      self
+    end
 
-        # Check first: CREATE TABLE IF NOT EXISTS raises a NOTICE on every rerun.
-        unless connection.exec("SELECT to_regclass('decent_job_schema_migrations')").getvalue(0, 0)
-          connection.exec("CREATE TABLE decent_job_schema_migrations (version integer PRIMARY KEY)")
-        end
+    # Maps each packaged migration version to its SQL file path.
+    #
+    # @return [Hash{Integer => String}] versions in ascending order
+    def self.migrations
+      Dir[File.join(MIGRATIONS_PATH, "*.sql")].sort.to_h { |path| [File.basename(path).split("_").first.to_i, path] }
+    end
 
-        versions = connection.exec("SELECT version FROM decent_job_schema_migrations").column_values(0).map(&:to_i)
+    # Applies packaged migrations that are not recorded yet on one connection.
+    #
+    # {#migrate} calls this inside its own transaction. Active Record
+    # migrations from the `decent_job:migration` Rails generator call it with
+    # the migration's raw connection, inside the migration's transaction.
+    #
+    # @param connection [PG::Connection] a connection inside an open transaction
+    # @param through [Integer, nil] the highest version to apply, or nil for all
+    #   packaged versions
+    # @return [void]
+    # @raise [PG::Error] when a migration fails
+    # @note A transaction-scoped advisory lock, keyed by the current schema
+    #   name, serializes concurrent installers, so two processes cannot apply
+    #   the same version. The caller must hold a transaction, or the lock ends
+    #   with the first statement.
+    def self.apply(connection, through: nil)
+      # Serialize installation before even creating the migrations table.
+      connection.exec("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || '.decent_job_schema', 0))")
 
-        Dir[File.join(MIGRATIONS_PATH, "*.sql")].sort.each do |path|
-          version = File.basename(path).split("_").first.to_i
-          next if versions.include?(version)
-
-          connection.exec(File.read(path))
-          connection.exec_params("INSERT INTO decent_job_schema_migrations VALUES ($1)", [version])
-        end
+      # Check first: CREATE TABLE IF NOT EXISTS raises a NOTICE on every rerun.
+      unless connection.exec("SELECT to_regclass('decent_job_schema_migrations')").getvalue(0, 0)
+        connection.exec("CREATE TABLE decent_job_schema_migrations (version integer PRIMARY KEY)")
       end
 
-      self
+      versions = connection.exec("SELECT version FROM decent_job_schema_migrations").column_values(0).map(&:to_i)
+
+      migrations.each do |version, path|
+        next if versions.include?(version) || (through && version > through)
+
+        connection.exec(File.read(path))
+        connection.exec_params("INSERT INTO decent_job_schema_migrations VALUES ($1)", [version])
+      end
     end
   end
 end

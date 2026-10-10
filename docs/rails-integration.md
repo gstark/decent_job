@@ -15,6 +15,23 @@ config.decent_job.max_threads = 5
 
 Run `bundle exec decent_job migrate --require ./config/environment.rb` to install DecentJob's tables, then `bundle exec decent_job start --require ./config/environment.rb` to run workers. The connection may point to a separate PostgreSQL database. DecentJob uses its own pg pool even when Active Record connects to the same database.
 
+## Active Record migrations
+
+When DecentJob's tables live in the Active Record database, you can install them with a Rails migration instead of `decent_job migrate`. Rails then records the tables in `db/schema.rb` or `db/structure.sql`:
+
+```sh
+bin/rails generate decent_job:migration
+bin/rails db:migrate
+```
+
+The generator writes `db/migrate/<timestamp>_decent_job_schema_v<version>.rb`, where the version is the newest SQL migration in the gem. The migration calls `DecentJob::Schema.apply` inside the Active Record migration transaction. It applies every packaged SQL migration up to that version that `decent_job_schema_migrations` does not record yet. A later gem upgrade does not change what an older generated migration applies.
+
+After a gem upgrade that adds SQL migrations, run the generator again. The new migration applies only the new versions. If no SQL migration was added, the generator stops because a migration with the same name exists. Pass `--database <name>` to write the migration for another database of a multi-database application.
+
+Rails schema dumps contain table definitions but no table rows. The Railtie therefore adds the rows of `decent_job_schema_migrations` to both dump formats as one `INSERT` statement. After `db:schema:load` or `db:prepare`, `DecentJob.migrated?` returns true and `decent_job migrate` has no work to do. The dump hooks use private Active Record methods (`ActiveRecord::SchemaDumper#trailer` and the PostgreSQL adapter's `dump_schema_versions`), so check them when you upgrade Rails.
+
+The generated migrations have no `down` method, because the SQL migrations are not reversible. A rollback raises `ActiveRecord::IrreversibleMigration`.
+
 Rails options override environment defaults. Explicit Ruby settings retain precedence, including when Rails options change or are removed; CLI worker options override application settings. See [configuration sources](configuration.md) for environment fallbacks and mutable settings. The Rails logger is used unless a DecentJob logger was configured. Standalone use does not load Rails or Active Record.
 
 ## Execution modes and boot

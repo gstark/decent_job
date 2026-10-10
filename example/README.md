@@ -34,7 +34,7 @@ Open three terminals in `example/`:
 
 ```sh
 bin/worker       # workers, recurring jobs, health probe on port 7001
-bin/dashboard    # dashboard on http://127.0.0.1:7002/
+bin/dashboard    # dashboard on http://0.0.0.0:7002/ (all interfaces)
 bin/seed --loop  # a new round of jobs every 20 seconds
 ```
 

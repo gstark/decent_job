@@ -58,6 +58,17 @@ describe "schema installation" do
     _(row.fetch("performed_at")).must_be_nil
   end
 
+  it "applies migrations through a version and resumes after it" do
+    database.transaction { |connection| DecentJob::Schema.apply(connection, through: 5) }
+    _(DecentJob::Schema.new(database).migrated?).must_equal false
+
+    database.transaction { |connection| DecentJob::Schema.apply(connection) }
+
+    database.with_connection do |connection|
+      _(connection.exec("SELECT version FROM decent_job_schema_migrations ORDER BY version").column_values(0)).must_equal ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]
+    end
+  end
+
   it "rolls back all migration changes on failure" do
     database.with_connection { |connection| connection.exec("CREATE TABLE decent_job_executions (existing integer)") }
     _ { DecentJob::Schema.new(database).migrate }.must_raise PG::DuplicateTable

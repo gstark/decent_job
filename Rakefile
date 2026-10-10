@@ -11,7 +11,7 @@ task default: :spec
 
 Rake::TestTask.new("spec:rails") do |task|
   task.libs << "spec"
-  task.pattern = "integration/rails_spec.rb"
+  task.pattern = "integration/rails*_spec.rb"
 end
 
 Rake::TestTask.new("spec:pgbouncer") do |task|
