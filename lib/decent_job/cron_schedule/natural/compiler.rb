@@ -3,7 +3,22 @@
 module DecentJob
   class CronSchedule
     class Natural
+      # Merges the {Component} list of a parsed natural schedule into one
+      # numeric cron string. {Natural#compile} creates one compiler per phrase.
+      #
+      # Rules that match the reference:
+      #
+      # - Components with the same calendar key merge with {Component#merge}.
+      # - A calendar field without a time clause runs at 00:00.
+      # - A month without a day runs on day 1.
+      # - Only the first group of times that share an hour set is kept.
+      # - The seconds field is left out when it is "0", which gives five fields.
+      # - An :hour component (from "hours 8") is never read, so it has no effect.
       class Compiler
+        # @param components [Array<Component, Array>] parsed components; nested
+        #   arrays are flattened
+        # @raise [ArgumentError] when two components cannot merge
+        # @api private
         def initialize(components)
           @fields = {}
           @times = []
@@ -23,6 +38,11 @@ module DecentJob
           end
         end
 
+        # @return [String] cron text: seconds (when not "0"), minutes, hours,
+        #   month days, months, weekdays, and an optional zone. Numbers sort
+        #   first, then text values such as "*/2" or "L".
+        # @raise [ArgumentError] when the time clauses are incompatible
+        # @api private
         def compile
           hours, minutes = first_time_group
           fields = [field(:second, "0"), minutes, hours, field(:monthday), field(:month), field(:weekday)]
@@ -38,6 +58,9 @@ module DecentJob
           component ? Array(component.values[0]) : [default]
         end
 
+        # Merges each graded time into a neighbor (the previous one, or the
+        # next one when it is first). Then it groups minutes by their hour set
+        # and returns the first group as [hours, minutes].
         def first_time_group
           return [["*"], ["*"]] if @times.empty?
           times = @times.dup

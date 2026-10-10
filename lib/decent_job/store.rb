@@ -6,11 +6,31 @@ require "time"
 
 module DecentJob
   # SQL persistence only. Active Job execution belongs to Performer.
+  #
+  # Store inserts, reschedules, and reads rows in decent_jobs and
+  # decent_job_executions, and decodes PostgreSQL text values into Ruby
+  # values. {Adapter}, {Claim}, {Job}, {BatchStore}, and {CronStore} create
+  # instances as needed. An instance holds only the {Database}, so threads can
+  # share it. Every method uses the calling context's checkout, so a call
+  # inside an open {Database#transaction} joins that transaction.
   class Store
+    # @param database [Database] the pool for all queries
     def initialize(database)
       @database = database
     end
 
+    # Builds the decent_jobs attributes for a new job. Does not write to the
+    # database.
+    #
+    # Reads the current cron context ({CronEntry.context_for}) and batch
+    # context ({Batch.context_for}) for this database.
+    #
+    # @param job [Object] an Active Job or native job instance
+    # @param id [String] the decent_jobs id (UUID). It is also stored as
+    #   provider_job_id in the payload.
+    # @param payload [Hash, nil] the serialized job, or nil to call job.serialize
+    # @return [Hash{String => Object}] every {Job::ATTRIBUTES} key. state is
+    #   'ready' and scheduled_at is now (UTC) when the job has no schedule.
     def enqueue_attributes(job, id: SecureRandom.uuid, payload: nil)
       cron = CronEntry.context_for(@database) || {}
       batch = Batch.context_for(@database, job: job) || {}
@@ -27,6 +47,24 @@ module DecentJob
       )
     end
 
+    # Inserts jobs in one transaction and sends NOTIFY for the accepted jobs.
+    #
+    # Rows go in batches of 500, which keeps each INSERT under the PostgreSQL
+    # limit of 65535 bind parameters (13 for each row).
+    #
+    # @param jobs [Array<Object>] the job instances, in the same order as attributes
+    # @param attributes [Array<Hash>, nil] rows from {#enqueue_attributes}, or
+    #   nil to build them
+    # @param skip_duplicates [Boolean] false ignores only a conflict on
+    #   (cron_key, cron_at) and raises on other conflicts. True ignores every
+    #   unique conflict, including a duplicate id.
+    # @yieldparam row [Hash{String => Object}] each inserted row, decoded. The
+    #   block runs inside the transaction.
+    # @return [Array<String, nil>] one entry for each job: its id, or nil when
+    #   the insert was skipped as a duplicate
+    # @note NOTIFY is transactional, so workers receive it only after the
+    #   outermost transaction commits. {Notifier.notify_jobs} sends nothing
+    #   when LISTEN/NOTIFY is disabled.
     def enqueue_all(jobs, attributes: nil, skip_duplicates: false)
       return [] if jobs.empty?
 
@@ -62,6 +100,13 @@ module DecentJob
       ids.map { |id| id if accepted_ids[id] }
     end
 
+    # Summarizes ready jobs by queue so an in-process {Worker} can wake up
+    # without NOTIFY.
+    #
+    # @param ids [Array<String>] decent_jobs ids
+    # @return [Array<Hash{Symbol => Object}>] one entry for each queue and
+    #   deadline, with :queue_name and :count. :scheduled_at is present only
+    #   for jobs scheduled in the future. Due jobs have no :scheduled_at.
     def scheduling_hints(ids)
       @database.with_connection do |connection|
         connection.exec_params(<<~SQL, [PG::TextEncoder::Array.new.encode(ids)]).map do |row|
@@ -78,6 +123,9 @@ module DecentJob
       end
     end
 
+    # @param id [String] the decent_jobs id
+    # @return [Hash{String => Object}, nil] the decoded row, or nil when no job
+    #   has this id
     def find(id)
       @database.with_connection do |connection|
         row = connection.exec_params("SELECT * FROM decent_jobs WHERE id = $1", [id]).first
@@ -85,6 +133,29 @@ module DecentJob
       end
     end
 
+    # Makes an existing job row ready again with a new payload and schedule.
+    #
+    # The row id stays the same. It is used for a retry or self-reenqueue from
+    # a running attempt, and for an operator retry of a discarded job
+    # ({JobRetry}). The update requires that execution_id still matches
+    # context[:execution_id], so a stale attempt cannot reschedule a job that
+    # a newer attempt owns. It does not clear locked_by_id: the running
+    # attempt still owns the job until {Performer} finishes it.
+    #
+    # @param job [Object] the job instance to persist
+    # @param context [Hash] execution context with :id and :execution_id.
+    #   :manual_retry true requires state 'discarded' and keeps the stored
+    #   error. Otherwise the job must be unfinished and in state 'ready' or
+    #   'running', and the error is cleared.
+    # @param payload [Hash, nil] the serialized job, or nil to call job.serialize
+    # @yieldparam row [Hash{String => Object}] the updated row, decoded
+    # @return [true] after the job is marked successfully enqueued
+    # @raise [EnqueueError] when the row no longer matches, which means the
+    #   attempt lost ownership
+    # @note Sends NOTIFY. Refreshes created_at when dequeue_query_sort is
+    #   :created_at. For a non-manual retry it increments context[:reenqueues]
+    #   and registers a rollback callback that decrements it. {Performer} reads
+    #   this count to report a retry.
     def reschedule(job, context, payload: nil)
       @database.transaction do |connection|
         payload ||= job.serialize
@@ -113,16 +184,34 @@ module DecentJob
       job.successfully_enqueued = true
     end
 
+    # @param id [String] the decent_jobs id
+    # @return [Array<Hash{String => Object}>] the decoded executions of the job,
+    #   oldest first
     def executions(id)
       @database.with_connection do |connection|
         connection.exec_params("SELECT * FROM decent_job_executions WHERE job_id = $1 ORDER BY started_at, id", [id]).map { |row| decode(row) }
       end
     end
 
+    # Sends a NOTIFY with an empty payload, which wakes workers for all queues.
+    #
+    # @param connection [PG::Connection] the connection of the current
+    #   transaction. The notification is delivered when it commits.
+    # @return [void]
     def notify(connection)
       Notifier.notify(connection)
     end
 
+    # Converts a PostgreSQL text row into Ruby values.
+    #
+    # payload and error become parsed JSON. labels and concurrency_keys become
+    # arrays. Columns that end in _at become Time. duration becomes Float.
+    # priority, executions_count, and process_id become Integer. Other values,
+    # such as UUIDs, states, and booleans ("t" or "f"), stay strings. NULL
+    # stays nil.
+    #
+    # @param row [Hash{String => String, nil}] a row from PG::Result
+    # @return [Hash{String => Object}] the decoded row
     def decode(row)
       row.to_h do |key, value|
         decoded = if value.nil?

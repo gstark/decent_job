@@ -1,11 +1,50 @@
 # frozen_string_literal: true
 
 module DecentJob
+  # Claims and runs one job per call, then persists the attempt outcome.
+  #
+  # {Worker} execution threads each own one performer and call
+  # {#perform_one} in a loop. {DecentJob.perform_inline} and {InlineBuffer}
+  # create short-lived performers. A performer runs on the calling thread. It
+  # uses {Claim#with_next} for ownership, runs the job through
+  # {Integrations}, and writes the decent_jobs and decent_job_executions rows
+  # in one {ConcurrencyClaims#finish} transaction.
+  #
+  # Ownership: the claim (advisory lock or row lock) is held from claim until
+  # the outcome is written. A process tracker registration is held for the
+  # same span. Without a +process_tracker+ argument, the claim builds its own
+  # tracker.
+  #
+  # Constraints: a killed thread does not persist an outcome. The attempt
+  # stays unfinished, and recovery marks it interrupted when a replacement
+  # claims the job.
+  #
+  # See docs/execution-recovery.md and docs/execution-history.md.
   class Performer
+    # Outcome of one finished attempt.
+    #
+    # - +job_id+ [String] the decent_jobs.id (provider job ID)
+    # - +state+ [String] "succeeded", "discarded", or "retried"
+    # - +error+ [Exception, nil] the recorded job error
+    # - +unhandled_error+ [Exception, nil] the error when it escaped Active Job
+    #   handlers, else nil
+    # - +error_event+ [String, nil] the stored error_event, for example
+    #   "handled", "unhandled", or "interrupted"
     Result = Data.define(:job_id, :state, :error, :unhandled_error, :error_event)
 
+    # @return [Database] the pool for claims and outcome writes
     attr_reader :database
 
+    # @param database [Database] pool for claims and outcome writes
+    # @param enable_pauses [Boolean] skip paused queues and jobs when claiming
+    # @param on_unhandled_exception [#call, nil] receives an execution error
+    #   outside handled_exceptions before it propagates. {Worker} uses it to
+    #   tell job errors from infrastructure errors.
+    # @param process_tracker [ProcessTracker, nil] tracker to register claims
+    #   with. Nil makes the claim create its own.
+    # @param on_execution_start [#call, nil] called on the performing thread
+    #   after the claim and before the job body. A callable with arity 1
+    #   receives the Active Job ID.
     def initialize(database: DecentJob.database, enable_pauses: DecentJob.configuration.enable_pauses, on_unhandled_exception: nil, process_tracker: nil, on_execution_start: nil)
       @active_calls = 0
       @activity_mutex = Mutex.new
@@ -16,12 +55,37 @@ module DecentJob
       @claim = Claim.new(database, enable_pauses: enable_pauses, process_tracker: process_tracker)
     end
 
+    # Reports whether a {#perform_one} call is in progress. Fork preparation
+    # and database ownership checks find performers through ObjectSpace and
+    # call this.
+    #
+    # @return [Boolean, nil] nil for an object whose initializer did not run
     def active?
       @activity_mutex&.synchronize { @active_calls.positive? }
     end
 
+    # Claims one runnable job, runs it, and records the outcome.
+    #
+    # Each call first runs maintenance, also when no job is runnable: it
+    # reconciles pending batch updates and recovers stale concurrency claims.
+    #
     # Track maintenance and claim cleanup as well as registered execution;
     # standalone calls may be active before any process monitor exists.
+    #
+    # @param queues [String, QueueSelection] queue selection, "*" for all queues
+    # @param job_id [String, nil] claim only this decent_jobs.id, or any job when nil
+    # @param raise_errors [Boolean] re-raise an error that escaped Active Job
+    #   handlers after the outcome is written. Inline execution uses this.
+    # @param stopping [#call] returns true when the caller must stop claiming.
+    #   The job can read it through {Current}.
+    # @return [Result, nil] nil when no job was claimed, when the runtime is
+    #   forking or in a lifecycle transition, or when the thread is being killed
+    # @raise [Exception] an execution error outside handled_exceptions. The
+    #   attempt stays unfinished.
+    # @raise [Exception] the unhandled job error when raise_errors is true,
+    #   unless an operator already finished the job
+    # @note Writes decent_jobs, decent_job_executions, concurrency claims, and
+    #   batch rows. Can delete the job row when the preservation policy allows.
     def perform_one(queues: "*", job_id: nil, raise_errors: false, stopping: -> { false })
       admitted = false
       Thread.handle_interrupt(Object => :never) do
@@ -49,6 +113,11 @@ module DecentJob
 
     private
 
+    # Runs the claimed row inside {Current} and the host executor, and
+    # classifies the result. Errors in handled_exceptions become a discarded
+    # outcome, which {#finish} can turn into a backend retry. Other exceptions
+    # call +on_unhandled_exception+ and propagate.
+    # Returns nil when the thread is being killed, so no outcome is written.
     def execute(row, raise_errors:, stopping:)
       if @on_execution_start.respond_to?(:arity) && @on_execution_start.arity == 1
         @on_execution_start.call(row.fetch("active_job_id"))
@@ -125,6 +194,8 @@ module DecentJob
       DecentJob.wrap_execution(&block)
     end
 
+    # Applies preserve_job_records. A failing policy callback is reported, and
+    # the record is kept.
     def preserve_record?(job_instance, error, error_event, unhandled)
       policy = DecentJob.configuration.preserve_job_records
       if policy.respond_to?(:call)
@@ -142,6 +213,21 @@ module DecentJob
       true
     end
 
+    # Persists the attempt outcome in one transaction and returns
+    # [state, error, error_event, forced].
+    #
+    # - The job row is locked FOR UPDATE, and its execution_id must still
+    #   match the claim. Otherwise ownership was lost and this raises.
+    # - forced is true when an operator already finished the job. The stored
+    #   outcome wins, and only the lock columns are cleared.
+    # - state becomes "retried" when the job is ready again (it reenqueued
+    #   itself) or when retry_on_unhandled_error applies. The job row goes
+    #   back to ready without finished_at.
+    # - The cleanup lambda deletes a finished, non-cron job row unless it must
+    #   be preserved. It runs after concurrency release in the same
+    #   transaction.
+    #
+    # duration is monotonic seconds. Batches reconcile after the commit.
     def finish(row, state, error, error_event, job_instance, unhandled, duration)
       details = error && JSON.generate("class" => error.class.name, "message" => error.message, "backtrace" => error.backtrace || [])
       batch_ids = []

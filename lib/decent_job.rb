@@ -55,14 +55,45 @@ require "decent_job/systemd_service"
 require "decent_job/thread_status"
 require "decent_job/worker"
 
+# A PostgreSQL job runner with a native job API and an optional Active Job
+# adapter.
+#
+# The DecentJob module is the global runtime. It owns the active
+# {Configuration}, the lazily opened global {Database} pool, and a registry of
+# the resources it starts: the default {Worker}, workers of async {Adapter}s,
+# and one {CronManager} per database. Resources that application code builds
+# directly belong to that code and are not in the registry.
+#
+# Locks and flags:
+#
+# - {ForkSafety#runtime_mutex} guards the registry, the configuration, and the
+#   global database. Application code, such as configure blocks, cron class
+#   loading, and lifecycle observers, runs outside it.
+# - @lifecycle_revision increments on every configure, start, stop, and
+#   restart. A start or restart that read an older revision gives up, so a
+#   newer operation always wins.
+# - @stopping is the global stop gate. It stays true after shutdown drains,
+#   until an explicit start or restart. Automatic starts do not open it.
+# - @cron_stopping and @cron_stopped_databases record cron stops, for all
+#   databases or for one.
+#
+# The module extends {LifecycleHooks}, {ForkSafety}, {HostIntegration}, and
+# {ThreadStatus}; those modules share the same module instance variables.
+#
+# See docs/lifecycle.md, docs/configuration.md, and docs/runtime-resources.md.
 module DecentJob
   extend LifecycleHooks
   extend ForkSafety
   extend HostIntegration
   extend ThreadStatus
 
+  # The gem version.
   VERSION = "0.1.0"
+  # The initial registry lock. Use {ForkSafety#runtime_mutex} instead, because
+  # a forked child replaces the lock with a new one.
   MUTEX = Mutex.new
+  # Serializes {.lower_thread_priority=} calls, so workers apply the values in
+  # the order the configuration stored them.
   @thread_priority_mutex = Mutex.new
   @configuration = Configuration.new
   @workers = []
@@ -72,16 +103,38 @@ module DecentJob
   @stopping = false
 
   class << self
+    # @return [Configuration] the active configuration. Replace it with
+    #   {.configure}, not by mutating it while workers run.
     attr_reader :configuration
 
+    # @return [Logger] {Configuration#logger} of the active configuration
     def logger
       configuration.logger
     end
 
+    # Sets an explicit logger on the active configuration.
+    #
+    # @param logger [Logger, nil] the logger, or nil to fall back to the Rails
+    #   or default logger
+    # @return [Logger, nil] the argument
+    # @note Changes the active configuration in place, without validation.
     def logger=(logger)
       configuration.logger = logger
     end
 
+    # Changes the configuration through a validated copy.
+    #
+    # The block runs without the registry lock, so it can inspect the runtime.
+    # The copy is published only when the block returns and validation passes.
+    #
+    # @yieldparam config [Configuration] a copy of the active configuration
+    # @return [Configuration] the published configuration
+    # @raise [ArgumentError] when the global database is already open, or the
+    #   copy is invalid
+    # @raise [LifecycleInProgress] when another transition is active
+    # @raise [ForkInProgress] while the runtime prepares to fork
+    # @note Increments the lifecycle revision. Running workers keep the
+    #   settings they copied at construction.
     def configure
       with_runtime_transition(:configuring) do
         candidate = runtime_mutex.synchronize do
@@ -98,6 +151,21 @@ module DecentJob
       end
     end
 
+    # Returns the global connection pool, and opens it on first use.
+    #
+    # The pool size comes from {Configuration#pool_size}. Each call validates
+    # the configuration outside the lock, because cron validation can load
+    # application classes. When the configuration changes during validation,
+    # the call starts over with the new one.
+    #
+    # @param automatic [Boolean] true for automatic starts: return nil instead
+    #   of raising during a transition, stop, or fork, or when no
+    #   database_url is set
+    # @return [Database, nil] the pool, or nil for a skipped automatic call
+    # @raise [ArgumentError] when no database_url is set or the configuration
+    #   is invalid
+    # @raise [LifecycleInProgress] when a transition is active and no pool is
+    #   open yet
     def database(automatic: false)
       loop do
         candidate = runtime_mutex.synchronize do
@@ -119,30 +187,69 @@ module DecentJob
       end
     end
 
+    # Applies all pending schema migrations to the global database.
+    #
+    # @return [Schema] the schema object
+    # @raise [PG::Error] when a migration fails
     def install
       Schema.new(database).migrate
     end
 
+    # Tells whether every packaged migration is installed.
+    #
+    # @param database [Database, nil] the pool to check, or nil for the global
+    #   database
+    # @return [Boolean] false when the metadata table or a version is missing
     def migrated?(database: nil)
       Schema.new(database || self.database).migrated?
     end
 
+    # Pauses one queue, job class, or label. See {Pauses#pause}.
+    #
+    # @param target [Hash] exactly one of queue:, job_class:, or label:
+    # @return [true]
+    # @note Claims honor pauses only when {Configuration#enable_pauses} is true.
     def pause(**target)
       Pauses.new(database).pause(**target)
     end
 
+    # Removes a pause and wakes workers. See {Pauses#unpause}.
+    #
+    # @param target [Hash] exactly one of queue:, job_class:, or label:
+    # @return [true]
     def unpause(**target)
       Pauses.new(database).unpause(**target)
     end
 
+    # @return [Hash{Symbol => Array<String>}] the paused :queues,
+    #   :job_classes, and :labels; see {Pauses#paused}
     def paused
       Pauses.new(database).paused
     end
 
+    # @param target [Hash] at most one of queue:, job_class:, label:, or
+    #   job_instance:; see {Pauses#paused?}
+    # @return [Boolean, Symbol] whether the target, or anything, is paused
     def paused?(**target)
       Pauses.new(database).paused?(**target)
     end
 
+    # Starts the default worker and, when enabled, configured cron.
+    #
+    # The default worker uses {Configuration#worker_options} and the global
+    # database. Calling start again reuses the same worker. An explicit start
+    # opens the global stop gate, clears the all-database cron stop, and
+    # clears the cron stop of the global database.
+    #
+    # @return [Worker, false] the worker, or false while an earlier shutdown
+    #   still drains or when a newer lifecycle operation won
+    # @raise [ArgumentError] when no database_url is set, the configuration is
+    #   invalid, or a cron job class does not use a DecentJob adapter on the
+    #   global database
+    # @raise [ForkInProgress] while the runtime prepares to fork
+    # @raise [LifecycleInProgress] when a transition is active
+    # @note Registers an at_exit hook that calls {.shutdown} with
+    #   {Configuration#shutdown_timeout}.
     def start
       revision = synchronize_resource_start do
         return false if @stopping && (@workers + @cron_managers.values).any? { |resource| !resource.shutdown? }
@@ -165,27 +272,48 @@ module DecentJob
       worker
     end
 
+    # @return [Boolean] true when at least one worker is registered, every
+    #   registered worker is started, and no global stop is in effect
     def started?
       workers = runtime_mutex.synchronize { @stopping ? [] : @workers.dup }
       !workers.empty? && workers.all?(&:started?)
     end
 
+    # @return [Boolean] true when at least one worker is registered, every
+    #   registered worker is connected, and no global stop is in effect
     def connected?
       workers = runtime_mutex.synchronize { @stopping ? [] : @workers.dup }
       !workers.empty? && workers.all?(&:connected?)
     end
 
+    # @return [Hash{Symbol => Object}] scheduler statistics summed over all
+    #   registered workers; see {Stats.aggregate}
     def stats
       workers = runtime_mutex.synchronize { @workers.dup }
       Stats.aggregate(workers.flat_map { |worker| worker.stats.fetch(:schedulers) })
     end
 
+    # Tells whether every registered worker is idle.
+    #
+    # @param duration [Numeric, nil] also require this many seconds without
+    #   execution activity, or nil to skip the time check
+    # @return [Boolean] true also when no worker is registered
+    # @raise [ArgumentError] when duration is negative or not finite
     def idle?(duration = nil)
       Configuration.validate_idle_timeout!(duration)
       workers = runtime_mutex.synchronize { @workers.dup }
       workers.all? { |worker| worker.idle?(duration) }
     end
 
+    # Sets {Configuration#lower_thread_priority} and applies it to every
+    # registered worker.
+    #
+    # A job that already runs keeps its priority; the change applies from the
+    # next attempt.
+    #
+    # @param value [Boolean] true to run attempts at priority -3
+    # @return [Boolean] the argument
+    # @raise [ArgumentError] unless the value is true or false
     def lower_thread_priority=(value)
       @thread_priority_mutex.synchronize do
         workers = runtime_mutex.synchronize do
@@ -197,14 +325,36 @@ module DecentJob
       value
     end
 
+    # @return [Array<CronManager>] the registered cron managers, one per
+    #   database
     def cron_managers
       runtime_mutex.synchronize { @cron_managers.values.dup }
     end
 
+    # @return [Boolean] true when any registered cron manager runs
     def cron_running?
       cron_managers.any?(&:running?)
     end
 
+    # Starts the configured cron entries for one database.
+    #
+    # Repeated calls reuse the manager registered for the database. An
+    # explicit call works also when {Configuration#enable_cron} is false, and
+    # clears earlier cron stops for that database.
+    #
+    # @param database [Database, nil] the pool, or nil for the global database
+    # @param automatic [Boolean] true for adapter wakeups: skip silently
+    #   during a transition or after a stop
+    # @param expected_revision [Integer, nil] give up unless the lifecycle
+    #   revision still equals this value; {.start} passes its own revision
+    # @return [CronManager, false, nil] the result of {CronManager#start},
+    #   false when a newer lifecycle operation won, or nil when an automatic
+    #   start was skipped
+    # @raise [ArgumentError] when a cron entry is invalid, or a cron job class
+    #   does not use a DecentJob adapter on the same database
+    # @raise [ForkInProgress] while the runtime prepares to fork
+    # @raise [LifecycleInProgress] when a transition is active, for explicit
+    #   calls
     def start_cron(database: nil, automatic: false, expected_revision: nil)
       revision = synchronize_resource_start(automatic: automatic || !expected_revision.nil?) do
         return false if expected_revision && expected_revision != (@lifecycle_revision || 0)
@@ -241,11 +391,32 @@ module DecentJob
       end
     end
 
+    # Stops registered cron managers and waits for them to drain.
+    #
+    # Automatic starts do not reopen stopped cron. An explicit {.start_cron}
+    # or {.start} does. {Adapter#restart} clears only the stop of its own
+    # database.
+    #
+    # @param timeout [Numeric, nil] seconds for the whole drain; nil waits
+    #   indefinitely, 0 signals without waiting
+    # @param database [Database, nil] stop only this database's manager, or
+    #   nil for all of them
+    # @param force [Boolean] true interrupts callbacks still running at the
+    #   deadline
+    # @return [Boolean] true when every selected manager drained
+    # @raise [ArgumentError] when timeout is negative or not finite
     def stop_cron(timeout: nil, database: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
       ResourceShutdown.wait_all(begin_cron_shutdown(database: database), deadline: deadline, force: force, timeout: timeout)
     end
 
+    # Marks cron as stopped and signals the selected managers without waiting.
+    #
+    # @param database [Database, nil] one database, or nil for all
+    # @return [Array<ResourceShutdown>] one handle per signaled manager
+    # @note Runs under the registry lock. {Adapter#begin_shutdown} calls it
+    #   with the lock already held.
+    # @api private
     def begin_cron_shutdown(database: nil)
       operation = lambda do
         @lifecycle_revision = (@lifecycle_revision || 0) + 1
@@ -261,21 +432,55 @@ module DecentJob
       runtime_mutex.owned? ? operation.call : runtime_mutex.synchronize(&operation)
     end
 
+    # @return [Boolean] the global stop gate; it stays true after the drain
+    #   finishes, so it does not mean resources still run
     def stopping?
       runtime_mutex.owned? ? @stopping : runtime_mutex.synchronize { @stopping }
     end
 
+    # Tells whether every registered worker and cron manager has drained.
+    #
+    # The registry is copied under the lock and inspected outside it, so a
+    # concurrent start can change the answer at once. Resources that the
+    # application built directly do not count.
+    #
+    # @return [Boolean] true also before any resource started
     def shutdown?
       resources = runtime_mutex.synchronize { @cron_managers.values + @workers }
       resources.all?(&:shutdown?)
     end
 
+    # Stops all registered workers and cron managers and waits for them.
+    #
+    # Every resource gets its stop signal before the call waits on any of
+    # them. The stop gate stays closed after the call returns, also when the
+    # drain is incomplete.
+    #
+    # @param timeout [Numeric, nil] seconds for the whole drain; nil waits
+    #   indefinitely, 0 signals without waiting
+    # @param force [Boolean] true interrupts jobs and callbacks still running at
+    #   the deadline
+    # @return [Boolean] true when every resource drained, false when work
+    #   still runs; a later call can wait again
+    # @raise [ArgumentError] when timeout is negative or not finite
     def shutdown(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
       _revision, handles = begin_shutdown
       ResourceShutdown.wait_all(handles, deadline: deadline, force: force, timeout: timeout)
     end
 
+    # Stops, drains, and restarts all registered workers and cron managers.
+    #
+    # Workers that an adapter stopped on its own, and cron stopped for one
+    # database, stay stopped. They are still drained.
+    #
+    # @param timeout [Numeric, nil] seconds for the whole drain; nil waits
+    #   indefinitely, 0 signals without waiting
+    # @param force [Boolean] true interrupts work still running at the deadline
+    # @return [DecentJob, false] the module on success, or false when the
+    #   drain was incomplete, a newer lifecycle operation won, or a resource
+    #   refused to restart
+    # @raise [ArgumentError] when timeout is negative or not finite
     def restart(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
       revision, handles, restart_handles = begin_shutdown(restarting: true)
@@ -299,6 +504,14 @@ module DecentJob
       end
     end
 
+    # Closes the stop gate and signals every registered resource.
+    #
+    # @param restarting [Boolean] true also returns the handles to restart,
+    #   which leave out locally stopped workers and cron managers
+    # @return [Array(Integer, Array<ResourceShutdown>, Array<ResourceShutdown>)]
+    #   the new lifecycle revision, all handles, and the restart handles (nil
+    #   unless restarting)
+    # @api private
     def begin_shutdown(restarting: false)
       runtime_mutex.synchronize do
         @lifecycle_revision = (@lifecycle_revision || 0) + 1
@@ -315,15 +528,36 @@ module DecentJob
       end
     end
 
+    # Records that an adapter stopped its own worker, so global restart
+    # leaves it stopped.
+    #
+    # @param worker [Worker, nil] the worker; nil is ignored
+    # @return [Array<Worker>, nil]
+    # @note The caller must hold the registry lock.
+    # @api private
     def locally_stop_worker(worker)
       (@locally_stopped_workers ||= []).push(worker) if worker && !@locally_stopped_workers&.include?(worker)
     end
 
+    # Clears the local stop of an adapter's worker and its database's cron.
+    #
+    # @param worker [Worker, nil] the worker to resume
+    # @param database [Database, nil] the database whose cron stop to clear
+    # @return [Object, nil]
+    # @note The caller must hold the registry lock.
+    # @api private
     def locally_resume_worker(worker, database: nil)
       @locally_stopped_workers&.delete(worker)
       @cron_stopped_databases.delete(database) if database
     end
 
+    # Registers and starts an adapter's worker as an automatic start.
+    #
+    # @param worker [Worker] the adapter's worker
+    # @return [Worker, false, nil] the {Worker#start} result, or nil when the
+    #   global stop gate is closed or a transition is active
+    # @raise [ForkInProgress] while the runtime prepares to fork
+    # @api private
     def start_worker(worker)
       synchronize_resource_start(automatic: true) do
         return if @stopping
@@ -333,6 +567,21 @@ module DecentJob
       end
     end
 
+    # Drains the runtime and restores a fresh configuration.
+    #
+    # Steps: shut down all registered resources with no deadline, retire
+    # every registered adapter, close the global pool, clear the registry,
+    # and build a new {Configuration} from the current environment.
+    #
+    # @return [Boolean] true on success; false when resources did not drain
+    #   (for example when called from inside an owned callback), or when a
+    #   worker, cron manager, process tracker, or standalone execution that the
+    #   application owns still uses the global pool
+    # @raise [LifecycleInProgress] when another transition is active
+    # @raise [ForkInProgress] while the runtime prepares to fork
+    # @raise [Exception] a shutdown or adapter failure. When the resources
+    #   still drained, the reset finishes before the error is raised.
+    # @note Retired adapters cannot restart. Build new adapters after reset.
     def reset!
       with_runtime_transition(:resetting) do
         failure = nil
@@ -381,6 +630,17 @@ module DecentJob
       end
     end
 
+    # Deletes preserved jobs, attempts, and batches that finished long ago.
+    #
+    # @param older_than [Numeric, nil] age in seconds from finished_at, or nil
+    #   for {Configuration#cleanup_preserved_jobs_before_seconds_ago}
+    # @param in_batches_of [Integer] rows per delete page
+    # @param include_discarded [Boolean] false keeps discarded jobs and batches
+    # @param database [Database, nil] the pool, or nil for the global database
+    # @param stopping [#call, nil] returns true to stop between pages; nil uses
+    #   the stop check of the current job, if any
+    # @return [Integer] the number of deleted jobs, attempts, and batches
+    # @raise [ArgumentError] for invalid options
     def cleanup_preserved_jobs(older_than: nil, in_batches_of: 1000, include_discarded: configuration.cleanup_discarded_jobs?, database: nil, stopping: nil)
       stopping = Current.execution&.fetch(:stopping, nil) if stopping.nil?
       Cleaner.new(database: database || self.database).cleanup(
@@ -389,6 +649,17 @@ module DecentJob
       )
     end
 
+    # Runs due jobs on the calling thread until none is left.
+    #
+    # Immediate retries run in the same call. Future jobs stay pending.
+    # PostgreSQL decides which jobs are due.
+    #
+    # @param queues [String] the queue selection, "*" for all queues
+    # @param limit [Integer, nil] the maximum number of attempts, or nil for
+    #   no limit; 0 returns without opening the database
+    # @return [Integer] the number of attempts run
+    # @raise [ArgumentError] when limit is negative or not an Integer
+    # @raise [Exception] the unhandled error of a job, which propagates
     def perform_inline(queues: "*", limit: nil)
       if !limit.nil? && (!limit.is_a?(Integer) || limit.negative?)
         raise ArgumentError, "limit must be a nonnegative integer or nil"
@@ -403,6 +674,8 @@ module DecentJob
 
     private
 
+    # Scans ObjectSpace because application-owned resources are not in the
+    # registry. reset! must not close a pool that one of them still uses.
     def manually_owned_database?(pool)
       ObjectSpace.each_object(Worker).any? { |worker| worker.database.equal?(pool) && !worker.shutdown? } ||
         ObjectSpace.each_object(ProcessTracker).any? { |tracker| tracker.database.equal?(pool) && !tracker.shutdown? } ||
@@ -412,6 +685,8 @@ module DecentJob
         end
     end
 
+    # Registers at most one at_exit shutdown per process. Callers hold the
+    # registry lock.
     def register_exit_hook
       return if @exit_hook_registered
       at_exit { DecentJob.shutdown(timeout: DecentJob.configuration.shutdown_timeout) }
@@ -420,6 +695,7 @@ module DecentJob
   end
 end
 
+# Log lifecycle and job events through the configured logger.
 DecentJob::LogSubscriber.attach_to(:decent_job)
 
 # When Active Job is already loaded, register the adapter name. The adapter
@@ -428,4 +704,5 @@ if defined?(ActiveJob::QueueAdapters)
   ActiveJob::QueueAdapters.autoload :DecentJobAdapter, "active_job/queue_adapters/decent_job_adapter"
 end
 
+# Load the Railtie now, or when a Rails application boots later.
 DecentJob.load_railtie_with_rails

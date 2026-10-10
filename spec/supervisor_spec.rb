@@ -127,6 +127,25 @@ describe "supervisor" do
   ensure
     [reader, writer, error_reader, error_writer].compact.each { |io| io.close unless io.closed? }
   end
+  it "does not report a child failure during shutdown as a timeout" do
+    @config.subprocesses = 1
+    reader, writer = IO.pipe
+    @config.on_thread_error = ->(_) {}
+    DecentJob.before_subprocess_boot {
+      Signal.trap("TERM") { raise "child failed while stopping" }
+      writer.write("booting")
+      sleep 10
+    }
+    supervisor = DecentJob::Supervisor.new(@config)
+    supervisor.start(on_start: -> {
+      reader.read(7)
+      Process.kill("TERM", Process.pid)
+    })
+    _(supervisor.shutdown_timed_out).must_equal false
+    _(supervisor.subprocesses).must_be_empty
+  ensure
+    [reader, writer].compact.each { |io| io.close unless io.closed? }
+  end
   it "honors a stop received before the child resets inherited supervisor traps" do
     @config.subprocesses = 1
     reader, writer = IO.pipe

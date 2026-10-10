@@ -50,7 +50,7 @@ describe "database runtime logging" do
     job = RuntimeLoggingJob.perform_later
     DecentJob::Performer.new(database: database).perform_one(job_id: job.provider_job_id)
     _(DecentJob.cleanup_preserved_jobs(database: database, older_than: 0)).must_equal 2
-    _(@output.string).must_match(/\[DecentJob\] DecentJob destroyed 2 preserved job execution records finished before/)
+    _(@output.string).must_match(/\[DecentJob\] DecentJob destroyed 2 preserved records \(1 job, 1 execution, 0 batches\) finished before/)
     _(DecentJob::Store.new(database).find(job.provider_job_id)).must_be_nil
   end
 

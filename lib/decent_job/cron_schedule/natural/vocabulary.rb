@@ -3,6 +3,14 @@
 module DecentJob
   class CronSchedule
     class Natural
+      # Word lists and token patterns of the natural grammar, mixed into
+      # {Natural}. The constants are frozen and safe to share across threads.
+      #
+      # The lists follow the reference grammar, including its quirks: hour
+      # names stop at "twelve", "oh" and "midnight" mean hour 0, and "21th"
+      # is a valid ordinal. Name lookups use the matched text as it is, so a
+      # name with other capitals (such as "Noon") matches the pattern but has
+      # no value.
       module Vocabulary
         SMALL_NUMBERS = %w[zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen].freeze
         MINUTE_NAMES = begin
@@ -33,8 +41,11 @@ module DecentJob
         ORDINAL_PATTERN = /#{ORDINALS.keys.join("|")}/i
         HOUR_PATTERN = /#{HOUR_NAMES.keys.join("|")}/i
         MINUTE_PATTERN = /#{MINUTE_NAMES.keys.join("|")}/i
+        # Joins items of one list: a comma, "and", or "or".
         JOIN = /[ \t]*(?:,[ \t]*)?(?:(?:and|or)[ \t]+|,[ \t]*)/i
+        # Joins clauses: "and" or "or", without a comma.
         CONJUNCTION = /[ \t]*(?:and|or)[ \t]+/i
+        # Separates the ends of a range: "-", "to", or "through".
         RANGE = /[ \t]*-[ \t]*|[ \t]+(?:to|through)[ \t]+/i
       end
     end

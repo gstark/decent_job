@@ -76,7 +76,7 @@ DecentJob.perform_all_later(job_a, job_b)
 - [x] `retry_on` must support `wait:` (number, proc, or `:polynomially_longer`), `attempts:` (integer or `:unlimited`), `queue:`, `priority:`, `jitter:`, and a block for the exhausted case.
 - [x] `discard_on` and `rescue_from` must match Active Job semantics, including the order of the handlers.
 - [x] Class settings must inherit to subclasses without ActiveSupport.
-- [x] `perform_later` must return the job on success. It must return `false` when the enqueue fails, and set `enqueue_error`.
+- [x] `perform_later` must return the job on success. It must return `false` when the enqueue fails. It must set `enqueue_error` when the adapter or a concurrency limit rejects the job, and leave it `nil` when a callback aborts.
 - [x] `perform_now` must run the callbacks and the retry handlers, as in Active Job.
 
 Phase 2 verification: 1,848 runs, 8,655 assertions, 0 failures, 4 skips. Standard passed. The GlobalID argument spec was added after that run and passes on its own.

@@ -3,13 +3,53 @@
 require "decent_job/concurrency_claims"
 
 module DecentJob
+  # Enforces enqueue-time concurrency limits and throttles, and takes the
+  # scope locks that enqueue paths need.
+  #
+  # {Adapter} wraps each insert in {#enqueue}. {Batch}, {BatchStore}, and
+  # {CronEntry} call {#lock_scopes} before they persist captured jobs.
+  # {Job#retry_job} passes {#scopes_for} to {ConcurrencyClaims#synchronize}.
+  # Perform-time limits belong to {PerformControls}.
+  #
+  # Scope locks use the same advisory key as {ConcurrencyClaims}. They are
+  # transaction-scoped, so they hold until the enclosing transaction ends.
+  # Locks are always taken in sorted scope order to avoid deadlocks.
+  #
+  # See the "Labels, concurrency, and pauses" section of README.md.
   class ConcurrencyControls
+    # Raised by {#enqueue} when a limit or throttle rejects the job.
+    # {JobExtensions::Concurrency} rescues it and makes enqueue return false.
     class AdmissionRejected < StandardError; end
 
+    # @param job [Object] a job instance
+    # @return [Boolean] true when bulk enqueue must admit the job on its own:
+    #   an Active Job class that includes the concurrency extension, or a
+    #   native class that sets limits or rules
+    def self.controlled?(job)
+      job.respond_to?(:decent_job_concurrency_controlled?) && job.decent_job_concurrency_controlled?
+    end
+
+    # @param database [Database] the pool for all queries
     def initialize(database)
       @database = database
     end
 
+    # Checks the job's enqueue rules and runs the insert in the same
+    # transaction, under the scope locks.
+    #
+    # The lock serializes concurrent enqueues in a scope, so the count and the
+    # insert cannot race.
+    #
+    # @param job [Object] the job instance
+    # @yield the insert. It runs only when every rule admits the job.
+    # @return [Object] the block result
+    # @raise [AdmissionRejected] when a limit or throttle is exceeded
+    # @raise [EnqueueError] when a PG::Error occurs, also from the block
+    # @note Skips all checks when the job reports
+    #   decent_job_enqueue_concurrency_enabled? as false, for example when
+    #   its concurrency enqueue callback did not run.
+    # @note Emits enqueue_concurrency_limit_exceeded.decent_job or
+    #   enqueue_concurrency_throttle_exceeded.decent_job before a rejection.
     def enqueue(job)
       return yield if job.respond_to?(:decent_job_enqueue_concurrency_enabled?) && !job.decent_job_enqueue_concurrency_enabled?
 
@@ -25,6 +65,9 @@ module DecentJob
       end
     end
 
+    # @param jobs [Array<Object>] job instances
+    # @return [Array<String>] the concurrency scopes of jobs whose enqueue
+    #   concurrency is enabled. The list can contain duplicates.
     def scopes_for(jobs)
       jobs.flat_map do |job|
         next [] unless job.respond_to?(:decent_job_resolved_concurrency_rules)
@@ -33,6 +76,12 @@ module DecentJob
       end
     end
 
+    # Takes the scope locks for jobs in sorted order.
+    #
+    # @param jobs [Array<Object>] job instances
+    # @return [void]
+    # @note Call inside a {Database#transaction}. Outside a transaction each
+    #   lock releases as soon as its statement ends.
     def lock_scopes(jobs)
       @database.with_connection do |connection|
         scopes_for(jobs).uniq.sort.each do |scope|
@@ -43,6 +92,13 @@ module DecentJob
 
     private
 
+    # Counts unfinished jobs in the scope against enqueue_limit or total_limit.
+    # When an enqueue_limit is configured, executing jobs do not count. This
+    # holds even when a callable enqueue_limit returns nil and total_limit is
+    # used instead, as in GoodJob's enqueue_limit_flag. The
+    # "all" kind matches every job in the table. The throttle counts
+    # decent_jobs rows created in the last throttle window, so deleted job
+    # records do not count.
     def check_enqueue(connection, rule, job)
       scope = case rule.kind
       when "label" then "labels @> ARRAY[$1]::text[]"

@@ -60,6 +60,14 @@ describe "DecentJob support layer" do
     [first, second, third].compact.each { |subscription| DecentJob::Notifications.unsubscribe(subscription) }
   end
 
+  it "keeps the block exception when a subscriber also raises" do
+    subscription = DecentJob::Notifications.subscribe("both.decent_job") { raise ArgumentError, "subscriber" }
+    error = _ { DecentJob::Notifications.instrument("both.decent_job") { raise KeyError, "block" } }.must_raise KeyError
+    _(error.message).must_equal "block"
+  ensure
+    DecentJob::Notifications.unsubscribe(subscription) if subscription
+  end
+
   it "forwards events and block exceptions to ActiveSupport subscribers" do
     events = []
     subscription = ActiveSupport::Notifications.subscribe("forward.decent_job") { |event| events << event }

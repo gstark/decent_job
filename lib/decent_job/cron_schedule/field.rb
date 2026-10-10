@@ -2,7 +2,20 @@
 
 module DecentJob
   class CronSchedule
-    # Parses bounded cron fields without permitting unbounded range expansion.
+    # Parses one numeric cron field into its allowed values. Parsing is
+    # bounded: range expansion stops after 2 * max + 1 steps, and steps have at
+    # most two digits.
+    #
+    # {CronSchedule} creates one field per part while it parses, and also uses
+    # a weekday field to test whether a trailing part is a zone.
+    #
+    # Accepted syntax: "*", values, names (jan-dec, sun-sat), ranges, steps,
+    # and lists. Ranges wrap, so hours "22-2" gives 22, 23, 0, 1, 2. Hour 24
+    # means 0 and weekday 7 means 0. Month days accept negative values and
+    # "L" or "last" (-1). Weekdays also accept "#n" (nth weekday, -1 or "L" for
+    # the last) and "%m+o" (every m weeks with offset o).
+    #
+    # See docs/cron-compatibility.md.
     class Field
       MONTHS = %w[jan feb mar apr may jun jul aug sep oct nov dec].freeze
       WEEKDAYS = %w[sun mon tue wed thu fri sat].freeze
@@ -14,12 +27,25 @@ module DecentJob
         weekdays: "(?:[0-7]|#{WEEKDAYS.join("|")})"
       }.freeze
 
+      # @param kind [Symbol] a key of {BOUNDS}
+      # @param expression [String] the field text
+      # @raise [KeyError] when +kind+ is unknown
+      # @api private
       def initialize(kind, expression)
         @kind = kind
         @min, @max = BOUNDS.fetch(kind)
         @expression = expression
       end
 
+      # Expands the field.
+      #
+      # @return [Array<Integer>, Array<Array>, nil] sorted unique values; for
+      #   weekdays, [day] or [day, modifier] pairs where the modifier is an
+      #   Integer for "#" or [modulo, offset] for "%". Nil means any value. A
+      #   "*" or a full range with step 1 anywhere in a non-weekday list gives nil.
+      # @raise [ArgumentError] when the field is empty or invalid, or a step or
+      #   modulo is zero
+      # @api private
       def values
         raise ArgumentError, "empty cron field" if @expression.empty?
         parts = @expression.split(",").reject(&:empty?)
@@ -70,6 +96,8 @@ module DecentJob
         expanded.each_with_index.filter_map { |value, index| value if index % (step || 1) == 0 }
       end
 
+      # Weekday ranges wrap past Saturday ("fri-mon"). A step without an end
+      # covers only the start day, unlike the other kinds.
       def weekday_values(first, last, step)
         values = if step
           ((first || 0)..(last || first || 6)).step(step).to_a

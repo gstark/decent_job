@@ -1,13 +1,34 @@
 # frozen_string_literal: true
 
 module DecentJob
+  # Installs and checks DecentJob's SQL schema.
+  #
+  # {DecentJob.install}, {DecentJob.migrated?}, and the `migrate` CLI command
+  # create it. Migrations are the SQL files in db/migrations, applied in file
+  # name order. The integer prefix of each file name is its version, recorded
+  # in the decent_job_schema_migrations table. Tables resolve through the
+  # connection's search_path, so one database can hold separate installations
+  # in separate schemas.
+  #
+  # The object holds no connection. Each call borrows one from the
+  # {Database} pool for one transaction.
   class Schema
+    # Absolute path of the packaged SQL migrations.
     MIGRATIONS_PATH = File.expand_path("../../db/migrations", __dir__)
 
+    # @param database [Database] the pool that owns the target schema
     def initialize(database)
       @database = database
     end
 
+    # Tells whether every packaged migration version is recorded.
+    #
+    # Extra versions in the table, for example from a newer gem, do not make
+    # the result false. The check never creates tables.
+    #
+    # @return [Boolean] false when the metadata table or any packaged version
+    #   is missing
+    # @raise [PG::Error] for database errors other than a missing metadata table
     def migrated?
       # A savepoint protects callers' transactions when metadata is absent or
       # concurrently dropped. Resolve the table through migrate's search_path.
@@ -21,6 +42,14 @@ module DecentJob
       false
     end
 
+    # Applies every packaged migration that is not recorded yet.
+    #
+    # @return [Schema] self
+    # @raise [PG::Error] when a migration fails; the transaction rolls back
+    #   all migrations from this call
+    # @note All migrations run in one transaction. A transaction-scoped
+    #   advisory lock, keyed by the current schema name, serializes concurrent
+    #   installers, so two processes cannot apply the same version.
     def migrate
       @database.transaction do |connection|
         # Serialize installation before even creating the migrations table.

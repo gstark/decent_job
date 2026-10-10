@@ -16,6 +16,16 @@ describe "configuration diagnostics" do
     assert_same config, config.validate!
   end
 
+  it "returns copies of error messages" do
+    config = DecentJob::Configuration.new
+    config.enable_cron = nil
+    refute config.valid?
+    config.errors[:enable_cron] << "changed"
+    config.errors[:missing] << "added"
+    assert_equal ["must be true or false"], config.errors[:enable_cron]
+    assert_empty config.errors[:missing]
+  end
+
   it "collects independent deferred errors in one pass" do
     config = DecentJob::Configuration.new
     config.handled_exceptions = [Object]
@@ -26,12 +36,14 @@ describe "configuration diagnostics" do
     config.shutdown_timeout = -1
     config.on_thread_error = false
     config.enable_cron = nil
+    config.enable_listen_notify = "yes"
+    config.enable_pauses = 1
     config.cron_graceful_restart_period = 0
     config.preserve_job_records = :unknown
     config.cron = []
     assert_respond_to config, :valid?
     refute config.valid?
-    fields = %i[handled_exceptions retry_on_unhandled_error execution_mode queues max_threads shutdown_timeout on_thread_error enable_cron cron_graceful_restart_period preserve_job_records cron]
+    fields = %i[handled_exceptions retry_on_unhandled_error execution_mode queues max_threads shutdown_timeout on_thread_error enable_cron enable_listen_notify enable_pauses cron_graceful_restart_period preserve_job_records cron]
     assert_equal fields.sort, config.errors.to_h.keys.sort
     fields.each { |field| assert config.errors[field].all? { |message| message.is_a?(String) } }
     error = assert_raises(ArgumentError) { config.validate! }

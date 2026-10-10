@@ -4,11 +4,32 @@ require "socket"
 
 module DecentJob
   class ProbeServer
+    # The default probe handler: a minimal HTTP/1.x server on Ruby sockets.
+    #
+    # {ProbeServer} creates it and forwards start, stop, and close_socket.
+    #
+    # Ownership: one serving thread accepts and answers one connection at a
+    # time. The listen backlog is 16. The process that called {#start} owns
+    # the thread; @pid records it. The mutex guards the sockets and the
+    # stopping flag, so {#stop} can close a socket that the serving thread is
+    # blocked on.
+    #
+    # Limits: request headers up to Response::MAX_HEADER_BYTES and 100 lines,
+    # no request body (a nonzero Content-Length or any Transfer-Encoding is
+    # a 400), and separate read and write deadlines per connection. HEAD
+    # responses omit the body.
     class SimpleHandler
+      # Raised inside the handler for a malformed or slow request; answered with 400.
       class BadRequest < StandardError; end
 
+      # @return [Integer] the bound port after {#start}, else the configured port
       attr_reader :port
 
+      # @param app [#call] the probe app
+      # @param port [Integer] TCP port, 0 for an OS-chosen port
+      # @param request_timeout [Numeric] seconds to read the request headers
+      # @param response_timeout [Numeric] seconds to write the response
+      # @param report [#call] receives app errors and unexpected socket errors
       def initialize(app, port:, request_timeout:, response_timeout:, report:)
         @app = app
         @configured_port = port
@@ -19,6 +40,10 @@ module DecentJob
         @mutex = Mutex.new
       end
 
+      # Binds 0.0.0.0 and starts the serving thread.
+      #
+      # @return [SimpleHandler] self. Does nothing while the thread is alive.
+      # @raise [SystemCallError] when the bind fails
       def start
         @mutex.synchronize do
           return self if @thread&.alive?
@@ -32,10 +57,21 @@ module DecentJob
         self
       end
 
+      # @return [Boolean] true when this process owns a live serving thread and
+      #   no stop has started
       def running?
         @mutex.synchronize { @pid == Process.pid && !@stopping && !!@thread&.alive? }
       end
 
+      # Closes the listener and any open client, then joins the serving thread.
+      #
+      # Closing the listener makes a blocked accept raise IOError, which the
+      # serving thread treats as a normal stop.
+      #
+      # @param timeout [Numeric, nil] seconds to wait, or nil to wait forever
+      # @return [Boolean] true when the thread exited or this process does not
+      #   own it. False on timeout or when called from the serving thread (for
+      #   example, from the app).
       def stop(timeout: nil)
         thread = @mutex.synchronize do
           @stopping = true
@@ -47,8 +83,12 @@ module DecentJob
         !!thread.join(timeout)
       end
 
-      # In a forked child, only Ruby IO copies are closed. Never join or signal
-      # the parent's serving thread, and never shutdown(2) its shared socket.
+      # Closes this process's IO copies of the sockets.
+      #
+      # @return [SimpleHandler] self
+      # @note In a forked child, only Ruby IO copies are closed. Never join or
+      #   signal the parent's serving thread, and never shutdown(2) its shared
+      #   socket.
       def close_socket
         @mutex.synchronize do
           @stopping = true
@@ -64,6 +104,8 @@ module DecentJob
         @socket&.close unless @socket&.closed?
       end
 
+      # Serving thread body. A client accepted after stop began is closed at
+      # once. Socket errors after stop began are expected and not reported.
       def serve
         loop do
           listener = @mutex.synchronize { @stopping ? nil : @socket }
@@ -124,6 +166,8 @@ module DecentJob
         Response.error(500)
       end
 
+      # Reads headers with nonblocking reads under one deadline. Duplicate
+      # header names are a 400, because the env hash keeps only one value.
       def read_request(client)
         deadline = monotonic_time + @request_timeout
         input = +"".b
@@ -156,6 +200,8 @@ module DecentJob
         env
       end
 
+      # Gives up silently when the deadline passes, so a slow reader cannot
+      # hold the single serving thread.
       def write_response(client, bytes)
         deadline = monotonic_time + @response_timeout
         offset = 0

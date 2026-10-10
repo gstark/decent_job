@@ -38,6 +38,13 @@ class NativeLimitedJob < DecentJob::Base
   end
 end
 
+class NativeEnqueueCallbackJob < DecentJob::Base
+  before_enqueue { NativeExecution::EVENTS << [:before_enqueue, arguments.first] }
+
+  def perform(value)
+  end
+end
+
 class NativeBatchCallback < DecentJob::Base
   def perform(batch, params)
     NativeExecution::EVENTS << [:callback, batch.id, params.fetch(:event)]
@@ -166,5 +173,19 @@ describe "native job execution" do
     DecentJob.perform_all_later([NativeExecutionJob.new(5)])
     3.times { @performer.perform_one }
     _(NativeExecution::EVENTS.map { |event| event[1] }.sort).must_equal [3, 4, 5]
+  end
+
+  it "bulk enqueues uncontrolled native jobs without enqueue callbacks" do
+    jobs = [NativeEnqueueCallbackJob.new(1), NativeEnqueueCallbackJob.new(2)]
+    _(DecentJob.perform_all_later(jobs)).must_be_nil
+    _(jobs.map(&:provider_job_id).compact.size).must_equal 2
+    _(NativeExecution::EVENTS).must_be_empty
+  end
+
+  it "bulk enqueues controlled native jobs through their admission check" do
+    jobs = [NativeLimitedJob.new, NativeLimitedJob.new]
+    DecentJob.perform_all_later(jobs)
+    _(jobs.map(&:successfully_enqueued?)).must_equal [true, false]
+    _(jobs.last.enqueue_error).must_be_kind_of DecentJob::EnqueueError
   end
 end

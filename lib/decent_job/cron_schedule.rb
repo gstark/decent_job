@@ -6,16 +6,53 @@ require "decent_job/cron_schedule/natural"
 require "decent_job/cron_schedule/zone"
 
 module DecentJob
+  # Parses a cron expression and finds its occurrences. It accepts numeric
+  # cron with five or six fields (seconds first) and the natural-language
+  # phrases of {Natural}. It matches Fugit 1.12.1 and et-orbi 1.4.0, as
+  # pinned by GoodJob, except for the corrections in the doc.
+  #
+  # {CronEntry} parses its +cron+ param on each call; nothing caches the
+  # result. A schedule is immutable after parsing and is safe to share across
+  # threads. It reads +ENV["TZ"]+ and +Time.zone+ on each search, so it
+  # follows changes to them.
+  #
+  # Field values are sorted integer arrays, or nil for "any value". See
+  # {Field#values}. Weekdays are [day, modifier] pairs.
+  #
+  # Time zones: an optional last field names an IANA zone or a numeric
+  # offset. Without it, {Zone} uses the implicit local zone: a numeric +TZ+
+  # offset, then a +TZ+ IANA name, then +Time.zone+, then the native Ruby
+  # local zone. All field matching uses wall time in that zone. Month and day
+  # jumps land on local midnight through {Zone#at}. In a DST fold, that is
+  # the earlier instant. In a DST gap, it is the first instant after the gap.
+  # Hour, minute, and second steps add real seconds, so a skipped wall time
+  # never matches and a repeated wall time can match twice. {#next_at}
+  # suppresses the second match only when its wall time equals the search
+  # origin's wall time (see there).
+  #
+  # See docs/cron-compatibility.md.
   class CronSchedule
+    # Each alias expands to a five-field expression. A zone suffix can follow
+    # the alias.
     ALIASES = {
       "@yearly" => "0 0 1 1 *", "@annually" => "0 0 1 1 *", "@monthly" => "0 0 1 * *",
       "@weekly" => "0 0 * * 0", "@daily" => "0 0 * * *", "@midnight" => "0 0 * * *",
       "@noon" => "0 12 * * *", "@hourly" => "0 * * * *"
     }.freeze
+    # Longest length of each month, indexed by month number. February has 29
+    # so that a schedule for February 29 stays valid.
     MAXIMUM_MONTH_DAYS = [0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31].freeze
 
+    # @return [String] the expression as given for numeric input, or the
+    #   generated numeric cron for natural input
     attr_reader :original
 
+    # Parses an expression without raising.
+    #
+    # @param expression [String, CronSchedule, Object] the expression; a
+    #   schedule is returned as it is
+    # @return [CronSchedule, nil] the schedule, or nil when the input is not a
+    #   valid expression (also for a non-String, such as a Time)
     def self.parse(expression)
       return expression if expression.is_a?(self)
       new(expression)
@@ -23,6 +60,12 @@ module DecentJob
       nil
     end
 
+    # Parses numeric cron first. When that fails, it compiles the input with
+    # {Natural} and parses the result.
+    #
+    # @param expression [String] a numeric or natural-language expression
+    # @raise [ArgumentError] when the input is not a String or not a valid
+    #   expression, or when a natural phrase hits a reference error
     def initialize(expression)
       raise ArgumentError, "cron expression must be a string" unless expression.is_a?(String)
       @original = expression
@@ -36,11 +79,32 @@ module DecentJob
       end
     end
 
+    # Tests one instant against all fields in the schedule's zone. Subsecond
+    # parts are ignored. The fold suppression of {#next_at} does not apply.
+    #
+    # @param time [Time, #to_time] the instant to test
+    # @return [Boolean] true when every field matches
     def match?(time)
       local = @zone.local(time.to_time)
       includes?(@months, local.month) && day_matches?(local) && includes?(@hours, local.hour) && includes?(@minutes, local.min) && includes?(@seconds, local.sec)
     end
 
+    # Finds the first occurrence strictly after the origin, with one-second
+    # resolution.
+    #
+    # The search skips a candidate in a DST fold when its wall time in the
+    # schedule's zone equals the origin's wall time but has a different UTC
+    # offset. This stops "30 1 * * *" from firing again at 01:30 standard
+    # time right after it fired at 01:30 daylight time. The origin's wall time
+    # comes from the implicit local zone for a default search, and from
+    # +Time#getlocal+ (the process zone) for an explicit +after+. So with an
+    # explicit +after+, the skip applies only when the schedule's zone has
+    # the same wall time as the process zone.
+    #
+    # @param after [Time, #to_time, nil] the search origin, or nil for the
+    #   current time
+    # @return [Time] the occurrence as a UTC instant
+    # @raise [ArgumentError] when no occurrence is found within 2048 search steps
     def next_at(after: nil)
       source = (after || Time.now).to_time
       # Default searches originate in the implicit local zone before applying
@@ -73,6 +137,12 @@ module DecentJob
       raise ArgumentError, "cron expression has no reachable occurrence: #{@original.inspect}"
     end
 
+    # Returns the occurrences strictly inside +range+. Both ends are excluded,
+    # also for an inclusive range, as in the reference.
+    #
+    # @param range [Range<Time>] the time range
+    # @return [Array<Time>] UTC instants in ascending order
+    # @raise [ArgumentError] when a search finds no reachable occurrence
     def within(range)
       result = []
       cursor = range.begin
@@ -86,6 +156,9 @@ module DecentJob
 
     private
 
+    # Sets the zone and field values. Five fields get a "0" seconds field. A
+    # trailing "&" on the monthday or weekday field sets +@day_and+, which
+    # requires both day fields to match instead of either one.
     def parse_numeric(expression)
       normalized = expression.strip
       if normalized.start_with?("@")
@@ -109,6 +182,8 @@ module DecentJob
       compact_days
     end
 
+    # The last of six or seven parts is a zone only when it is not a valid
+    # weekday field, so "0 0 * * * 1" stays a six-field expression.
     def timezone_suffix?(part)
       Field.new(:weekdays, part.delete_suffix("&")).values
       false
@@ -120,6 +195,9 @@ module DecentJob
       values.nil? || values.include?(value)
     end
 
+    # Drops months that none of the month days can reach, and month days that
+    # no month can reach. It raises when nothing is left, so "0 0 30 2 *" fails
+    # at parse time instead of during a search.
     def compact_days
       return unless @months && @monthdays
       @months = @months.select { |month| @monthdays.any? { |day| day <= MAXIMUM_MONTH_DAYS[month] } }
@@ -127,6 +205,11 @@ module DecentJob
       raise ArgumentError, "cron expression has no possible calendar day" if @months.empty? || @monthdays.empty?
     end
 
+    # Negative month days count back from the last day (-1 is the last day).
+    # A weekday modifier is an Integer for "#" (nth weekday of the month,
+    # negative from the end) or [modulo, offset] for "%" (week number since
+    # Monday, December 31, 2018). With both day fields restricted, either
+    # one can match unless "&" was given.
     def day_matches?(time)
       last_day = Date.new(time.year, time.month, -1).day
       monthday = @monthdays.nil? || @monthdays.any? { |day| time.day == ((day < 0) ? last_day + day + 1 : day) }

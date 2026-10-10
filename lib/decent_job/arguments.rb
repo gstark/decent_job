@@ -7,9 +7,17 @@ require "uri"
 require "decent_job/support"
 
 module DecentJob
+  # Raised when a job argument or batch property cannot be encoded. It is an
+  # ArgumentError, as ActiveJob::SerializationError is.
   class SerializationError < ArgumentError; end
 
+  # Raised when stored arguments or batch properties cannot be decoded, for
+  # example when a serializer or GlobalID record is gone. It keeps the
+  # message and backtrace of the error that is being handled ($!), so raise it
+  # from a rescue block. {Integrations::Native#deserialization_error} returns
+  # this class.
   class DeserializationError < StandardError
+    # @param message [String] defaults to a message built from $!
     def initialize(message = "Error while trying to deserialize arguments: #{$!&.message}")
       super
       set_backtrace($!.backtrace) if $!
@@ -18,6 +26,21 @@ module DecentJob
 
   # Encodes job arguments as JSON-safe values. The markers match Active Job's,
   # so values that Active Job stored remain readable.
+  #
+  # {Base::Core#serialize} and {Base::Core#deserialize_arguments_if_needed}
+  # call it for native jobs. {BatchProperties} uses it for batch properties.
+  #
+  # Native values store DecentJob serializer names, for example
+  # "DecentJob::Arguments::SymbolSerializer". Reading also accepts the
+  # "ActiveJob::Serializers::*" names. Active Job cannot read the DecentJob
+  # names. ActiveSupport and GlobalID types are encoded only when the host
+  # has loaded them; this module never loads them.
+  #
+  # The serializer registry is process global. Register serializers at boot,
+  # before threads enqueue or run jobs, because registration is not
+  # synchronized.
+  #
+  # See the Arguments section of docs/native-jobs.md.
   module Arguments
     OBJECT_KEY = "_aj_serialized"
     GLOBALID_KEY = "_aj_globalid"
@@ -28,9 +51,17 @@ module DecentJob
       .flat_map { |key| [key, key.to_sym] }.freeze
 
     # A serializer handles one class. Its name is stored with each value.
+    # Used for the built-in serializers. Custom serializers can be any object
+    # with the same duck type.
     class Serializer
       attr_reader :name, :klass
 
+      # @param name [String] the name stored under "_aj_serialized"
+      # @param klass [Class, Proc] the handled class, or a Proc that returns
+      #   it or nil when the class is not loaded
+      # @param dump [Proc] value to Hash of extra keys
+      # @param load [Proc] stored Hash to value
+      # @param aliases [Array<String>] other names accepted when reading
       def initialize(name, klass, dump:, load:, aliases: [])
         @name = name
         @klass = klass
@@ -39,19 +70,26 @@ module DecentJob
         @load = load
       end
 
+      # @return [Array<String>] the name and its aliases
       def names
         [name, *@aliases]
       end
 
+      # @param argument [Object]
+      # @return [Boolean] true when argument is an instance of the class
       def serialize?(argument)
         resolved = klass.is_a?(Proc) ? klass.call : klass
         !resolved.nil? && argument.is_a?(resolved)
       end
 
+      # @param argument [Object]
+      # @return [Hash{String => Object}] the value with the "_aj_serialized" marker
       def serialize(argument)
         {OBJECT_KEY => name}.merge(@dump.call(argument))
       end
 
+      # @param hash [Hash{String => Object}] a value from {#serialize}
+      # @return [Object]
       def deserialize(hash)
         @load.call(hash)
       end
@@ -66,8 +104,16 @@ module DecentJob
       # ActiveJob::Serializers so application serializers keep working.
       attr_accessor :fallback
 
+      # Registers serializers.
+      #
       # Custom serializers respond to name, serialize?, serialize and
       # deserialize. Later serializers take precedence.
+      #
+      # @param serializers [Array<#name, #serialize?, #serialize, #deserialize>]
+      #   nested arrays are flattened. A serializer that responds to names is
+      #   also found by its aliases.
+      # @return [void]
+      # @note Not thread safe. Call it at boot.
       def add_serializers(*serializers)
         serializers.flatten.each do |serializer|
           @serializers.unshift(serializer)
@@ -76,16 +122,35 @@ module DecentJob
         end
       end
 
+      # @param arguments [Array] the perform arguments
+      # @return [Array] JSON-safe values
+      # @raise [SerializationError] when a value has no serializer
       def serialize(arguments)
         arguments.map { |argument| serialize_argument(argument) }
       end
 
+      # @param arguments [Array] values from {.serialize}
+      # @return [Array] the Ruby values
+      # @raise [DeserializationError] when any value fails to load. The
+      #   original error is in its message and backtrace.
       def deserialize(arguments)
         arguments.map { |argument| deserialize_argument(argument) }
       rescue
         raise DeserializationError
       end
 
+      # Encodes one value.
+      #
+      # Plain strings pass through. A String subclass goes to the serializers
+      # and falls back to the plain string. Hashes record which keys were
+      # symbols and whether the hash is a ruby2_keywords hash, so perform gets
+      # keywords back. An object with decent_job_global_id (a {Batch}) is
+      # stored as a GlobalID without the globalid gem.
+      #
+      # @param argument [Object]
+      # @return [Object] a JSON-safe value
+      # @raise [SerializationError] when the value has no serializer, a hash
+      #   uses a reserved key, or a key is not a String or Symbol
       def serialize_argument(argument)
         case argument
         when nil, true, false, Integer, Float
@@ -114,6 +179,8 @@ module DecentJob
 
       private
 
+      # Tries the registry, then the fallback. fallback_value is returned
+      # when neither handles the value, also when the fallback raises.
       def serialize_object(argument, fallback_value: nil)
         serializer = @serializers.find { |candidate| candidate.serialize?(argument) }
         return serializer.serialize(argument) if serializer
@@ -208,6 +275,7 @@ module DecentJob
       end
     end
 
+    # Builds a built-in serializer that also reads the Active Job name.
     def self.builtin(name, klass, dump:, load:)
       Serializer.new("DecentJob::Arguments::#{name}", klass, aliases: ["ActiveJob::Serializers::#{name}"], dump: dump, load: load)
     end

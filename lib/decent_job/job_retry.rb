@@ -3,12 +3,38 @@
 module DecentJob
   # Run enqueue callbacks before locking job rows, then persist their captured
   # payload and children together under the complete set of concurrency locks.
+  #
+  # JobRetry prepares an operator retry of one discarded job. {Job#retry_job}
+  # and {BatchStore} call {#prepare} inside a {Database#transaction}, then
+  # lock scopes, call {Store#reschedule} with the returned context, and
+  # enqueue the buffered child jobs. JobRetry itself writes no rows.
+  #
+  # See docs/job-management.md.
   class JobRetry
+    # @param record [Job] the discarded job record to retry
     def initialize(record)
       @record = record
       @database = record.database
     end
 
+    # Runs the job's retry_job callbacks and captures the resulting enqueues.
+    #
+    # The job runs retry_job(wait: 0) with the stored error, inside a manual
+    # retry execution context, with no cron context, and inside
+    # {Batch.within_thread}. A {Bulk::Buffer} captures every enqueue, so
+    # nothing is persisted yet.
+    #
+    # @return [Hash{Symbol => Object}] :context is the execution context for
+    #   {Store#reschedule}. :buffer holds the captured jobs. :job is the
+    #   retried job rebuilt from the captured payload, or nil when the
+    #   callbacks did not enqueue it. :payload is the captured payload or nil.
+    # @raise [Job::DeserializationError] when the stored job cannot be loaded
+    # @raise [Job::AdapterMismatchError] when the job or a child job does not
+    #   use a DecentJob adapter on this database
+    # @note Registers an {Database#after_rollback} callback. If the enclosing
+    #   transaction rolls back, it restores provider_job_id and clears
+    #   successfully_enqueued on the retried job and new child jobs. Outside a
+    #   transaction this callback is dropped.
     def prepare
       context = {database: @database, id: @record.id, job_id: @record.active_job_id,
                  execution_id: @record.execution_id, manual_retry: true,
@@ -66,6 +92,9 @@ module DecentJob
       end
     end
 
+    # Rebuilds the stored error as an exception for retry_job. Falls back to
+    # a StandardError with "Class: message" when the class cannot be loaded,
+    # is not an Exception, or cannot be built with a message.
     def stored_error
       details = @record.error || {}
       klass = Support.constantize(details.fetch("class"))

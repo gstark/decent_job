@@ -12,11 +12,78 @@ require "decent_job/stats"
 require "decent_job/thread_status"
 
 module DecentJob
-  # Each execution thread owns its database checkout for the entire job. The
-  # notification listener uses its own connection and only hints workers to poll.
+  # Runs jobs from one or more queue pools on a fixed set of owned threads.
+  #
+  # The global runtime ({DecentJob.start}), an async {Adapter}, the CLI, or
+  # application code creates a worker and calls {#start}. Each run allocates:
+  #
+  # - one execution thread per configured pool thread. Each thread loops in
+  #   {#run_registered}, waits for a permit from its pool's {SchedulerCache},
+  #   and calls {Performer#perform_one}.
+  # - one listener thread when LISTEN/NOTIFY is enabled. It owns a dedicated
+  #   PostgreSQL session and only hints pools to claim. It never claims a job.
+  # - one {ProcessTracker} with its own monitor thread and dedicated session.
+  #   Every execution thread holds a registration on it for the whole run.
+  #
+  # In advisory and hybrid lock modes, an execution thread keeps its database
+  # checkout for the entire job, because the session advisory lock belongs to
+  # that connection. SKIP LOCKED mode returns the checkout before the job body.
+  #
+  # Locking: +@mutex+ protects all mutable run state: +@stopping+,
+  # +@lifecycle_revision+, +@run_id+, the thread lists, +@caches+,
+  # +@scheduler_stats+, +@executing_job_ids+, the interruption records,
+  # +@idle_since+, +@listener_connected+, +@failure+, the cleanup flags, and
+  # +@lower_thread_priority+. +@condition+ uses +@mutex+. Setting +@stopping+,
+  # {#wake}, and cache refreshes broadcast on it. Waiters also recheck at least
+  # every 0.5 seconds. Do not run SQL or user callbacks while you hold
+  # +@mutex+. Lifecycle events recorded under it are delivered later by
+  # {LifecycleEvents.defer}.
+  #
+  # Lifecycle: +@stopping+ is true before the first start and after a run
+  # stops. {#start} clears it, and {#begin_shutdown} or the exit of the last
+  # execution thread sets it. +@lifecycle_revision+ increases on every start
+  # and every {#begin_shutdown}. A {ResourceShutdown} handle records the
+  # revision that it stopped. {ResourceShutdown#restart} starts again only if
+  # no other start or stop happened since. +@run_id+ increases once per started
+  # run and labels lifecycle events.
+  #
+  # Invariants:
+  # - A new run does not start while any thread or the tracker of the previous
+  #   run is still alive.
+  # - {#start} replaces +@caches+ and +@scheduler_stats+ (see {#reset_stats}).
+  #   Only threads of the current run touch them.
+  #
+  # See docs/scheduling.md, docs/shutdown.md, docs/worker-observability.md,
+  # docs/daemon-and-idle.md, and docs/runtime-resources.md.
   class Worker
+    # @return [Database] the pool that execution threads and cleanup check out from
     attr_reader :database
 
+    # Builds a stopped worker. It allocates no threads and opens no connections.
+    #
+    # @param database [Database] pool for claims, cleanup, and cache refreshes
+    # @param queues [String] queue pool expression, for example
+    #   "urgent:2;-urgent". See {QueueSelection.pools}.
+    # @param max_threads [Integer] thread count for a pool that does not set one
+    # @param poll_interval [Numeric] seconds between periodic claim attempts.
+    #   Zero or a negative value disables polling.
+    # @param max_cache [Integer] maximum cached future deadlines per pool. Zero
+    #   disables startup cache warming. See {SchedulerCache}.
+    # @param enable_listen_notify [Boolean] start a listener thread for NOTIFY hints
+    # @param on_thread_error [#call, nil] receives errors from owned threads.
+    #   Its own errors are ignored.
+    # @param lower_thread_priority [Boolean] use Ruby priority -3 on execution threads
+    # @param advisory_lock_heartbeat [Boolean] passed to {ProcessTracker}
+    # @param process_heartbeat_interval [Numeric] seconds between process
+    #   heartbeats, passed to {ProcessTracker}
+    # @param cleanup_interval_jobs [Integer, false] attempts between record
+    #   cleanups, -1 for every attempt, or false to disable. See {CleanupTracker}.
+    # @param cleanup_interval_seconds [Numeric, false] seconds between record
+    #   cleanups, -1 for every attempt, or false to disable
+    # @param cleanup_preserved_jobs_before_seconds_ago [Numeric] age in seconds
+    #   of preserved records that cleanup deletes
+    # @param cleanup_discarded_jobs [Boolean] also delete discarded records
+    # @raise [ArgumentError] if an option is invalid
     def initialize(database:, queues: "*", max_threads: 5, poll_interval: 10, max_cache: 10_000, enable_listen_notify: true, on_thread_error: DecentJob.configuration.on_thread_error,
       lower_thread_priority: DecentJob.configuration.lower_thread_priority,
       advisory_lock_heartbeat: DecentJob.configuration.advisory_lock_heartbeat,
@@ -57,16 +124,43 @@ module DecentJob
       reset_stats
     end
 
+    # Allocates the threads and process tracker of a new run.
+    #
+    # @param expected_revision [Integer, nil] start only if
+    #   +@lifecycle_revision+ still has this value. {ResourceShutdown#restart}
+    #   passes the revision of its stop. Nil skips the check.
+    # @param automatic [Boolean] true for implicit starts, such as the first
+    #   async enqueue. An automatic start does nothing after a run has stopped,
+    #   so an explicit shutdown stays in effect. This also covers a run that
+    #   stopped because every execution thread died from an excluded error.
+    #   Restarting it would clear +@failure+ before shutdown can raise it.
+    # @return [Worker, false] self when a run started or a run is already
+    #   active. false when the start was refused: the revision changed, an
+    #   automatic start came after a stop, a stopped run still drains, or the
+    #   runtime skipped an automatic start during a lifecycle transition.
+    # @raise [ForkInProgress] if the runtime prepares to fork
+    # @raise [LifecycleInProgress] if a non-automatic start races a runtime transition
+    # @note Holds the runtime mutex and +@mutex+ while it allocates threads.
+    #   New threads wait on +@mutex+ until allocation completes. Lifecycle
+    #   observers run after the runtime mutex is released.
     def start(expected_revision: nil, automatic: false)
       start_run(expected_revision: expected_revision, automatic: automatic).first
     end
 
+    # Returns [result, run_id]. run_id is nil when no new run started, which
+    # lets {ResourceShutdown#restart} tell a refused restart from a new run.
+    # If thread allocation is interrupted, the ensure block kills the partial
+    # run and leaves the worker stopped.
     private def start_run(expected_revision: nil, automatic: false)
       result = DecentJob.synchronize_resource_start(automatic: automatic) do
         @mutex.synchronize do
           return [false, nil] if automatic && @stopping && @lifecycle_revision.positive?
           return [false, nil] if expected_revision && expected_revision != @lifecycle_revision
-          return [self, nil] if @threads.any?(&:alive?) || (@process_tracker && !@process_tracker.shutdown?)
+          if @threads.any?(&:alive?) || (@process_tracker && !@process_tracker.shutdown?)
+            # A running worker is already started. A stopped run that still
+            # drains cannot start again until its threads exit.
+            return [@stopping ? false : self, nil]
+          end
 
           began = monotonic_time
           @stopping = false
@@ -129,28 +223,59 @@ module DecentJob
           [self, @run_id]
         end
       end
-      result || [self, nil]
+      result || [false, nil]
     end
 
+    # Reports whether every thread and the tracker of the last run have exited.
+    #
+    # @return [Boolean] true for a worker that never started
+    # @note The +@threads+ guard handles a worker whose initializer raised.
+    #   Fork checks find such objects through ObjectSpace.
     def shutdown?
       return true unless @threads
       @mutex.synchronize { @threads.none?(&:alive?) && (!@process_tracker || @process_tracker.shutdown?) }
     end
 
+    # Reports whether the worker accepts work. Jobs read this through
+    # {ThreadStatus#current_thread_running?}.
+    #
+    # @return [Boolean] false after shutdown begins, even while jobs still run
     def running?
       @mutex.synchronize { !@stopping && @execution_threads.any?(&:alive?) }
     end
 
+    # Reports whether the run has its full set of live execution threads.
+    #
+    # @return [Boolean] false when stopping or when any execution thread died
     def started?
       @mutex.synchronize { started_locked? }
     end
 
+    # Reports readiness for health probes.
+    #
+    # @return [Boolean] true when {#started?}, the process tracker is connected,
+    #   and the listener holds LISTEN (when LISTEN/NOTIFY is enabled)
     def connected?
       @mutex.synchronize do
         started_locked? && @process_tracker.connected? && (!@enable_listen_notify || @listener_connected)
       end
     end
 
+    # Gives pools permits to claim, or caches a future deadline.
+    #
+    # A hint never names a job. It only lets threads run a claim query, and the
+    # query does all due, pause, and ownership checks.
+    #
+    # @param state [Hash, nil] a scheduling hint with String or Symbol keys:
+    #   +queue_name+ (only pools that select this queue), +count+ (permits to
+    #   hand out across pools in order, default 1), +fanout+ (wake every thread
+    #   of each matching pool), and +scheduled_at+ (Time, epoch seconds,
+    #   ISO 8601 String, or one JSON-encoded ISO 8601 String). Nil or an empty
+    #   hash wakes every thread of every pool. A future +scheduled_at+ only
+    #   caches the deadline.
+    # @return [Worker] self, also for an invalid hint
+    # @note An invalid hint goes to +on_thread_error+ and schedules nothing.
+    #   Does nothing while stopping. Thread safe.
     def wake(state = nil)
       state = normalize_hint(state)
       @mutex.synchronize do
@@ -179,19 +304,48 @@ module DecentJob
       self
     end
 
-    # Without force, a timeout leaves jobs running; callers may wait again later.
+    # Stops claiming and waits for the current run to drain.
+    #
+    # Without force, a timeout leaves jobs running. Callers can wait again later.
+    #
+    # @param timeout [Numeric, nil] grace period in seconds. Nil waits without
+    #   limit. Zero signals and returns at once.
+    # @param force [Boolean] kill execution threads that are still alive when
+    #   the timeout expires. Has no effect when timeout is nil.
+    # @return [Boolean] true when all threads and the tracker of the run exited
+    # @raise [ArgumentError] if timeout is negative, infinite, or not numeric
+    # @raise [Exception] the first fatal error of an owned thread, after the drain
     def shutdown(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
       begin_shutdown.wait(deadline: deadline, force: force, timeout: timeout)
     end
 
+    # Shuts down the current run, then starts a new run.
+    #
+    # @param timeout [Numeric, nil] see {#shutdown}
+    # @param force [Boolean] see {#shutdown}
+    # @return [Worker, false] self after a new run started. False when the drain
+    #   did not finish, or when another start or stop happened during the drain.
+    # @raise [Exception] the first fatal error of an owned thread
     def restart(timeout: nil, force: false)
       deadline = ResourceShutdown.deadline(timeout)
       handle = begin_shutdown
       ResourceShutdown.prepare_restart([handle], deadline: deadline, force: force, timeout: timeout) ? handle.restart : false
     end
 
+    # Signals the current run to stop and captures it in a handle.
+    #
     # Internal lifecycle protocol: signal only, with no joins or user callbacks.
+    # The runtime and {Adapter} call it under their own locks for every
+    # resource first, then wait on all handles with one shared deadline.
+    #
+    # @api private
+    # @return [ResourceShutdown] a handle for this run only. Its snapshot keeps
+    #   the thread list, tracker, and interruption records of this run, so a
+    #   later run cannot change what the handle waits for.
+    # @note Increments +@lifecycle_revision+, clears cached deadlines and
+    #   permits, wakes waiting threads, writes to the listener pipe, and asks
+    #   the tracker to stop.
     def begin_shutdown
       @mutex.synchronize do
         active = @threads.any?(&:alive?) || (@process_tracker && !@process_tracker.shutdown?)
@@ -210,6 +364,8 @@ module DecentJob
       end
     end
 
+    # The methods below form the protocol that {ResourceShutdown} calls with send.
+
     private def shutdown_snapshot_stopped?(snapshot)
       threads, tracker = snapshot
       threads.none?(&:alive?) && (!tracker || tracker.shutdown?)
@@ -227,6 +383,12 @@ module DecentJob
       end
     end
 
+    # Joins the captured threads and tracker until the deadline. When the
+    # calling thread is one of the captured threads (a job that shuts down its
+    # own worker), it skips itself and the tracker join, because its own
+    # registration keeps the tracker alive. The result is then false. A fatal
+    # error of the current run wins over join errors, unless a newer run has
+    # replaced the tracker.
     private def drain_shutdown(snapshot, deadline:, force:)
       threads, tracker, interruption, failure = snapshot
       tracker&.stop
@@ -253,15 +415,27 @@ module DecentJob
       threads.none?(&:alive?) && monitor_stopped
     end
 
-    # Return a detached report; callers cannot mutate execution bookkeeping.
+    # Lists the Active Job IDs that forced shutdown targeted in the current run.
+    #
+    # Returns a detached report. Callers cannot mutate execution bookkeeping.
+    #
+    # @return [Array<String>] Active Job +job_id+ values, not provider job IDs.
+    #   {#start} resets the list.
     def interrupted_job_ids
       @mutex.synchronize { @interrupted_job_ids.map(&:dup) }
     end
 
+    # @return [String, nil] the UUID of the decent_job_processes record of the
+    #   current or last run, or nil before the first start
     def process_id
       @mutex.synchronize { @process_tracker&.process_id }
     end
 
+    # Builds a snapshot of per-pool counters and cache sizes.
+    #
+    # @return [Hash{Symbol => Object}] see {Stats.aggregate}. The snapshot is a
+    #   deep copy. {#start} resets the counters.
+    # @note The process tracker heartbeat calls this to persist worker state.
     def stats
       @mutex.synchronize do
         schedulers = @scheduler_stats.each_with_index.map { |pool, index| pool.merge(@caches.fetch(index).stats) }
@@ -269,15 +443,30 @@ module DecentJob
       end
     end
 
+    # Sets whether execution threads use Ruby priority -3.
+    #
+    # @param value [Boolean]
+    # @raise [ArgumentError] if value is not a Boolean
+    # @note Each execution thread applies the value before its next attempt. A
+    #   running job keeps its current priority.
     def lower_thread_priority=(value)
       Configuration.validate_lower_thread_priority!(value)
       @mutex.synchronize { @lower_thread_priority = value }
     end
 
+    # @return [Boolean] whether execution threads lower their priority
     def lower_thread_priority
       @mutex.synchronize { @lower_thread_priority }
     end
 
+    # Reports whether no pool has an active execution.
+    #
+    # @param duration [Numeric, nil] also require this many seconds of
+    #   monotonic time since the run started or since the last execution start
+    #   or finish. Empty claim attempts do not reset this clock. Nil skips the
+    #   time check.
+    # @return [Boolean] true for a worker that never started
+    # @raise [ArgumentError] if duration is negative or not finite
     def idle?(duration = nil)
       Configuration.validate_idle_timeout!(duration)
       @mutex.synchronize do
@@ -288,6 +477,9 @@ module DecentJob
 
     private
 
+    # Kills each captured execution thread once. Records the targets and job
+    # IDs under +@mutex+, kills every target, and only then emits events.
+    # Errors go to +on_thread_error+ so a failed observer cannot stop shutdown.
     def interrupt_executions(threads:, job_ids:, interrupted_threads:, interrupted_job_ids:, pools:, pool_indexes:)
       targets, reports = @mutex.synchronize do
         targets = threads.select do |thread|
@@ -311,6 +503,8 @@ module DecentJob
       report_error(error)
     end
 
+    # Validates a hint from {#wake} and returns it with Symbol keys and a Time
+    # +scheduled_at+. Raises ArgumentError for any invalid field.
     def normalize_hint(state)
       return {} if state.nil?
       raise ArgumentError, "notification must be an object" unless state.is_a?(Hash)
@@ -346,11 +540,15 @@ module DecentJob
       raise ArgumentError, error.message
     end
 
+    # Caller must hold +@mutex+.
     def started_locked?
       !@stopping && @scheduler_stats.all? { |pool| pool.fetch(:live_threads) == pool.fetch(:max_threads) } &&
         @execution_threads.all?(&:alive?)
     end
 
+    # Replaces every pool cache and counter hash. Caller must hold +@mutex+, or
+    # run from the initializer. A new cache starts with one permit per thread,
+    # so each thread claims once at startup.
     def reset_stats(running: false)
       @caches = @pools.map { |pool| SchedulerCache.new(max_cache: @max_cache, threads: pool.fetch(:threads)) }
       @scheduler_stats = @pools.map do |pool|
@@ -384,6 +582,11 @@ module DecentJob
       end
     end
 
+    # Body of one execution thread. The thread holds a tracker registration for
+    # its whole life, so the process record stays alive while it runs. A fatal
+    # error is stored in +@failure+ for {#drain_shutdown} to raise. The last
+    # execution thread to exit stops the whole run, also when no one called
+    # {#begin_shutdown}. This does not change +@lifecycle_revision+.
     def run(pool, index)
       original_priority = Thread.current.priority
       @process_tracker.register(stopping: method(:stopping?), wait_for_monitor: false) do
@@ -410,6 +613,19 @@ module DecentJob
       @process_tracker.stop if last
     end
 
+    # Claim loop of one execution thread. Each pass takes one cache permit,
+    # runs one claim, and updates counters. On exit from a pass, the thread
+    # returns its busy slot and wakes one more thread when it ran a job, hit
+    # an error, or the cache revision changed during the pass.
+    #
+    # Error rules: a StandardError from infrastructure is reported, and the
+    # thread retries after {#retry_interval}. An excluded execution error
+    # (outside handled_exceptions) or a non-StandardError ends the thread.
+    # Infrastructure errors do not count as attempts.
+    #
+    # Counter and cache updates run with interrupts deferred, so a kill cannot
+    # leave them half updated. {#await_work} accepts interrupts only while it
+    # blocks.
     def run_registered(pool, index, original_priority)
       selection = pool.fetch(:selection)
       execution_error = nil
@@ -538,6 +754,8 @@ module DecentJob
       end
     end
 
+    # Returns whether the priority is now lowered. Restores the original
+    # priority only if this thread lowered it before.
     def apply_thread_priority(original_priority, previously_lowered)
       enabled = lower_thread_priority
       Thread.current.priority = enabled ? -3 : original_priority if enabled || previously_lowered
@@ -547,6 +765,12 @@ module DecentJob
       false
     end
 
+    # Blocks on +@condition+ until the pool has a permit, then takes it and
+    # marks the thread busy. Returns false when stopping, [revision, poll] for
+    # a permit, or [nil, poll] when the poll step raised. A due cached deadline
+    # gives a permit to every free pool thread. A due poll interval adds one. The wait is
+    # at most 0.5 seconds so wall-clock deadlines are rechecked. Poll timing
+    # uses monotonic time.
     def await_work(index)
       poll_at = monotonic_time + @poll_interval if @poll_interval.positive?
       @mutex.synchronize do
@@ -578,6 +802,10 @@ module DecentJob
       end
     end
 
+    # Reloads future deadlines for one pool after an empty claim. The SQL runs
+    # outside +@mutex+. +refreshing+ keeps one refresh per pool at a time, and
+    # the captured revision lets {SchedulerCache#replace} keep deadlines that
+    # arrived during the query.
     def refresh_cache(pool, index)
       revision = @mutex.synchronize do
         cache = @caches.fetch(index)
@@ -604,6 +832,9 @@ module DecentJob
       end
     end
 
+    # Deletes stale process records at most once per
+    # ProcessRecord::STALE_INTERVAL per worker. One execution thread runs it
+    # before a claim. The others skip it.
     def cleanup_processes
       due = @mutex.synchronize do
         now = monotonic_time
@@ -621,6 +852,9 @@ module DecentJob
       end
     end
 
+    # Counts an attempt and runs record cleanup on this execution thread when
+    # {CleanupTracker} says it is due. Only one thread cleans at a time.
+    # Cleanup errors are reported and do not stop the thread.
     def cleanup_after_attempt
       acquired = @mutex.synchronize do
         @cleanup_tracker.increment
@@ -641,6 +875,11 @@ module DecentJob
       end
     end
 
+    # Body of the listener thread. It owns one dedicated connection outside the
+    # pool. After each successful LISTEN it wakes all pools to catch up on
+    # missed work, then reconnects after errors. It waits on the socket and on
+    # +@listener_reader+, so {#begin_shutdown} can interrupt the select by
+    # writing to the pipe. The ensure block closes the pipe.
     def listen
       until stopping?
         connection = nil
@@ -713,6 +952,8 @@ module DecentJob
       end
     end
 
+    # Parses one NOTIFY payload and passes it to {#wake}. Errors are reported
+    # and the listener keeps its connection.
     def receive_notification(payload)
       instrument("notifier_notified", payload: payload&.dup)
       # pg represents a PostgreSQL NOTIFY with no payload as nil.
@@ -734,6 +975,7 @@ module DecentJob
       @mutex.synchronize { @stopping }
     end
 
+    # Sleeps up to interval seconds. Returns early when shutdown begins.
     def wait(interval)
       deadline = monotonic_time + interval
       @mutex.synchronize do

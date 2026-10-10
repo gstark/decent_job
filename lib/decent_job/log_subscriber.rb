@@ -8,7 +8,27 @@ require "decent_job/support"
 
 module DecentJob
   # Logs the public notification vocabulary without serializing job arguments.
+  #
+  # Each public handler method has the name of the event it logs, without the
+  # ".decent_job" suffix. {#call} dispatches on that name and ignores events
+  # with no handler. The library calls {.attach_to} with :decent_job when it
+  # loads, so one instance listens on {Notifications}. Exception messages and
+  # backtraces can still contain application data.
+  #
+  # Ownership: handlers run synchronously on the thread that published the
+  # event. Class-level state (the logger list and the broadcast logger) is not
+  # guarded by a mutex. Change it at boot, or from one thread.
+  #
+  # Constraint: a handler failure must never reach the runtime. {#call} logs
+  # it and returns.
+  #
+  # See docs/instrumentation.md.
   class LogSubscriber
+    # Logs a failed polling wakeup at error level. Uses :error. Silent when
+    # :error is nil.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def finished_timer_task(event)
       exception = event.payload[:error]
       return unless exception
@@ -18,6 +38,11 @@ module DecentJob
       end
     end
 
+    # Logs a performer call that raised, at error level. Uses :error. Silent
+    # when :error is nil.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def finished_job_task(event)
       exception = event.payload[:error]
       return unless exception
@@ -27,6 +52,11 @@ module DecentJob
       end
     end
 
+    # Logs a new execution pool at info level. Uses :max_threads,
+    # :performer_name, and :process_id.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def scheduler_create_pool(event)
       max_threads = event.payload[:max_threads]
       performer_name = event.payload[:performer_name]
@@ -37,6 +67,10 @@ module DecentJob
       end
     end
 
+    # Logs cron startup at info level. Uses the size of :cron_entries.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def cron_manager_start(event)
       cron_entries = event.payload[:cron_entries]
       cron_jobs_count = cron_entries.size
@@ -46,6 +80,10 @@ module DecentJob
       end
     end
 
+    # Logs the start of a pool shutdown at info level. Uses :process_id.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def scheduler_shutdown_start(event)
       process_id = event.payload[:process_id]
 
@@ -54,6 +92,11 @@ module DecentJob
       end
     end
 
+    # Logs the end of a pool shutdown at info level. Uses :process_id and
+    # :stopped. stopped: false means the pool is still draining.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def scheduler_shutdown(event)
       process_id = event.payload[:process_id]
 
@@ -62,6 +105,11 @@ module DecentJob
       end
     end
 
+    # Logs a forced shutdown at warn level. Uses :process_id and
+    # :active_job_ids.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def scheduler_shutdown_kill(event)
       process_id = event.payload[:process_id]
 
@@ -75,6 +123,11 @@ module DecentJob
       end
     end
 
+    # Logs a pool restart at info level. Uses :process_id, :restarted, and
+    # :outcome.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def scheduler_restart_pools(event)
       process_id = event.payload[:process_id]
 
@@ -83,6 +136,10 @@ module DecentJob
       end
     end
 
+    # Logs supervisor startup at info level. Uses :subprocesses.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def cluster_start(event)
       subprocesses = event.payload[:subprocesses]
 
@@ -91,6 +148,10 @@ module DecentJob
       end
     end
 
+    # Logs a forked subprocess at info level. Uses :pid.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def cluster_spawn(event)
       pid = event.payload[:pid]
 
@@ -99,6 +160,11 @@ module DecentJob
       end
     end
 
+    # Logs a reaped subprocess at info level. Uses :pid, :status, and :signal.
+    # A signal is shown by name when Ruby knows it.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def cluster_reap(event)
       pid = event.payload[:pid]
       status = event.payload[:status]
@@ -114,6 +180,11 @@ module DecentJob
       end
     end
 
+    # Logs a delayed subprocess replacement at warn level. Uses :restart_count
+    # and :delay (seconds).
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def cluster_backoff(event)
       restart_count = event.payload[:restart_count]
       delay = event.payload[:delay]
@@ -123,12 +194,20 @@ module DecentJob
       end
     end
 
+    # Logs supervisor shutdown at info level. Uses no payload keys.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def cluster_shutdown(event)
       info do
         "DecentJob supervisor is shut down."
       end
     end
 
+    # Logs subprocess startup at info level. Uses :pid.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def subprocess_start(event)
       pid = event.payload[:pid]
 
@@ -137,6 +216,10 @@ module DecentJob
       end
     end
 
+    # Logs the start of a subprocess shutdown at info level. Uses :pid.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def subprocess_shutdown_start(event)
       pid = event.payload[:pid]
 
@@ -145,6 +228,10 @@ module DecentJob
       end
     end
 
+    # Logs the end of a subprocess shutdown at info level. Uses :pid.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def subprocess_shutdown(event)
       pid = event.payload[:pid]
 
@@ -153,6 +240,11 @@ module DecentJob
       end
     end
 
+    # Logs a finished attempt at info level. Uses :job (a {Job} snapshot),
+    # :process_id, and :thread_name. Arguments are not logged.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def perform_job(event)
       job = event.payload[:job]
       process_id = event.payload[:process_id]
@@ -163,12 +255,21 @@ module DecentJob
       end
     end
 
+    # Logs a completed LISTEN at info level. Uses no payload keys.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def notifier_listen(event)
       info do
         "Notifier subscribed with LISTEN"
       end
     end
 
+    # Logs a received NOTIFY payload at debug level. Uses the raw :payload
+    # string, which can be nil.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def notifier_notified(event)
       payload = event.payload[:payload]
 
@@ -177,6 +278,10 @@ module DecentJob
       end
     end
 
+    # Logs a listener connection or task failure at error level. Uses :error.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def notifier_notify_error(event)
       exception = event.payload[:error]
 
@@ -185,21 +290,38 @@ module DecentJob
       end
     end
 
+    # Logs a completed UNLISTEN at info level. Uses no payload keys.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def notifier_unlisten(event)
       info do
         "Notifier unsubscribed with UNLISTEN"
       end
     end
 
+    # Logs a cleanup run at info level. Uses :destroyed_records_count, its
+    # job, execution, and batch counts, and the cutoff :timestamp.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def cleanup_preserved_jobs(event)
-      timestamp = event.payload[:timestamp]
-      destroyed_records_count = event.payload[:destroyed_records_count]
+      payload = event.payload
+      counts = {%w[job jobs] => payload[:destroyed_jobs_count], %w[execution executions] => payload[:destroyed_executions_count],
+                %w[batch batches] => payload[:destroyed_batches_count]}
+      details = counts.filter_map { |nouns, count| "#{count} #{Support.pluralize(count, *nouns)}" if count }.join(", ")
+      total = payload[:destroyed_records_count]
 
       info do
-        "DecentJob destroyed #{destroyed_records_count} preserved job execution #{Support.pluralize(destroyed_records_count, "record")} finished before #{timestamp}."
+        "DecentJob destroyed #{total} preserved #{Support.pluralize(total, "record")}#{" (#{details})" unless details.empty?} finished before #{payload[:timestamp]}."
       end
     end
 
+    # Logs a rejected enqueue at info level. Uses :job (the original job
+    # instance), :key, and :limit.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def enqueue_concurrency_limit_exceeded(event)
       job = event.payload[:job]
       key = event.payload[:key]
@@ -210,6 +332,11 @@ module DecentJob
       end
     end
 
+    # Logs a throttled enqueue at info level. Uses :job (the original job
+    # instance), :key, and :limit.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def enqueue_concurrency_throttle_exceeded(event)
       job = event.payload[:job]
       key = event.payload[:key]
@@ -220,6 +347,10 @@ module DecentJob
       end
     end
 
+    # Logs the watchdog interval at info level. Uses :interval (seconds).
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def systemd_watchdog_start(event)
       interval = event.payload[:interval]
 
@@ -228,6 +359,10 @@ module DecentJob
       end
     end
 
+    # Logs a failed systemd ping at error level. Uses :error.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def systemd_watchdog_error(event)
       exception = event.payload[:error]
 
@@ -236,11 +371,17 @@ module DecentJob
       end
     end
 
+    # @return [Logging::BroadcastLogger] the shared class-level logger
     def logger
       self.class.logger
     end
 
+    # Dispatches an event to the handler with the same name.
+    #
     # Handlers swallow their own failures: logging must never fail the runtime.
+    #
+    # @param event [Notifications::Event]
+    # @return [void]
     def call(event)
       handler = event.name.split(".").first.to_sym
       public_send(handler, event) if self.class.handlers.include?(handler)
@@ -249,14 +390,21 @@ module DecentJob
     end
 
     class << self
+      # @return [Array<Symbol>] the event names this class can log
       def handlers
         @handlers ||= public_instance_methods(false) - %i[logger call]
       end
 
+      # @return [Array<LogSubscriber>] one instance per attached namespace
       def subscribers
         attachments.values.map(&:first)
       end
 
+      # Subscribes a new instance to every event that ends in ".namespace".
+      #
+      # @param namespace [Symbol, String] for example :decent_job
+      # @return [void]
+      # @note Does nothing when the namespace is already attached.
       def attach_to(namespace)
         return if attachments.key?(namespace)
 
@@ -265,13 +413,23 @@ module DecentJob
         attachments[namespace] = [subscriber, subscription]
       end
 
+      # Removes the subscription that {.attach_to} made.
+      #
+      # @param namespace [Symbol, String]
+      # @return [void]
       def detach_from(namespace)
         _subscriber, subscription = attachments.delete(namespace)
         Notifications.unsubscribe(subscription) if subscription
       end
 
+      # The destination list. Callers can change it in place.
+      #
       # Changing this array opts into explicit destinations. Configuration changes
       # only replace the default destination while the array remains untouched.
+      # An empty array turns off log output, not notifications.
+      #
+      # @return [Array<Object>] the live, mutable destination list
+      # @note After a change, call {.reset_logger} to rebuild {.logger}.
       def loggers
         unless defined?(@loggers)
           @default_logger = DecentJob.logger
@@ -287,11 +445,17 @@ module DecentJob
         @loggers
       end
 
+      # @return [Logging::BroadcastLogger] a cached logger that writes to each
+      #   destination in {.loggers}
       def logger
         destinations = loggers
         @logger ||= Logging::BroadcastLogger.new(*destinations)
       end
 
+      # Drops the cached broadcast logger. It does not restore the default
+      # destination.
+      #
+      # @return [void]
       def reset_logger
         @logger = nil
       end
@@ -305,6 +469,10 @@ module DecentJob
 
     private
 
+    # Adds "DecentJob" and the given tags on each leaf destination that has
+    # a tag stack, then runs the block once. When the destination already has
+    # an "ActiveJob" tag, "ActiveJob" is pushed again before "DecentJob". This
+    # matches the GoodJob output format.
     def tag_logger(*tags, &block)
       tags = ["DecentJob", *tags].compact
       leaf_loggers(self.class.loggers).inject(block) do |inner, destination|

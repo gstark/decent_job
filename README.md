@@ -278,7 +278,7 @@ batch.reload.finished?      # All members and callback jobs have finished.
 batch.reload.succeeded?     # Finished with no discarded member or callback.
 ```
 
-`on_success` fires when all members finish without a discard. `on_discard` fires on the first discarded member or callback; it can fire before the other members finish. `on_finish` fires once all members finish. Each receives the batch and `{event: :success}`, `{event: :discard}`, or `{event: :finish}`. Callback jobs can use ordinary retry handlers. Callback ordering is not guaranteed.
+`on_success` fires when all members finish without a discard. `on_discard` fires on the first discarded member or callback; it can fire before the other members finish. `on_finish` fires once all members finish. Each receives the batch and `{event: :success}`, `{event: :discard}`, or `{event: :finish}`. Callback jobs can use ordinary retry handlers. Callback ordering is not guaranteed. If a callback class cannot load on a worker, for example during a rolling deploy, its callback stays pending and workers retry it on each poll. The other callbacks still run. The batch does not finish until that callback is delivered, and each failed attempt goes to `on_thread_error`. To unblock it, deploy the class, or assign a new callback class (or `nil`) to the batch and call `save`.
 
 Batch properties use the job argument encoding, `DecentJob::Arguments`, including symbols, dates, and GlobalID objects. Supply arbitrary keyword properties or an explicit `properties:` hash. Batches themselves support GlobalID serialization. Use `DecentJob::Batch.find(id)` to load a batch and `reload` to refresh an existing object's state.
 

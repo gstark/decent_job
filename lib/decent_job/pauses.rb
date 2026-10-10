@@ -1,8 +1,23 @@
 # frozen_string_literal: true
 
 module DecentJob
+  # Reads and writes persistent pauses in decent_job_pauses.
+  #
+  # A pause targets one queue, one job class, or one label. Pauses persist
+  # until they are removed. Claim queries exclude paused jobs only when
+  # {Configuration#enable_pauses} is true; this class reads and writes pauses
+  # in either case. A pause stops new claims. It does not interrupt running
+  # jobs.
+  #
+  # The top-level {DecentJob.pause} methods, {Adapter}, and {Dashboard} create
+  # short-lived instances. An instance holds only the {Database}.
+  #
+  # See the "Labels, concurrency, and pauses" section of README.md and
+  # docs/job-management.md.
   class Pauses
     # Only interpolate this expression with the library's fixed jobs table alias.
+    # It is true when no pause matches the job's queue_name, job_class, or
+    # any of its labels.
     EXCLUDED_SQL = <<~SQL
       NOT EXISTS (
         SELECT 1 FROM decent_job_pauses
@@ -12,10 +27,18 @@ module DecentJob
       )
     SQL
 
+    # @param database [Database] the pool for all queries
     def initialize(database)
       @database = database
     end
 
+    # Adds a pause. Pausing a target twice has no effect.
+    #
+    # @param target [Hash] exactly one of queue:, job_class:, or label:. The
+    #   value is converted with to_s and stripped.
+    # @return [true]
+    # @raise [ArgumentError] when there is not exactly one target, or it is blank
+    # @note Sends no NOTIFY. Claim queries apply the pause on their next run.
     def pause(**target)
       kind, key = target_pair(**target)
       @database.with_connection do |connection|
@@ -24,6 +47,12 @@ module DecentJob
       true
     end
 
+    # Removes a pause and wakes workers.
+    #
+    # @param target [Hash] exactly one of queue:, job_class:, or label:
+    # @return [true] also when no matching pause existed
+    # @raise [ArgumentError] when there is not exactly one target, or it is blank
+    # @note Sends NOTIFY with an empty payload, which wakes all queues.
     def unpause(**target)
       kind, key = target_pair(**target)
       @database.transaction do |connection|
@@ -33,6 +62,8 @@ module DecentJob
       true
     end
 
+    # @return [Hash{Symbol => Array<String>}] the paused keys in :queues,
+    #   :job_classes, and :labels, each sorted by key
     def paused
       @database.with_connection do |connection|
         connection.exec("SELECT kind, key FROM decent_job_pauses ORDER BY key").each_with_object(queues: [], job_classes: [], labels: []) do |row, result|
@@ -41,6 +72,15 @@ module DecentJob
       end
     end
 
+    # Reports whether a job, a target, or anything is paused.
+    #
+    # @param job_instance [Object, nil] a job to check against all its targets
+    # @param target [Hash] at most one of queue:, job_class:, or label:
+    # @return [Symbol, Boolean] the {#reason} for job_instance. Without
+    #   arguments, true when any pause exists. With a target, true when that
+    #   target is paused.
+    # @raise [ArgumentError] when job_instance and a target are both given, or
+    #   more than one target is given
     def paused?(job_instance: nil, **target)
       if job_instance
         raise ArgumentError, "provide only one target" unless target.values.compact.empty?
@@ -54,6 +94,14 @@ module DecentJob
       end
     end
 
+    # Finds the first pause that matches a job. Queue pauses win over class
+    # pauses, and class pauses win over label pauses.
+    #
+    # @param queue [String, Symbol] the queue name
+    # @param job_class [String, Class] the job class or its name
+    # @param labels [Array<String>] the job labels
+    # @return [Symbol, false] :queue_name_paused, :job_class_paused,
+    #   :label_paused, or false when nothing matches
     def reason(queue:, job_class:, labels: [])
       values = paused
       return :queue_name_paused if values.fetch(:queues).include?(queue.to_s)

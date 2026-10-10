@@ -157,6 +157,18 @@ describe "process tracking recovery" do
     id
   end
 
+  it "measures heartbeat age with the database clock" do
+    fresh = insert_process(age: 0)
+    local_now = Time.now + 3600
+    Time.stub(:now, -> { local_now }) do
+      record = DecentJob::ProcessRecord.find(fresh, database: database)
+      _(record.stale?).must_equal false
+      _(record.expired?).must_equal false
+      local_now += 31
+      _(record.stale?).must_equal true
+    end
+  end
+
   it "distinguishes stale heartbeats from expired processes and unlocked advisory sessions" do
     recent = insert_process(age: 29)
     stale = insert_process(age: 31)

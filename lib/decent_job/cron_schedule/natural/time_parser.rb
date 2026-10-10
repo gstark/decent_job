@@ -3,6 +3,13 @@
 module DecentJob
   class CronSchedule
     class Natural
+      # Grammar rules for times of day, mixed into {Natural}. All methods are
+      # private parser rules that use the cursor helpers of {Natural}.
+      #
+      # It accepts digital times ("17:45", "5:30pm"), hours with a meridian
+      # ("5pm", "12am"), named times ("noon", "five thirty pm"), unit points
+      # ("minutes 5 and 35", "seconds 10"), and spans ("9 to 17"). Each time
+      # becomes a :time {Component} of [hour, minute].
       module TimeParser
         private
 
@@ -20,6 +27,9 @@ module DecentJob
           value&.strip&.downcase
         end
 
+        # Applies am, pm, and midnight. "12 midnight" becomes hour 24, which
+        # {Field} reads as 0. A named time with no known hour stays nil so
+        # that another clause can supply it; nil with "pm" raises.
         def adjusted_time(hour, minute, suffix)
           raise ArgumentError, "invalid named afternoon hour" if hour.nil? && suffix == "pm"
           hour = if suffix == "midnight" && hour == 12
@@ -64,6 +74,8 @@ module DecentJob
           list(:point, Vocabulary::CONJUNCTION)
         end
 
+        # "hours N" gives an :hour component, which {Compiler} ignores, as the
+        # reference does.
         def point
           unit = take(/(?:minutes?|mins?|seconds?|secs?|hours?|hou|h)[ \t]+/i)
           return unless unit
@@ -81,6 +93,8 @@ module DecentJob
           value&.to_i
         end
 
+        # A span covers hours, not minutes, so both ends must have the same
+        # minute. The end hour is excluded later through {Component#hour_range}.
         def time_span
           first = attempt(:time_object)
           return unless first && keyword("to")

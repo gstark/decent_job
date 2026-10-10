@@ -23,7 +23,7 @@ ReportJob.perform_now(42, period: "2026-09")
 DecentJob.perform_all_later(ReportJob.new(1, period: "2026-09"), ReportJob.new(2, period: "2026-09"))
 ```
 
-`perform_later` returns the job when the adapter accepts it. It returns `false` when a callback aborts or the adapter rejects the job, and sets `enqueue_error`. `perform_all_later` enqueues in bulk and does not run enqueue callbacks, as in Active Job.
+`perform_later` returns the job when the adapter accepts it. It returns `false` when a callback aborts or the adapter rejects the job. A rejection by the adapter or a concurrency limit sets `enqueue_error`. A callback abort leaves it `nil`, as in Active Job. `perform_all_later` enqueues in bulk and does not run enqueue callbacks, as in Active Job. A class with concurrency limits or rules is the exception: each of its jobs is enqueued on its own, with callbacks, so admission sees the final key and labels.
 
 Durations are numbers of seconds. Any object with `to_f`, such as `ActiveSupport::Duration`, also works.
 

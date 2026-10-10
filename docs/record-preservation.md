@@ -17,7 +17,7 @@ end
 
 Unfinished retries and direct reenqueues retain their existing job and attempt records under every policy. Once a job finishes, deleting its record also deletes all of its attempts. A discarded job that has been deleted is no longer available for manual retry or batch retry. Batch job lists and callback lists contain only records that remain in storage.
 
-Rolling enqueue and perform throttles count stored job and attempt history. Deleting records removes them from those counts, so preserve records for jobs whose throttle must account for recently completed work.
+Rolling enqueue and perform throttles count stored job and attempt history. Deleting records removes them from those counts, so preserve records for jobs whose throttle must account for recently completed work. The enqueue throttle counts jobs by `created_at`. In created-time dequeue mode a retry refreshes `created_at` (see [scheduling](scheduling.md)), so the throttle counts the retry as a new enqueue.
 
 The error-only policy distinguishes a handled discard from an unhandled exception. An exhausted `retry_on` that re-raises its exception is unhandled; an exhausted retry handled by its block is handled. Inline execution still raises an unhandled exception even when its record is deleted.
 

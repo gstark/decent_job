@@ -4,23 +4,82 @@ require "decent_job"
 require "optparse"
 
 module DecentJob
+  # The decent_job command line program.
+  #
+  # exe/decent_job creates a CLI, calls {#run}, and exits with its status.
+  # When {#shutdown_timed_out} is true it uses exit! so at_exit handlers
+  # cannot wait on job threads that are still running.
+  #
+  # Commands (the default is start):
+  # - start: run workers until SIGINT or SIGTERM. With subprocesses it runs a
+  #   {Supervisor}, otherwise one worker in this process.
+  # - migrate: install the schema with {DecentJob.install}.
+  # - cleanup_preserved_jobs (alias cleanup): delete preserved records.
+  # - dashboard: serve the dashboard until SIGINT or SIGTERM.
+  # - help, version: print and exit.
+  #
+  # Options:
+  # - -r, --require FILE: load application code (repeatable).
+  # - --older-than / --before-seconds-ago SECONDS, --in-batches-of N,
+  #   --[no-]include-discarded: cleanup options.
+  # - --port PORT, --host HOST: dashboard bind (default 127.0.0.1:7002).
+  # - --probe-port PORT, --probe-handler simple|webrick: health probes.
+  # - --[no-]daemonize, --pidfile PATH: daemon mode, see {Daemon}.
+  # - --idle-timeout SECONDS: exit when idle (single process only).
+  # - --subprocesses N, --queues EXPRESSION: cluster size and queue recipes.
+  # - --max-threads N, --[no-]lower-thread-priority, --max-cache N,
+  #   --poll-interval SECONDS, --shutdown-timeout SECONDS,
+  #   --dequeue-query-sort COLUMN, --lock-strategy STRATEGY,
+  #   --queue-select-limit N: worker tuning.
+  # - --[no-]enable-cron, --cron-graceful-restart-period SECONDS,
+  #   --[no-]listen-notify: cron and notification wakeups.
+  # - -h, --help and -v, --version: same as the commands.
+  #
+  # Command-line options override application configuration, which overrides
+  # environment defaults. {DecentJob.apply_cli_configuration} applies them
+  # after the --require files load.
+  #
+  # Exit status: 0 on success, 1 on an error or a shutdown timeout, 2 on an
+  # invalid command or option.
+  #
+  # Signals: start and dashboard trap INT and TERM. The start traps only write
+  # to a self-pipe, because a trap context cannot take a Mutex.
+  #
+  # See docs/supervisor.md, docs/daemon-and-idle.md, and
+  # docs/health-services.md.
   class CLI
     class << self
+      # @return [Boolean, nil] true when exe/decent_job runs the CLI
+      # @return [Boolean, nil] force stdout logging on or off. Nil means
+      #   follow {.within_exe?}.
       attr_accessor :within_exe, :log_to_stdout
       alias_method :within_exe?, :within_exe
 
+      # @return [Boolean, nil] true when the CLI adds a stdout logger
       def log_to_stdout?
         log_to_stdout.nil? ? within_exe? : log_to_stdout
       end
     end
 
+    # @return [Boolean, nil] true when the last start did not drain workers,
+    #   children, or the probe server before the shutdown deadline. Nil
+    #   before {#run}.
     attr_reader :shutdown_timed_out
 
+    # @param stdout [IO] destination for status lines and the stdout logger
+    # @param stderr [IO] destination for errors and warnings
     def initialize(stdout: $stdout, stderr: $stderr)
       @stdout = stdout
       @stderr = stderr
     end
 
+    # Parses argv and runs one command.
+    #
+    # @param argv [Array<String>] command line arguments. Not modified.
+    # @return [Integer] the exit status: 0, 1, or 2 (see the class header)
+    # @note start can daemonize (fork and detach), fork a supervisor cluster,
+    #   bind probe and dashboard sockets, and trap INT and TERM. Errors are
+    #   printed to stderr, not raised, except non-StandardError exceptions.
     def run(argv)
       DecentJob.with_cli_application { run_command(argv) }
     end
@@ -36,7 +95,7 @@ module DecentJob
       parser.parse!(arguments)
       command = arguments.shift || "start"
       unless %w[start migrate cleanup_preserved_jobs cleanup dashboard help version].include?(command) && arguments.empty?
-        raise OptionParser::InvalidArgument, "expected start, migrate, cleanup_preserved_jobs, dashboard, help, or version"
+        raise OptionParser::InvalidArgument, "expected start, migrate, cleanup_preserved_jobs, cleanup, dashboard, help, or version"
       end
       command = options.delete(:command) || command
       case command
@@ -103,7 +162,7 @@ module DecentJob
 
     def option_parser(options, applications)
       OptionParser.new do |parser|
-        parser.banner = "Usage: decent_job [start|migrate|cleanup_preserved_jobs|dashboard|help|version] [options]"
+        parser.banner = "Usage: decent_job [start|migrate|cleanup_preserved_jobs|cleanup|dashboard|help|version] [options]"
         parser.separator "Database: DECENT_JOB_DATABASE_URL or DATABASE_URL"
         parser.on("-r", "--require FILE", "Load application jobs and configuration") { |file| applications << file }
         parser.on("--older-than SECONDS", "--before-seconds-ago SECONDS", Float, "Delete preserved records at least this old") { |value| options[:cleanup_preserved_jobs_before_seconds_ago] = value }
@@ -137,6 +196,8 @@ module DecentJob
       end
     end
 
+    # Daemonizes when configured, then runs workers. The PID file is removed
+    # here, before exe/decent_job can call exit! after a shutdown timeout.
     def start
       if DecentJob.configuration.daemonize
         daemon = Daemon.new(configuration: DecentJob.configuration)
@@ -152,20 +213,28 @@ module DecentJob
       end
     end
 
+    # Queue#<< is safe in a trap context, so the main thread blocks on pop.
     def serve_dashboard(port:, host:)
       require "decent_job/dashboard/server"
       server = Dashboard::Server.new(Dashboard.new, port: port, host: host).start
       @stdout.puts "DecentJob dashboard listening on http://#{host}:#{server.port}/"
       stopper = Queue.new
-      %w[INT TERM].each { |signal| trap(signal) { stopper << signal } }
+      previous_traps = %w[INT TERM].to_h { |signal| [signal, Signal.trap(signal) { stopper << signal }] }
       stopper.pop
       server.stop
       0
     rescue Dashboard::Server::Unavailable => error
       @stderr.puts error.message
       1
+    ensure
+      previous_traps&.each { |signal, handler| Signal.trap(signal, handler) }
     end
 
+    # Runs one worker in this process, or the cluster when subprocesses is
+    # positive and fork exists. Without fork it merges all queue recipes into
+    # one process. Cleanup runs every step even when one raises, and all
+    # drain steps share one shutdown_timeout deadline. The order keeps the
+    # probe and the watchdog alive during the job drain.
     def start_workers
       configuration = DecentJob.configuration
       if configuration.subprocesses.positive?
@@ -226,6 +295,9 @@ module DecentJob
       end
     end
 
+    # READY goes out after the initial forks (on_start); STOPPING goes out
+    # before children get TERM (on_shutdown). The watchdog stops after child
+    # and probe cleanup.
     def start_cluster
       supervisor = Supervisor.new
       service = nil

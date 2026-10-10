@@ -325,6 +325,55 @@ describe "batch workflows" do
     _(callback_events.size).must_equal 1
   end
 
+  it "commits transitions and retries a callback whose class cannot load" do
+    errors = []
+    previous = DecentJob.configuration.on_thread_error
+    DecentJob.configuration.on_thread_error = ->(error) { errors << error }
+    removed = Class.new(WorkflowCallbackJob)
+    Object.const_set(:WorkflowRemovedCallbackJob, removed)
+    removed.queue_adapter = @adapter
+    batch = DecentJob::Batch.enqueue([WorkflowDiscardOnceJob.new("member")], database: database,
+      on_discard: WorkflowRemovedCallbackJob, on_finish: WorkflowCallbackJob)
+    Object.send(:remove_const, :WorkflowRemovedCallbackJob)
+
+    drain
+    _(batch.reload.discarded?).must_equal true
+    _(batch.jobs_finished?).must_equal true
+    _(batch.finished?).must_equal false
+    _(callback_events.map { |_, event, _| event }).must_equal [:finish]
+    _(errors).wont_be_empty
+    _(errors.map(&:class).uniq).must_equal [NameError]
+
+    Object.const_set(:WorkflowRemovedCallbackJob, removed)
+    drain
+    _(batch.reload.finished?).must_equal true
+    _(callback_events.map { |_, event, _| event }).must_equal [:discard]
+  ensure
+    Object.send(:remove_const, :WorkflowRemovedCallbackJob) if Object.const_defined?(:WorkflowRemovedCallbackJob)
+    DecentJob.configuration.on_thread_error = previous
+  end
+
+  it "delivers a stuck callback to the class an operator sets instead" do
+    previous = DecentJob.configuration.on_thread_error
+    DecentJob.configuration.on_thread_error = nil
+    removed = Class.new(WorkflowCallbackJob)
+    Object.const_set(:WorkflowRenamedCallbackJob, removed)
+    removed.queue_adapter = @adapter
+    batch = DecentJob::Batch.enqueue([WorkflowMemberJob.new("member")], database: database, on_finish: WorkflowRenamedCallbackJob)
+    Object.send(:remove_const, :WorkflowRenamedCallbackJob)
+    drain
+    _(batch.reload.finished?).must_equal false
+
+    batch.on_finish = WorkflowCallbackJob
+    batch.save
+    drain
+    _(batch.reload.finished?).must_equal true
+    _(callback_events.map { |_, event, _| event }).must_equal [:finish]
+  ensure
+    Object.send(:remove_const, :WorkflowRenamedCallbackJob) if Object.const_defined?(:WorkflowRenamedCallbackJob)
+    DecentJob.configuration.on_thread_error = previous
+  end
+
   it "persists jobs created by a callback's enqueue callbacks" do
     batch = DecentJob::Batch.enqueue(database: database, on_finish: WorkflowEnqueuingCallbackJob)
     _(batch.callback_job_instances.size).must_equal 2

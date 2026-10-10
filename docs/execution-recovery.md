@@ -14,7 +14,7 @@ The shown exception list and retry setting are the defaults. `handled_exceptions
 
 Here, a *handled backend exception* means DecentJob can persist its outcome. It can still be an *unhandled Active Job error* because no Active Job handler consumed it. Such a failure is discarded by default, and the worker reports the exception to `on_thread_error`. Handled Active Job retries and discards are not reported as backend failures. The reporter can fail without replacing the job's original error or preventing ordinary workers from continuing.
 
-Exceptions outside `handled_exceptions` propagate without being marked terminal. The attempt stays unfinished and can be recovered after its owner releases the session lock. Configure the list deliberately; an excluded execution error can terminate its worker thread.
+Exceptions outside `handled_exceptions` propagate without being marked terminal. The attempt stays unfinished and can be recovered after its owner releases the session lock. Configure the list deliberately; an excluded execution error can terminate its worker thread. When every execution thread of a worker ends this way, the worker stops. Automatic starts, such as the next async enqueue, do not restart it, and its next shutdown raises the error. Call `restart` or `start` to resume execution.
 
 Shutdown still stops the other owned threads and waits for them within the shared deadline before re-raising that thread's original failure. Global reset drains resources without a deadline, then clears the registry and database pool before re-raising, so the failure remains visible without leaving an unusable registry behind.
 

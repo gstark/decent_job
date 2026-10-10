@@ -4,14 +4,40 @@ require "decent_job/notifications"
 require "time"
 
 module DecentJob
+  # Deletes finished jobs and finished batches older than a cutoff.
+  #
+  # {DecentJob.cleanup_preserved_jobs} and the CLI cleanup command call it
+  # explicitly. A {Worker} calls it on its own thread when its
+  # {CleanupTracker} says a sweep is due.
+  #
   # Each candidate is rechecked under the same locks used by job management and
   # batch generation changes. Busy candidates are left for the next sweep.
+  # Each job and each batch is deleted in its own short transaction, so a
+  # stopped sweep keeps the deletions it already committed. Lock waits last
+  # at most 100 milliseconds (see #without_waiting).
+  #
+  # Deleting a job cascades to its decent_job_executions and concurrency
+  # claims. Deleting a batch cascades to its events and pending-job rows, and
+  # sets batch_id and batch_callback_id to NULL on its remaining jobs.
+  #
+  # See docs/record-preservation.md.
   class Cleaner
+    # @param database [Database] the pool to clean
     def initialize(database:)
       @database = database
       @claims = ConcurrencyClaims.new(database)
     end
 
+    # Checks cleanup options. {Worker} calls it at construction so bad
+    # options fail early.
+    #
+    # @param older_than [Numeric] minimum age in seconds since finished_at
+    # @param include_discarded [Boolean] true to also delete discarded jobs and
+    #   batches
+    # @param in_batches_of [Integer] page size for each candidate query
+    # @param stopping [#call, nil] returns true to stop the sweep, or nil
+    # @return [void]
+    # @raise [ArgumentError] when an option is invalid
     def self.validate_options!(older_than:, include_discarded:, in_batches_of: 1000, stopping: nil)
       unless older_than.is_a?(Numeric) && older_than.real? && older_than.finite? && older_than >= 0
         raise ArgumentError, "older_than must be a finite nonnegative number"
@@ -21,6 +47,25 @@ module DecentJob
       raise ArgumentError, "stopping must be callable" unless stopping.nil? || stopping.respond_to?(:call)
     end
 
+    # Runs one sweep: jobs first, then batches, then orphan batch updates.
+    #
+    # The cutoff is fixed when the sweep starts. Records with finished_at at
+    # or before it are candidates. Jobs are succeeded, or discarded when
+    # include_discarded is true. A batch also needs all members and callbacks
+    # finished, no execution lock on them, and no undelivered event.
+    #
+    # @param older_than [Numeric] minimum age in seconds since finished_at
+    # @param in_batches_of [Integer] page size for each candidate query
+    # @param include_discarded [Boolean] true to also delete discarded jobs and
+    #   batches
+    # @param stopping [#call, nil] checked before each page and each record.
+    #   The sweep stops when it returns true.
+    # @return [Integer] deleted jobs plus deleted executions plus deleted
+    #   batches. Update and event rows do not count.
+    # @raise [ArgumentError] when an option is invalid
+    # @note Publishes cleanup_preserved_jobs.decent_job through
+    #   {Notifications}, also when the sweep raises. Deletes cron occurrence
+    #   records too, which removes their deduplication history.
     def cleanup(older_than: DecentJob.configuration.cleanup_preserved_jobs_before_seconds_ago, in_batches_of: 1000,
       include_discarded: DecentJob.configuration.cleanup_discarded_jobs?, stopping: nil)
       self.class.validate_options!(older_than: older_than, in_batches_of: in_batches_of, include_discarded: include_discarded, stopping: stopping)
@@ -47,6 +92,8 @@ module DecentJob
 
     private
 
+    # Keyset pagination on (finished_at, id), so deleted rows do not shift
+    # later pages. Uses the cursor indexes from migration 007.
     def pages(table, cutoff, size, stopping, include_discarded)
       eligibility = if table == "decent_jobs"
         include_discarded ? "state IN ('succeeded', 'discarded')" : "state = 'succeeded'"
@@ -72,6 +119,10 @@ module DecentJob
       end
     end
 
+    # Skips the job when any session holds its advisory lock, then try-locks
+    # the same key that workers and job management use. Under the claim lock
+    # it checks eligibility again and releases claims, so waiting jobs get
+    # promoted before the row goes.
     def delete_job(id, cutoff, include_discarded)
       result = {jobs: 0, executions: 0}
       completed = without_waiting do |connection|
@@ -119,6 +170,9 @@ module DecentJob
       completed ? count : 0
     end
 
+    # decent_job_batch_updates has no foreign key, so a completion can leave a
+    # row for a batch that cleanup has deleted. SKIP LOCKED leaves rows that
+    # another sweep is deleting.
     def delete_orphan_updates(size, stopping)
       cursor = 0
       until stopping&.call
@@ -138,6 +192,10 @@ module DecentJob
       end
     end
 
+    # Runs the block in a transaction with lock_timeout at most 100ms.
+    # Returns false when a lock was not available (NOWAIT or timeout), and the
+    # transaction rolls back. SET LOCAL outlives a savepoint, so the previous
+    # value is restored when this runs inside a caller's transaction.
     def without_waiting
       @database.transaction do |connection|
         # Try-locks cover our explicit lock ordering. Foreign-key actions and

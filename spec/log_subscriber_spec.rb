@@ -51,7 +51,7 @@ describe "DecentJob logging" do
     notifier_listen: [{}, :info, "Notifier subscribed with LISTEN"],
     notifier_notified: [{payload: "raw-notice"}, :debug, "Notifier received payload: raw-notice"],
     notifier_unlisten: [{}, :info, "Notifier unsubscribed with UNLISTEN"],
-    cleanup_preserved_jobs: [{timestamp: "cutoff", destroyed_records_count: 2}, :info, "destroyed 2 preserved job execution records finished before cutoff."],
+    cleanup_preserved_jobs: [{timestamp: "cutoff", destroyed_records_count: 4, destroyed_jobs_count: 1, destroyed_executions_count: 2, destroyed_batches_count: 1}, :info, "destroyed 4 preserved records (1 job, 2 executions, 1 batch) finished before cutoff."],
     systemd_watchdog_start: [{interval: 1.23}, :info, "Pinging systemd watchdog every 1.2 seconds"]
   }.each do |name, (payload, severity, message)|
     it "logs #{name} at #{severity} level" do

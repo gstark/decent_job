@@ -10,6 +10,10 @@ Supported expressions include five-field cron and six-field cron with seconds; l
 
 An expression may end with an IANA timezone or a numeric offset. Without one, scheduling uses a recognized `TZ` environment setting first, then ActiveSupport's thread-local `Time.zone`, then Ruby's native local timezone. Recognized settings include IANA names, `Z`, and supported numeric offsets. This priority applies to calendar jumps as well as matching. Matching preserves the reference's day-of-month/day-of-week OR semantics and its range-expansion conventions. Search advances through calendar fields and stops with `ArgumentError` if no occurrence is reached within its bounded search.
 
+The numeric parser keeps one reference quirk. A weekday step with no range end covers only its start day: `0 0 * * 5/2` runs on Fridays only, while a minute step such as `5/15` repeats through the hour (5, 20, 35, 50).
+
+A schedule that names its own timezone applies the daylight saving fold rule in the process timezone when `next_at` gets an explicit `after:` time. For example, with `TZ=UTC`, `30 1 * * * America/New_York` returns both 01:30 EDT and 01:30 EST on the fallback day. The scheduler calls `next_at` without `after:`, so recurring jobs run once. `spec/cron_timezone_spec.rb` pins this reference behavior.
+
 ## Natural-language schedules
 
 The same parser accepts phrases such as `every 15 minutes`, `every weekday at 5pm`, `every month on days 1,15 at 10:00`, and `every day at noon in Europe/Berlin`. It translates intervals, weekday lists and ranges, ordinal month days, named and numeric times, and time ranges into numeric cron. For natural input, `original` returns that generated cron expression. Natural input is limited to 256 characters after surrounding whitespace is stripped.
@@ -21,6 +25,8 @@ Some accepted reference phrases have surprising meanings. DecentJob retains thes
 - `every day at 9:30 and 17:45` selects the first resulting cron schedule, `30 9 * * *`. Times sharing the same minute can combine, so `at 9:30 and 17:30` runs twice a day.
 - `every 2 hours and 5 minutes` uses the first interval, `0 */2 * * *`.
 - `every 15 minutes from 9 to 17` becomes `*/15 9-16 * * *`, excluding the ending hour.
+- `every first and fifteenth of the month` keeps only the first day, `0 0 1 * *`.
+- `every day at hours 8 and 12` ignores the hours and becomes `0 0 * * *`.
 - Named times retain the reference's case quirks. `at noon` works; `at Noon` is rejected on its own. Another clause can supply a missing hour, so `at 4 at Five` becomes `0 4 * * *`.
 
 Inspect `original` when validating a natural definition. Phrases that cause internal reference errors, such as `every minute at 5` or a range with unequal endpoint minutes, return `nil` from `parse` and raise `ArgumentError` from `new`.

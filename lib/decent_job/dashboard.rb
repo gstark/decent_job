@@ -15,6 +15,47 @@ module DecentJob
   #
   # The host application owns authentication. Wrap the app in your own
   # constraint or middleware; the dashboard performs no login of its own.
+  #
+  # Collaborators: {Request} parses the Rack env, {Queries} runs every read,
+  # and {View} renders ERB templates. Writes go through the public management
+  # APIs ({Job}, {Batch}, {CronEntry}, {Pauses}), never through raw SQL here.
+  # {Server} hosts the app for the standalone CLI command.
+  #
+  # Ownership: one instance serves many threads. Each request builds its own
+  # Request, View, and Queries. Each query checks out a connection for that
+  # query only, so the numbers on one page do not come from one snapshot.
+  #
+  # Routes (paths are relative to SCRIPT_NAME, the mount path):
+  # - GET /assets/dashboard.css, /assets/dashboard.js: static files from an
+  #   allowlist. Any other asset name returns 404.
+  # - GET /, /metrics.json, /jobs, /jobs/:id, /batches, /batches/:id,
+  #   /schedules, /schedules/:key, /processes, /pauses, /cleaner,
+  #   /performance: read only. HEAD is handled as GET with an empty body.
+  # - POST /theme: sets the theme cookie. No database write.
+  # - POST /jobs/:id/(retry|reschedule|discard|force_discard|destroy):
+  #   writes one job.
+  # - POST /jobs/bulk: runs one job action on the selected ids, or on up to
+  #   10000 jobs that match the filter when all=1.
+  # - POST /batches/:id/retry: retries the discarded jobs of a batch.
+  # - POST /schedules/:key/(enable|disable|run): writes the enabled override
+  #   for the cron entry, or enqueues the cron entry now.
+  # - POST /pauses: pauses or resumes a queue, job class, or label.
+  # - POST /cleaner: deletes up to 10000 discarded jobs with one job class and
+  #   error class.
+  # Other methods return 405. Unknown paths return 404. A successful POST
+  # redirects with 303. Every POST except /theme sets a flash notice.
+  #
+  # Security:
+  # - CSRF: a double-submit token. A random 64-hex-character value lives in
+  #   the HttpOnly, SameSite=Lax decent_job_csrf cookie, and each form repeats
+  #   it as authenticity_token. Every POST compares the two in constant time
+  #   before routing. A mismatch returns 400.
+  # - Escaping: {View#h} HTML-escapes data in templates. Responses set a
+  #   content security policy that blocks inline scripts.
+  # - Redirects: only paths under the mount path are used. A foreign Referer
+  #   falls back to the dashboard root.
+  #
+  # See docs/dashboard.md.
   class Dashboard
     ASSETS = File.expand_path("dashboard/assets", __dir__)
     ASSET_TYPES = {"dashboard.css" => "text/css", "dashboard.js" => "text/javascript"}.freeze
@@ -24,24 +65,53 @@ module DecentJob
     JOB_ACTIONS = %w[retry reschedule discard force_discard destroy].freeze
     UUID = /\A\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\z/
 
+    # Raised by routes and pages. {#call} turns it into a 404 page.
     class NotFound < StandardError; end
+    # Raised for invalid input or a bad CSRF token. {#call} turns it into a
+    # 400 page that shows the message.
     class BadRequest < StandardError; end
+    # Raised when a form body is over {Request::MAX_BODY_BYTES}. {#call}
+    # turns it into a 413 page.
+    class PayloadTooLarge < BadRequest; end
 
+    # @param database [Database, nil] the pool to read and write. nil uses
+    #   {DecentJob.database} on each request.
+    # @param configuration [Configuration, nil] the source of cron entries.
+    #   nil uses {DecentJob.configuration} on each request.
+    # @param title [String] page title
     def initialize(database: nil, configuration: nil, title: "DecentJob")
       @explicit_database = database
       @configuration = configuration
       @title = title
     end
 
+    # @return [Database] the explicit pool, or the global pool
     def database
       @explicit_database || DecentJob.database
     end
 
+    # @return [Configuration] the explicit configuration, or the global one
     def configuration
       @configuration || DecentJob.configuration
     end
 
+    # Handles one Rack request.
+    #
+    # @param env [Hash{String => Object}] the Rack environment
+    # @return [Array(Integer, Hash{String => String}, Array<String>)] the Rack
+    #   response. Multiple cookies are joined with "\n" in "set-cookie".
+    # @note POST requests write to the database through the management APIs.
+    #   Routed responses set the CSRF cookie again. Asset, 404, and 400
+    #   responses do not. A HEAD request gets the GET headers and an empty
+    #   body, as Rack requires.
     def call(env)
+      status, headers, body = respond(env)
+      (env["REQUEST_METHOD"].to_s.upcase == "HEAD") ? [status, headers, []] : [status, headers, body]
+    end
+
+    private
+
+    def respond(env)
       request = Request.new(env)
       return asset(request) if request.path.start_with?("/assets/")
 
@@ -62,10 +132,9 @@ module DecentJob
     rescue NotFound
       [404, default_headers(request).merge("content-type" => "text/html; charset=utf-8"), [view ? view.layout("error", status: 404, message: "There is no page at #{request.path}.") : "Not found"]]
     rescue BadRequest => error
-      [400, default_headers(request).merge("content-type" => "text/html; charset=utf-8"), [view ? view.layout("error", status: 400, message: error.message) : error.message]]
+      status = error.is_a?(PayloadTooLarge) ? 413 : 400
+      [status, default_headers(request).merge("content-type" => "text/html; charset=utf-8"), [view ? view.layout("error", status: status, message: error.message) : error.message]]
     end
-
-    private
 
     # ----- routing ----------------------------------------------------------
 
@@ -99,6 +168,8 @@ module DecentJob
       end
     end
 
+    # Management errors (stale state, lock held, unknown record) become a
+    # redirect with a notice, not an error page.
     def post(segments, request, view, queries)
       form = request.form
       case segments
@@ -195,6 +266,8 @@ module DecentJob
 
     # ----- actions ----------------------------------------------------------
 
+    # Counts per-job failures as skipped and keeps going, so one locked or
+    # changed job does not stop the batch.
     def bulk_jobs(request, view, queries)
       form = request.form
       action = form["action"].to_s
@@ -229,6 +302,8 @@ module DecentJob
       end
     end
 
+    # Selects ids first, then deletes each job through Job#destroy_job, so the
+    # normal locking and history cleanup apply. Returns the number deleted.
     def destroy_discarded(job_class, error_class)
       ids = database.with_connection do |connection|
         connection.exec_params(<<~SQL, [job_class, error_class]).map { |row| row.fetch("id") }
@@ -265,6 +340,8 @@ module DecentJob
       [200, {"content-type" => "application/json; charset=utf-8", "cache-control" => "no-store"}, JSON.generate(value)]
     end
 
+    # "set-cookie-extra" is an internal header. {#call} moves it into
+    # "set-cookie" next to the CSRF cookie.
     def redirect(view, location, notice: nil, extra_cookie: nil)
       headers = {"location" => safe_location(location, view)}
       headers["set-cookie-extra"] = cookie(FLASH_COOKIE, notice, view.request) if notice
@@ -312,6 +389,8 @@ module DecentJob
       parts.join("; ")
     end
 
+    # Compares the form token with the cookie token. The cookie is the source
+    # of truth, so a missing cookie always fails.
     def verify_csrf!(request, view)
       token = request.form["authenticity_token"].to_s
       expected = request.cookies[CSRF_COOKIE].to_s
@@ -319,12 +398,15 @@ module DecentJob
       raise BadRequest, "The form token did not match. Reload the page and try again."
     end
 
+    # Constant-time comparison. The caller checks that the lengths match.
     def secure_compare(left, right)
       result = 0
       left.bytes.zip(right.bytes) { |a, b| result |= a ^ b }
       result.zero?
     end
 
+    # Parses a "created_at|id" keyset cursor. Returns nil for any invalid
+    # value, which shows the first page.
     def cursor(value)
       return unless value.is_a?(String)
       created_at, id = value.split("|", 2)
@@ -335,6 +417,8 @@ module DecentJob
       nil
     end
 
+    # Accepts ISO 8601, or the "YYYY-MM-DDTHH:MM" value of a datetime-local
+    # input. Returns nil for a blank value.
     def parse_time(value)
       return unless value.is_a?(String) && !value.strip.empty?
       Time.iso8601(value.strip)

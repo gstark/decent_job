@@ -99,6 +99,7 @@ describe "cron manager" do
     _(scheduler.shutdown(timeout: 0.01)).must_equal false
     _(scheduler.running?).must_equal false
     _(scheduler.shutdown?).must_equal false
+    _(scheduler.start).must_equal false
     release << true
     _(scheduler.shutdown(timeout: 1)).must_equal true
   ensure

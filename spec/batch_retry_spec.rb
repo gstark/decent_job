@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "timeout"
 
 class BatchManualRetryJob < ActiveJob::Base
   include DecentJob::ActiveJobExtensions::Concurrency
@@ -106,6 +107,23 @@ describe "manual batch retries" do
     _(row.fetch("payload")).must_equal original.fetch("payload")
     _(row.fetch("error")).must_equal original.fetch("error")
     _(@store.executions(member.provider_job_id).size).must_equal 1
+  end
+
+  it "wakes the async worker after a batch retry commits" do
+    DecentJob.reset!
+    DecentJob.configuration.max_threads = 1
+    DecentJob.configuration.poll_interval = 30
+    DecentJob.configuration.enable_listen_notify = false
+    async = DecentJob::Adapter.new(database: database, execution_mode: :async_all)
+    [BatchManualRetryJob, BatchManualSuccessfulJob].each { |klass| klass.queue_adapter = async }
+    batch = DecentJob::Batch.enqueue([BatchManualRetryJob.new("fail")], database: database)
+    member = batch.job_instances.first
+    Timeout.timeout(5) { sleep 0.01 until @store.find(member.provider_job_id).fetch("state") == "discarded" }
+    batch.retry
+    Timeout.timeout(5) { sleep 0.01 until @store.find(member.provider_job_id).fetch("state") == "succeeded" }
+  ensure
+    async&.shutdown(timeout: 5)
+    DecentJob.reset!
   end
 
   it "preserves successful members while retrying discarded members" do

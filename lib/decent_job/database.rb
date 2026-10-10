@@ -3,19 +3,52 @@
 require "pg"
 
 module DecentJob
+  # Raised when no pool connection becomes free within checkout_timeout.
   class ConnectionTimeout < StandardError; end
+  # Raised on checkout after {Database#close}.
   class ClosedDatabase < StandardError; end
+  # Raised when a pool is preparing to fork, or cannot prepare because a
+  # connection is in use.
   class ForkInProgress < StandardError; end
+  # Raised when a forked child uses a pool that it has not reset.
   class ForkedDatabase < StandardError; end
+  # Raised when a transaction block returns while PostgreSQL has already
+  # aborted the transaction, for example after the block rescued a PG error.
   class TransactionAborted < StandardError; end
 
   # A bounded pool. A checkout belongs to one execution context until its block returns.
   # Nested operations reuse that checkout, including transactions and locks.
+  #
+  # The execution context is {IsolatedState.context}: the current Thread, or
+  # the Active Support isolation context when Active Support is loaded. Code
+  # that holds a session advisory lock ({Claim}) depends on this reuse: a
+  # nested call must see the same PostgreSQL session.
+  #
+  # Interrupt rules: checkout and checkin are protected from Thread#raise and
+  # Thread#kill. The caller's block stays interruptible. When the owning
+  # thread is killed, checkin cancels any running query and closes the
+  # session instead of returning it to the pool. A killed PG query can leave
+  # unread protocol data, and the session can hold locks that nobody owns.
+  #
+  # Fork rules: every instance registers itself in a class-level registry.
+  # {Database.with_prepared_fork} closes all idle connections before a fork,
+  # and {Database.reset_after_fork} gives the child fresh, empty pools. A child
+  # must never send a termination packet on a socket that the parent owns.
+  # Connections from {#connect} are not in the pool, so fork preparation and
+  # {#close} do not close them.
+  #
+  # See docs/runtime-resources.md and docs/pgbouncer.md.
   class Database
     @registry_mutex = Mutex.new
     @registry = ObjectSpace::WeakMap.new
 
     class << self
+      # Adds database to the fork registry. Called from {Database#initialize}.
+      #
+      # @param database [Database]
+      # @return [void]
+      # @raise [ForkInProgress] while {.with_prepared_fork} is running
+      # @api private
       def register(database)
         @registry_mutex.synchronize do
           raise ForkInProgress, "databases are preparing to fork" if @fork_prepared
@@ -23,6 +56,21 @@ module DecentJob
         end
       end
 
+      # Prepares every registered pool for a fork, yields, then resumes the
+      # pools in the parent.
+      #
+      # Fork inside the block. New registrations and checkouts fail until the
+      # block returns. The parent resumes every pool that it started to
+      # prepare, also when preparation fails. The child skips the resume and
+      # must call {.reset_after_fork}.
+      #
+      # @yield the fork
+      # @return [Object] the block result
+      # @raise [ForkInProgress] when another preparation runs, or a pool has a
+      #   borrowed or connecting connection
+      # @raise [ForkedDatabase] when a registered pool belongs to another process
+      # @note Closes all idle pooled connections.
+      # @api private
       def with_prepared_fork
         owner = Process.pid
         acquired = false
@@ -54,6 +102,13 @@ module DecentJob
         end
       end
 
+      # Resets the registry and every registered pool in a forked child.
+      # Replaces the mutex, because the parent could hold it at fork time.
+      #
+      # @return [void]
+      # @raise [ForkInProgress] when a pool was not prepared in the parent
+      # @note Call only in the child, after a fork inside {.with_prepared_fork}.
+      # @api private
       def reset_after_fork
         @registry_mutex = Mutex.new
         @fork_prepared = false
@@ -61,8 +116,15 @@ module DecentJob
       end
     end
 
+    # @return [Integer] the pid of the process that owns this pool
     attr_reader :owner_pid
 
+    # Closes idle connections and blocks checkouts before a fork.
+    #
+    # @return [void]
+    # @raise [ForkedDatabase] when this pool belongs to another process
+    # @raise [ForkInProgress] when a connection is borrowed or connecting
+    # @api private
     def prepare_fork
       raise ForkedDatabase, "create a new Database after forking" if @pid != Process.pid
       @mutex.synchronize do
@@ -74,10 +136,20 @@ module DecentJob
       end
     end
 
+    # Allows checkouts again in the parent after a fork.
+    #
+    # @return [void]
+    # @api private
     def resume_after_fork
       @mutex.synchronize { @fork_prepared = false }
     end
 
+    # Replaces all pool state in a forked child and makes the child the owner.
+    #
+    # @return [void]
+    # @raise [ForkInProgress] when the pool was not prepared, or this is not a
+    #   child process
+    # @api private
     def reset_after_fork
       raise ForkInProgress, "pool must be prepared in the parent before resetting in its child" unless @fork_prepared && @pid != Process.pid
       # Parent preparation closed every owned connection before the fork. Never
@@ -93,6 +165,14 @@ module DecentJob
       @pid = @owner_pid = Process.pid
     end
 
+    # Changes the maximum number of pooled connections.
+    #
+    # A smaller size closes surplus idle connections now. Surplus borrowed
+    # connections close when their owners check them in.
+    #
+    # @param pool_size [Integer] the new maximum, greater than zero
+    # @return [void]
+    # @raise [ArgumentError] when pool_size is not a positive Integer
     def resize(pool_size)
       raise ArgumentError, "pool_size must be positive" unless pool_size.is_a?(Integer) && pool_size.positive?
       @mutex.synchronize do
@@ -105,6 +185,13 @@ module DecentJob
       end
     end
 
+    # Creates an empty pool. Connections open on demand.
+    #
+    # @param url [String] the PostgreSQL connection string for PG.connect
+    # @param pool_size [Integer] the maximum number of pooled connections
+    # @param checkout_timeout [Numeric] seconds to wait for a free connection
+    # @raise [ArgumentError] when pool_size or checkout_timeout is not positive
+    # @raise [ForkInProgress] while {.with_prepared_fork} is running
     def initialize(url:, pool_size: 5, checkout_timeout: 5)
       raise ArgumentError, "pool_size must be positive" unless pool_size.is_a?(Integer) && pool_size.positive?
       raise ArgumentError, "checkout_timeout must be positive" unless checkout_timeout.positive?
@@ -124,6 +211,20 @@ module DecentJob
       Database.register(self)
     end
 
+    # Yields the current context's connection, checking one out if needed.
+    #
+    # A nested call yields the same connection and does not check it in. The
+    # outermost call checks it in when its block ends.
+    #
+    # @yieldparam connection [PG::Connection] the checked-out connection. Do
+    #   not keep it after the block returns.
+    # @return [Object] the block result
+    # @raise [ConnectionTimeout] when no connection is free within
+    #   checkout_timeout seconds
+    # @raise [ClosedDatabase] after {#close}
+    # @raise [ForkInProgress] while a fork is being prepared
+    # @raise [ForkedDatabase] in a forked child before {.reset_after_fork}
+    # @note Checkin runs the {#after_connection_release} callbacks.
     def with_connection
       raise ForkedDatabase, "create a new Database after forking" if @pid != Process.pid
 
@@ -146,6 +247,22 @@ module DecentJob
       end
     end
 
+    # Runs the block in a transaction, or in a savepoint when the connection
+    # is already in a transaction.
+    #
+    # The transaction commits when the block returns and rolls back when it
+    # raises. If the thread is killed, no COMMIT or ROLLBACK is sent;
+    # {#with_connection} closes the session, which aborts the transaction.
+    # A committed savepoint passes its callbacks to the enclosing frame.
+    # Commit callbacks run after the outermost COMMIT. Rollback callbacks run
+    # when their own frame or any enclosing frame rolls back.
+    #
+    # @yieldparam connection [PG::Connection] the checked-out connection
+    # @return [Object] the block result, or nil when the thread is aborting
+    # @raise [TransactionAborted] when the block returns but PostgreSQL has
+    #   aborted the transaction
+    # @note The savepoint check reads transaction_status. A connection in an
+    #   aborted transaction gets a SAVEPOINT command, which fails.
     def transaction
       with_connection do |connection|
         Thread.handle_interrupt(Object => :on_blocking) do
@@ -193,11 +310,22 @@ module DecentJob
 
     # Inspect only this context's checkout. An aborted transaction cannot accept
     # a savepoint; observers must still run so they can report the original error.
+    #
+    # @return [Boolean, nil] true when this context's connection is in an open,
+    #   healthy transaction. False or nil otherwise, including in an aborted
+    #   transaction or with no checkout.
     def in_transaction?
       connection = @mutex.synchronize { @borrowed[IsolatedState.context] }
       connection && !connection.finished? && connection.transaction_status == PG::PQTRANS_INTRANS
     end
 
+    # Runs the block after the outermost {#transaction} of this context
+    # commits. Runs it at once when there is no such transaction.
+    #
+    # @yield the callback
+    # @return [void]
+    # @note Only transactions opened with {#transaction} count. A raw BEGIN on
+    #   the connection does not defer the callback.
     def after_commit(&block)
       frames = @mutex.synchronize { @transaction_callbacks[@borrowed[IsolatedState.context]] }
       if frames && !frames.empty?
@@ -209,6 +337,11 @@ module DecentJob
 
     # Savepoint commits retain these callbacks until the outer transaction ends.
     # Without an active transaction there is no rollback to observe.
+    #
+    # @yield the callback, run when the innermost open {#transaction} frame or
+    #   an enclosing frame rolls back
+    # @return [void]
+    # @note Without an open {#transaction} the block is dropped.
     def after_rollback(&block)
       frames = @mutex.synchronize { @transaction_callbacks[@borrowed[IsolatedState.context]] }
       frames.last[:rollback] << block if frames && !frames.empty?
@@ -216,6 +349,12 @@ module DecentJob
 
     # Internal cleanup that must wait until this context releases its outer
     # checkout, including application ensures and retirement of killed sessions.
+    #
+    # @yield the callback. It runs at once when this context has no checkout.
+    # @return [void]
+    # @note Callbacks run after the connection is back in the pool or closed.
+    #   Every callback runs; the first error is raised after the last one.
+    # @api private
     def after_connection_release(&block)
       connection = @mutex.synchronize do
         current = @borrowed[IsolatedState.context]
@@ -227,16 +366,29 @@ module DecentJob
 
     # An independently owned connection for LISTEN and other session state.
     # The caller must close it. It does not consume a pool checkout.
+    #
+    # @return [PG::Connection] a new connection that the caller owns
+    # @raise [ForkedDatabase] in a forked child before {.reset_after_fork}
+    # @raise [PG::Error] when the connection fails
+    # @note {#close} and fork preparation do not track or close it.
     def connect
       raise ForkedDatabase, "create a new Database after forking" if @pid != Process.pid
       PG.connect(@url)
     end
 
+    # @return [Hash{Symbol => Integer}] size is the configured maximum,
+    #   connections counts open and connecting slots, active counts borrowed
+    #   connections, and idle counts connections ready for checkout
     def stats
       @mutex.synchronize { {size: @pool_size, connections: @size, active: @borrowed.size, idle: @idle.size} }
     end
 
     # Busy connections close when their current owner returns them.
+    #
+    # The pool stays closed. Later checkouts raise {ClosedDatabase}, and
+    # waiting checkouts wake up and raise it.
+    #
+    # @return [void]
     def close
       @mutex.synchronize do
         @closed = true
@@ -249,6 +401,9 @@ module DecentJob
 
     private
 
+    # Reserves a slot under the mutex, then connects outside it so a slow
+    # connect does not block other checkouts. The ensure frees the slot if the
+    # connect fails, is interrupted, or the pool closes during the connect.
     def checkout(owner:)
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + @checkout_timeout
       reserved = false
@@ -292,6 +447,8 @@ module DecentJob
       end
     end
 
+    # Asks the server to cancel a query that a killed thread left running, so
+    # its locks release before the session closes. Waits at most one second.
     def cancel_interrupted_query(connection)
       return if connection.finished? || connection.status != PG::CONNECTION_OK || connection.transaction_status != PG::PQTRANS_ACTIVE
       unless defined?(PG::CancelConnection)
@@ -321,6 +478,9 @@ module DecentJob
       cancellation&.finish
     end
 
+    # Returns the connection to the idle list, or closes it when the owner was
+    # killed, the pool is closed or shrunk, or the connection is bad. Release
+    # callbacks run after the mutex is released.
     def checkin(connection, owner:, interrupted: false)
       cancel_interrupted_query(connection) if interrupted
     ensure

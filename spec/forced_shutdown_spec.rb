@@ -75,7 +75,7 @@ describe "forced worker shutdown" do
       _(@worker.interrupted_job_ids).must_equal [job.job_id]
       _(@worker.shutdown?).must_equal false
       process_id = @worker.process_id
-      _(@worker.start).must_equal @worker
+      _(@worker.start).must_equal false
       _(@worker.process_id).must_equal process_id
       _(DecentJob::Claim.new(database).with_next(job_id: job.provider_job_id) { flunk "claim must stay locked" }).must_be_nil
       ForcedShutdownJob.release << true

@@ -16,7 +16,7 @@ warn "Interrupted jobs: #{worker.interrupted_job_ids.join(', ')}"
 worker.shutdown unless drained
 ```
 
-Shutdown returns true only when all owned resources have drained. A false return means some resources still run. Calling shutdown again can wait for them. A worker cannot restart while its previous threads still own resources.
+Shutdown returns true only when all owned resources have drained. A false return means some resources still run. Calling shutdown again can wait for them. A worker or cron manager cannot restart while its previous threads still own resources. Its `start` returns false until they exit.
 
 ## Forced interruption
 

@@ -2,15 +2,37 @@
 
 module DecentJob
   class Configuration
+    # Checks a configuration and records every problem it finds.
+    #
+    # {Configuration#valid?} creates one validator per run. The validator
+    # reads settings through the public getters, so it checks the effective
+    # value after source precedence. It covers settings whose setters do not
+    # validate, plus cross-setting rules and cron entries. Setters such as
+    # max_cache= and pidfile= raise on assignment instead, so their values are
+    # not checked again here.
+    #
+    # Validation opens no database, enqueues no job, and runs no application
+    # callback. Building a cron entry can resolve a named job class, which can
+    # load application code through the host autoloader.
+    #
+    # See docs/configuration.md.
     class Validator
+      # @param configuration [Configuration] the configuration to check
+      # @param errors [Errors] the collection that receives the messages
       def initialize(configuration, errors)
         @configuration = configuration
         @errors = errors
       end
 
+      # Runs all checks and records each failure.
+      #
+      # A failure in one setting does not stop the other checks, so one run
+      # reports all problems.
+      #
+      # @return [Errors] the collection given to {#initialize}
       def validate
         validate_handled_exceptions
-        %i[retry_on_unhandled_error enable_cron].each do |field|
+        %i[retry_on_unhandled_error enable_cron enable_listen_notify enable_pauses].each do |field|
           @errors.add(field, "must be true or false") unless [true, false].include?(@configuration.public_send(field))
         end
         unless EXECUTION_MODES.include?(@configuration.execution_mode)
@@ -64,6 +86,8 @@ module DecentJob
           @errors.add(:queues, "must be a nonempty string")
           return
         end
+        # A pipe separates subprocess queue groups. Each group is a full queue
+        # expression with its own semicolon-separated pools.
         queues.split("|", -1).map(&:strip).each do |group|
           if group.empty?
             @errors.add(:queues, "groups must not be empty")
@@ -76,6 +100,9 @@ module DecentJob
         end
       end
 
+      # Builds each entry without a database to check its fields. Any error
+      # from one entry becomes a message, so the other entries still get
+      # checked.
       def validate_cron
         unless @configuration.cron.is_a?(Hash)
           @errors.add(:cron, "must be a Hash")

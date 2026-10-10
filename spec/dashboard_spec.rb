@@ -184,6 +184,21 @@ describe DecentJob::Dashboard do
       _(body).must_include "&lt;script&gt;"
     end
 
+    it "answers HEAD with GET headers and no body" do
+      status, headers, body = request("HEAD", "/")
+      _(status).must_equal 200
+      _(headers["content-type"]).must_include "text/html"
+      _(body).must_equal ""
+    end
+
+    it "rejects an oversized form body with 413" do
+      get("/")
+      status, headers, body = post("/pauses", params: {"name" => "x" * DecentJob::Dashboard::Request::MAX_BODY_BYTES})
+      _(status).must_equal 413
+      _(headers["content-type"]).must_include "text/html"
+      _(body).must_include "too large"
+    end
+
     it "retries, reschedules, discards, and deletes jobs with CSRF protection" do
       enqueued = FailingJob.perform_later
       @performer.perform_one

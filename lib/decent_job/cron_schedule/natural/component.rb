@@ -3,11 +3,29 @@
 module DecentJob
   class CronSchedule
     class Natural
-      # A calendar field, or an hour/minute pair. Priority is per coordinate:
-      # intervals supply defaults, while explicit minutes override those defaults.
+      # One parsed clause of a natural schedule: a calendar field, or an
+      # hour/minute pair. The {Natural} grammar rules create components, and
+      # {Compiler} merges them.
+      #
+      # +key+ is one of :second, :hour, :monthday, :month, :weekday, :time, or
+      # :zone. +values+ always has two items. For :time it is [hour, minute].
+      # For other keys the second item is nil.
+      # A value is an Integer, an Array, or cron text such as "*/15" or "1-5".
+      #
+      # Priority is per coordinate: intervals supply defaults, while explicit
+      # minutes override those defaults. +weak+ and +strong+ are nil, true
+      # (all coordinates), or a coordinate index (0 for hour, 1 for minute).
+      # In a merge, a strong coordinate wins, then the side that is not weak.
+      # Two unranked values are unioned.
       class Component
         attr_reader :key, :values, :weak, :strong
 
+        # @param key [Symbol] the field key
+        # @param first [Object] the field value, or the hour for :time
+        # @param second [Object, nil] the minute for :time, otherwise nil
+        # @param weak [Boolean, Integer, nil] coordinates that yield in a merge
+        # @param strong [Boolean, Integer, nil] coordinates that win in a merge
+        # @api private
         def initialize(key, first, second = nil, weak: nil, strong: nil)
           @key = key
           @values = [first, second]
@@ -15,15 +33,31 @@ module DecentJob
           @strong = strong
         end
 
+        # @return [Boolean] true when the component has a weak or strong marker
+        # @api private
         def graded?
           !weak.nil? || !strong.nil?
         end
 
+        # Merges two components of the same key, coordinate by coordinate.
+        # The result has no markers.
+        #
+        # @param other [Component] the other component
+        # @return [Component] a new component
+        # @raise [ArgumentError] when a whole-hour point meets a strong minute
+        # @api private
         def merge(other)
           combined = values.each_index.map { |index| combine(other, index) }
           self.class.new(key, *combined)
         end
 
+        # Returns the hour range of a time span such as "from 9 to 17". A
+        # strong minute merged with it covers the hours before the end hour.
+        #
+        # @return [Array(Integer, Integer), nil] the start and end hours, or nil
+        #   when this is not a :time with minute 0 or its hour is not a range
+        # @raise [ArgumentError] when this is a single whole-hour point
+        # @api private
         def hour_range
           value = values[0]
           return unless key == :time && values[1] == 0
