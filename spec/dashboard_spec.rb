@@ -105,6 +105,19 @@ describe DecentJob::Dashboard do
   end
 
   describe "jobs" do
+    it "hides serializer markers in job arguments" do
+      argument = ActiveSupport::HashWithIndifferentAccess.new("nested" => {symbol: :value})
+      enqueued = RecordingJob.perform_later(argument)
+      job = job_for(enqueued)
+      _(job.payload.to_json).must_include DecentJob::Arguments::INDIFFERENT_KEY
+      _, _, body = get("/jobs/#{job.id}")
+      arguments_panel = body[%r{<h2>Arguments</h2>\s*<pre class="code">(.*?)</pre>}m, 1]
+      _(arguments_panel).must_include "nested"
+      _(arguments_panel).wont_include "_aj_"
+      _, _, body = get("/jobs")
+      _(body).wont_include "_aj_"
+    end
+
     it "lists, filters, searches, and paginates jobs" do
       RecordingJob.set(queue: "mailers").perform_later("first")
       DashboardLabelledJob.set(wait: 60, decent_job_labels: ["nightly"]).perform_later("second")

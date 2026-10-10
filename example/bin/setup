@@ -3,8 +3,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 URL="${DECENT_JOB_DATABASE_URL:-postgres:///decent_job_example}"
 DB="${URL##*/}"
-if ! psql -lqt | cut -d '|' -f 1 | grep -qw "$DB"; then
-  createdb "$DB"
+DB="${DB%%\?*}"
+if ! psql "$URL" -qAtc "select 1" >/dev/null 2>&1; then
+  createdb --maintenance-db="${URL%/*}/postgres" "$DB"
   echo "created database $DB"
 fi
 DECENT_JOB_DATABASE_URL="$URL" bundle exec decent_job migrate --require ./jobs.rb

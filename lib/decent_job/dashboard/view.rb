@@ -119,7 +119,7 @@ module DecentJob
         (text.length > length) ? "#{text[0, length - 1]}…" : text
       end
 
-      INTERNAL_KEYS = %w[_aj_ruby2_keywords _aj_symbol_keys _aj_hashwithindifferentaccess _aj_serialized].freeze
+      INTERNAL_KEYS = [Arguments::RUBY2_KEYWORDS_KEY, Arguments::SYMBOL_KEYS_KEY, Arguments::INDIFFERENT_KEY, Arguments::OBJECT_KEY].freeze
 
       def arguments_of(job)
         clean_arguments(job.fetch("payload", {}).fetch("arguments", []))

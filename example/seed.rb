@@ -5,6 +5,7 @@
 #
 #   bundle exec ruby seed.rb          # one round
 #   bundle exec ruby seed.rb --loop   # a new round every 20 seconds
+require "securerandom"
 require_relative "jobs"
 
 module Seed
