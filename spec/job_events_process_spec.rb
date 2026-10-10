@@ -27,6 +27,7 @@ describe "job events from a standalone CLI worker" do
 
   def events
     return [] unless File.exist?(@events_path)
+
     File.readlines(@events_path).filter_map do |line|
       JSON.parse(line)
     rescue JSON::ParserError
@@ -42,10 +43,12 @@ describe "job events from a standalone CLI worker" do
                    "DECENT_JOB_IDLE_TIMEOUT" => nil, "NOTIFY_SOCKET" => nil, "WATCHDOG_USEC" => nil}
     command = [RbConfig.ruby, "-Ilib", "exe/decent_job", "start", "--require", "spec/support/job_events_cli_app.rb",
       "--max-threads", "1", "--poll-interval", "0.02", "--shutdown-timeout", "3"]
+
     Open3.popen3(environment, *command, pgroup: true) do |input, output, error, process|
       input.close
       stdout = Thread.new { output.read }
       stderr = Thread.new { error.read }
+
       Timeout.timeout(12) do
         loop do
           raise "Worker stopped: #{stderr.value}\n#{stdout.value}" unless process.alive?
@@ -54,6 +57,7 @@ describe "job events from a standalone CLI worker" do
           sleep 0.01
         end
       end
+
       yield process.pid
       Process.kill("TERM", process.pid)
       status = Timeout.timeout(6) { process.value }
@@ -64,6 +68,7 @@ describe "job events from a standalone CLI worker" do
         Process.kill("KILL", -process.pid)
         process.join
       end
+
       stdout&.join
       stderr&.join
     end
@@ -72,6 +77,7 @@ describe "job events from a standalone CLI worker" do
   %w[thread fiber].each do |isolation|
     it "reports retries before persistence and keeps snapshots after deletion with #{isolation} isolation" do
       jobs = %w[success retry].map { |action| JobEventsProcessJob.perform_later(action) }
+
       run_worker(isolation) do |pid|
         performed = events.select { |event| event.fetch("name") == "perform_job.decent_job" }
         _(performed.map { |event| event.fetch("id") }.uniq.sort).must_equal jobs.map(&:provider_job_id).sort
@@ -85,6 +91,7 @@ describe "job events from a standalone CLI worker" do
         _(retry_events.last.values_at("retried", "error", "has_value", "value")).must_equal [false, nil, true, false]
         _(performed.map { |event| event.fetch("execution_id") }.uniq.size).must_equal 3
       end
+
       snapshots = JSON.parse(File.read(@snapshots_path))
       _(snapshots.size).must_equal 3
       _(snapshots.all? { |snapshot| snapshot.fetch("id") == snapshot.fetch("job_id") && snapshot.fetch("job_class") == "JobEventsProcessJob" && snapshot.fetch("state") == "running" }).must_equal true

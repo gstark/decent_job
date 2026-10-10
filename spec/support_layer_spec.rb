@@ -82,10 +82,12 @@ describe "DecentJob support layer" do
   it "scopes logger tags per thread" do
     output = StringIO.new
     logger = DecentJob::Logging.tagged_logger(output)
+
     logger.tagged("outer") do
       Thread.new { logger.info("other") }.join
       logger.info("inner")
     end
+
     _(output.string.lines).must_equal ["other\n", "[outer] inner\n"]
   end
 

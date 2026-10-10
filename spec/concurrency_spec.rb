@@ -31,12 +31,14 @@ describe "concurrency controls" do
   before do
     DecentJob::Schema.new(database).migrate
     @adapter = DecentJob::Adapter.new(database: database)
+
     [ControlledJob, ControlledBlockingJob, CallbackLabeledJob, ControlledRetryingJob].each do |job|
       job.queue_adapter = @adapter
       job.decent_job_concurrency_config = {}
       job.decent_job_concurrency_rules = []
       job.decent_job_labels = []
     end
+
     ControlledJob.events = Queue.new
     ControlledBlockingJob.started = Queue.new
     ControlledBlockingJob.release = Queue.new
@@ -74,12 +76,14 @@ describe "concurrency controls" do
   it "serializes simultaneous enqueuers across connections" do
     ControlledJob.decent_job_control_concurrency_with(total_limit: 1)
     release = Queue.new
+
     threads = 8.times.map do |index|
       Thread.new do
         release.pop
         ControlledJob.perform_later(index)
       end
     end
+
     8.times { release << true }
     _(threads.map(&:value).count { |job| job }).must_equal 1
   end
@@ -125,9 +129,11 @@ describe "concurrency controls" do
     job = ControlledJob.perform_later("first")
     @performer.perform_one
     _(ControlledJob.perform_later("too soon")).must_equal false
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET created_at = clock_timestamp() - interval '61 seconds' WHERE id = $1", [job.provider_job_id])
     end
+
     _(ControlledJob.perform_later("next window")).must_be_kind_of ControlledJob
   end
 
@@ -209,6 +215,7 @@ describe "concurrency controls" do
     _(jobs.first.decent_job_labels).must_equal ["account"]
     _(jobs.last.successfully_enqueued?).must_equal false
   end
+
   it "lets an explicit enqueue limit override the total limit at enqueue" do
     ControlledJob.decent_job_control_concurrency_with(total_limit: 0, enqueue_limit: 1)
     _(ControlledJob.perform_later("allowed to queue")).must_be_kind_of ControlledJob
@@ -320,6 +327,7 @@ describe "concurrency controls" do
   it "does not count a rescheduled job until its execution releases the lock" do
     ControlledJob.decent_job_control_concurrency_with(enqueue_limit: 1)
     job = ControlledJob.perform_later("retrying")
+
     DecentJob::Claim.new(database).with_next(job_id: job.provider_job_id) do |row|
       context = {id: row.fetch("id"), execution_id: row.fetch("execution_id")}
       @store.reschedule(job, context)

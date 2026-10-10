@@ -7,11 +7,13 @@ class BatchUnavailableArgumentsJob < ActiveJob::Base
 
   class_attribute :enqueue_events, default: []
   class_attribute :abort_retry, default: false
+
   before_enqueue do
     enqueue_events << [executions, I18n.locale]
     throw :abort if executions.positive? && abort_retry
     self.queue_name = "retried" if executions.positive?
   end
+
   after_enqueue { enqueue_events << :after }
 
   discard_on ActiveJob::DeserializationError
@@ -51,9 +53,11 @@ describe "batch retries with unavailable serialized arguments" do
         batch = DecentJob::Batch.enqueue([member], database: database)
         _(@performer.perform_one.state).must_equal "discarded"
         original_history = @store.executions(member.provider_job_id)
+
         database.with_connection do |connection|
           connection.exec_params("UPDATE decent_jobs SET payload = jsonb_set(payload, '{arguments}', $2::jsonb) WHERE id = $1", [member.provider_job_id, JSON.generate(arguments)])
         end
+
         BatchUnavailableArgumentsJob.enqueue_events = []
         BatchUnavailableArgumentsJob.queue_adapter = DecentJob::Adapter.new(database: database, execution_mode: mode)
         batch.retry
@@ -64,6 +68,7 @@ describe "batch retries with unavailable serialized arguments" do
         _(row.fetch("queue_name")).must_equal "retried"
         _(BatchUnavailableArgumentsJob.enqueue_events).must_equal [[1, I18n.locale], :after]
         _(@store.executions(member.provider_job_id).first).must_equal original_history.first
+
         if mode == :external
           _(row.fetch("state")).must_equal "ready"
           _(row.fetch("payload").fetch("executions")).must_equal 1
@@ -71,6 +76,7 @@ describe "batch retries with unavailable serialized arguments" do
         else
           _(row.fetch("state")).must_equal "discarded"
         end
+
         _(batch.reload.finished?).must_equal true
         _(@store.executions(member.provider_job_id).size).must_equal 2
       end
@@ -81,9 +87,11 @@ describe "batch retries with unavailable serialized arguments" do
     member = BatchUnavailableArgumentsJob.new("original")
     batch = DecentJob::Batch.enqueue([member], database: database)
     @performer.perform_one
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET payload = jsonb_set(payload, '{arguments}', '[{\"_aj_serialized\":\"RemovedBatchArgumentSerializer\"}]') WHERE id = $1", [member.provider_job_id])
     end
+
     before = @store.find(member.provider_job_id)
     BatchUnavailableArgumentsJob.abort_retry = true
     BatchUnavailableArgumentsJob.enqueue_events = []

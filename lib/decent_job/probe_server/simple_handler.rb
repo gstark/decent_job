@@ -54,6 +54,7 @@ module DecentJob
           @stopping = false
           @thread = Thread.new { serve }
         end
+
         self
       end
 
@@ -78,6 +79,7 @@ module DecentJob
           close_owned_sockets
           (@pid == Process.pid) ? @thread : nil
         end
+
         return true unless thread
         return false if thread == Thread.current
         !!thread.join(timeout)
@@ -94,6 +96,7 @@ module DecentJob
           @stopping = true
           close_owned_sockets
         end
+
         self
       end
 
@@ -111,6 +114,7 @@ module DecentJob
           listener = @mutex.synchronize { @stopping ? nil : @socket }
           break unless listener
           client = listener.accept
+
           accepted = @mutex.synchronize do
             if @stopping
               client.close
@@ -120,7 +124,9 @@ module DecentJob
               true
             end
           end
+
           break unless accepted
+
           begin
             respond(client)
           ensure
@@ -141,12 +147,14 @@ module DecentJob
 
       def respond(client)
         env = nil
+
         response = begin
           env = read_request(client)
           app_response(env)
         rescue BadRequest
           Response.error(400)
         end
+
         status, headers, content = response
         output = "HTTP/1.1 #{status} #{Response::REASONS.fetch(status, "Response")}\r\n"
         headers.each { |key, value| output << "#{key}: #{value}\r\n" }
@@ -171,6 +179,7 @@ module DecentJob
       def read_request(client)
         deadline = monotonic_time + @request_timeout
         input = +"".b
+
         until input.include?("\r\n\r\n")
           remaining = deadline - monotonic_time
           raise BadRequest unless remaining.positive? && IO.select([client], nil, nil, remaining)
@@ -180,6 +189,7 @@ module DecentJob
           input << part
           raise BadRequest if input.bytesize > Response::MAX_HEADER_BYTES
         end
+
         lines = input.split("\r\n\r\n", 2).first.split("\r\n")
         match = /\A([A-Z]+) (\/[^\x00-\x20\x7f#]*) HTTP\/(1\.[01])\z/.match(lines.shift)
         raise BadRequest unless match
@@ -189,6 +199,7 @@ module DecentJob
                "SERVER_PROTOCOL" => "HTTP/#{version}", "SERVER_NAME" => "0.0.0.0",
                "SERVER_PORT" => @port.to_s, "REMOTE_ADDR" => client.peeraddr[3], "rack.url_scheme" => "http"}
         raise BadRequest if lines.length > 100
+
         lines.each do |line|
           key, value = line.split(":", 2)
           raise BadRequest unless key && value && Response::TOKEN.match?(key) && !value.match?(/[\x00-\x08\x0a-\x1f\x7f]/)
@@ -196,6 +207,7 @@ module DecentJob
           raise BadRequest if env.key?(name)
           env[name] = value.strip
         end
+
         raise BadRequest if env["HTTP_TRANSFER_ENCODING"] || (env["HTTP_CONTENT_LENGTH"] && env["HTTP_CONTENT_LENGTH"] != "0")
         env
       end
@@ -205,6 +217,7 @@ module DecentJob
       def write_response(client, bytes)
         deadline = monotonic_time + @response_timeout
         offset = 0
+
         while offset < bytes.bytesize
           remaining = deadline - monotonic_time
           return unless remaining.positive? && IO.select(nil, [client], nil, remaining)

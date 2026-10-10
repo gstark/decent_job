@@ -67,21 +67,26 @@ describe DecentJob::Base do
     it "nests mixed callbacks in definition order like Active Job" do
       klass = job_class do
         before_perform { self.class.log << :b1 }
+
         around_perform do |_job, block|
           self.class.log << :a1_in
           block.call
           self.class.log << :a1_out
         end
+
         after_perform { self.class.log << :af1 }
         before_perform { self.class.log << :b2 }
+
         around_perform do |_job, block|
           self.class.log << :a2_in
           block.call
           self.class.log << :a2_out
         end
+
         after_perform { self.class.log << :af2 }
         define_method(:perform) { self.class.log << :perform }
       end
+
       klass.perform_now
       _(klass.log).must_equal %i[b1 a1_in b2 a2_in perform af2 a2_out af1 a1_out]
     end
@@ -92,6 +97,7 @@ describe DecentJob::Base do
         before_perform { throw :abort }
         define_method(:perform) { self.class.log << :perform }
       end
+
       _(klass.perform_now).must_equal false
       _(klass.log).must_equal []
     end
@@ -101,6 +107,7 @@ describe DecentJob::Base do
         around_perform { |_job, _block| self.class.log << :around }
         define_method(:perform) { self.class.log << :perform }
       end
+
       _(klass.perform_now).must_be_nil
       _(klass.log).must_equal [:around]
     end
@@ -113,6 +120,7 @@ describe DecentJob::Base do
         define_method(:skip?) { arguments.first == :skip }
         define_method(:perform) { |*| 42 }
       end
+
       _(klass.perform_now(true)).must_equal 42
       _(klass.log).must_equal %i[record unless]
       klass.log.clear
@@ -161,6 +169,7 @@ describe DecentJob::Base do
         before_enqueue { throw :abort if arguments.first == :abort }
         define_method(:perform) { |*| }
       end
+
       _(klass.perform_later(:abort)).must_equal false
       _(@adapter.jobs).must_equal []
 
@@ -175,6 +184,7 @@ describe DecentJob::Base do
         before_enqueue { raise "callbacks must not run" }
         define_method(:perform) { |*| }
       end
+
       jobs = [klass.new(1), klass.new(2)]
       _(DecentJob.perform_all_later(jobs)).must_be_nil
       _(@adapter.bulk).must_equal jobs
@@ -187,6 +197,7 @@ describe DecentJob::Base do
         queue_as :reports
         queue_with_priority 10
       end
+
       child = Class.new(parent)
       _(child.new.queue_name).must_equal "reports"
       _(child.new.priority).must_equal 10
@@ -204,6 +215,7 @@ describe DecentJob::Base do
         retry_on ArgumentError, wait: 10, attempts: 2
         define_method(:perform) { raise ArgumentError, "flaky" }
       end
+
       job = klass.new
       _(job.perform_now).must_be_kind_of ArgumentError
       _(job.decent_job_outcome.first).must_equal :retried
@@ -219,10 +231,12 @@ describe DecentJob::Base do
 
     it "calls the exhausted block with the class as self" do
       seen = nil
+
       klass = job_class do
         retry_on(ArgumentError, attempts: 1) { |job, error| seen = [self, job.class, error.message] }
         define_method(:perform) { raise ArgumentError, "done" }
       end
+
       _(klass.perform_now).must_be_kind_of ArgumentError
       _(seen).must_equal [klass, klass, "done"]
     end
@@ -233,6 +247,7 @@ describe DecentJob::Base do
         retry_on KeyError, wait: ->(executions) { executions * 100 }
         define_method(:perform) { |error| raise error }
       end
+
       klass.perform_now(ArgumentError)
       _(@adapter.jobs.last.last).must_be_close_to Time.now.to_f + 3, 1
       klass.perform_now(KeyError)
@@ -243,12 +258,14 @@ describe DecentJob::Base do
       klass = job_class do
         discard_on KeyError
         after_discard { |_job, error| self.class.log << [:after_discard, error.class] }
+
         define_method(:perform) do
           raise KeyError
         rescue KeyError
           raise "wrapped"
         end
       end
+
       job = klass.new
       _(job.perform_now).must_be_kind_of KeyError
       _(job.decent_job_outcome.first).must_equal :discarded
@@ -263,6 +280,7 @@ describe DecentJob::Base do
         define_method(:argument) { |error| self.class.log << [:argument, error.message] }
         define_method(:perform) { |error| raise error }
       end
+
       klass.perform_now(ArgumentError.new("a"))
       klass.perform_now(RuntimeError.new("b"))
       _ { klass.perform_now(Exception.new("c")) }.must_raise Exception

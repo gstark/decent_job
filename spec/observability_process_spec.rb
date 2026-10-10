@@ -43,14 +43,17 @@ describe "worker observability through the CLI" do
   def run_worker(priority_option)
     command = [RbConfig.ruby, "-Ilib", "exe/decent_job", "start", "--require", "spec/support/observability_cli_app.rb",
       "--poll-interval", "0.05", "--shutdown-timeout", "3", "--no-listen-notify", priority_option]
+
     Open3.popen3(@environment, *command, pgroup: true) do |input, output, error, process|
       input.close
       stdout = Thread.new { output.read }
       stderr = Thread.new { error.read }
+
       await do
         raise "Worker stopped: #{stderr.value}\n#{stdout.value}" unless process.alive?
         snapshot(@started)
       end
+
       yield
       Process.kill("TERM", process.pid)
       status = Timeout.timeout(6) { process.value }
@@ -60,6 +63,7 @@ describe "worker observability through the CLI" do
         Process.kill("KILL", -process.pid)
         process.join
       end
+
       stdout&.join
       stderr&.join
     end
@@ -67,6 +71,7 @@ describe "worker observability through the CLI" do
 
   it "publishes live execution activity and exposes graceful shutdown to a lowered-priority job" do
     job = ObservabilityProcessJob.perform_later
+
     run_worker("--lower-thread-priority") do
       started = snapshot(@started)
       _(started.fetch("priority")).must_equal(-3)
@@ -77,12 +82,14 @@ describe "worker observability through the CLI" do
       _(stats.fetch("total_executions_count")).must_equal 0
       _(stats.fetch("execution_at")).wont_be_nil
       _(stats.fetch("check_queue_at")).wont_be_nil
+
       await do
         DecentJob::ProcessRecord.all(database: database).any? do |record|
           record.state["active_execution_thread_count"] == 1 && record.state["execution_at"]
         end
       end
     end
+
     stopped = snapshot(@stopping)
     _(stopped.fetch("running")).must_equal false
     _(stopped.fetch("shutting_down")).must_equal true
@@ -92,9 +99,11 @@ describe "worker observability through the CLI" do
 
   it "allows the CLI to turn off application-configured lowered priority" do
     ObservabilityProcessJob.perform_later
+
     run_worker("--no-lower-thread-priority") do
       _(snapshot(@started).fetch("priority")).must_equal 0
     end
+
     _(snapshot(@stopping).fetch("shutting_down")).must_equal true
   end
 end

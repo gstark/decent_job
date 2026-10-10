@@ -22,6 +22,7 @@ if HOST_SCENARIO == "dequeue_explicit"
   DecentJob.configuration.dequeue_query_sort = :created_at
   DecentJob.configuration.queue_select_limit = 3
 end
+
 DecentJob.configuration.lock_strategy = :advisory if HOST_SCENARIO == "lock_strategy_explicit"
 
 if HOST_SCENARIO == "configuration_explicit"
@@ -80,24 +81,31 @@ class DecentJobHostApplication < Rails::Application
   config.decent_job.poll_interval = 0.02
   config.decent_job.execution_mode = ENV.fetch("HOST_MODE").to_sym if ENV["HOST_MODE"]
   config.decent_job.logger = Logger.new(StringIO.new) if HOST_SCENARIO == "custom_logger"
+
   if HOST_SCENARIO.start_with?("dequeue")
     config.decent_job.dequeue_query_sort = "scheduled_at"
     config.decent_job.queue_select_limit = "0"
   end
+
   config.decent_job.lock_strategy = "skiplocked" if HOST_SCENARIO.start_with?("lock_strategy")
+
   if HOST_SCENARIO.start_with?("configuration")
     config.decent_job.max_cache = 11
     config.decent_job.enable_listen_notify = true
   end
+
   config.decent_job.advisory_lock_heartbeat = false if HOST_SCENARIO == "heartbeat_host"
+
   if HOST_SCENARIO.start_with?("cron_sources")
     config.decent_job.cron = {}
     config.decent_job.enable_cron = true
   end
+
   if HOST_SCENARIO == "diagnostics"
     config.decent_job.on_thread_error = nil
     config.decent_job.cron = {valid: {cron: "0 * * * *", class: "DiagnosticsHostJob"}}
   end
+
   if HOST_SCENARIO == "cron_boot"
     config.decent_job.enable_cron = true
     config.decent_job.cron = {tick: {cron: "* * * * * *", class: "ScheduledHostJob"}}
@@ -173,14 +181,17 @@ when "heartbeat", "heartbeat_environment", "heartbeat_host", "heartbeat_explicit
   result[:heartbeat_setting] = DecentJob.configuration.advisory_lock_heartbeat
   result[:worker_heartbeat_setting] = DecentJob.configuration.worker_options.fetch(:advisory_lock_heartbeat)
   tracker = DecentJob::ProcessTracker.new(database: DecentJob.database)
+
   tracker.register do |id|
     result[:heartbeat_mode] = DecentJob::ProcessRecord.find(id).heartbeat_mode
+
     DecentJob.database.with_connection do |connection|
       acquired = connection.exec_params("SELECT pg_try_advisory_lock(hashtextextended(current_schema() || '.decent_job_processes.' || $1, 0))", [id]).getvalue(0, 0) == "t"
       result[:heartbeat_lock_held] = !acquired
       connection.exec_params("SELECT pg_advisory_unlock(hashtextextended(current_schema() || '.decent_job_processes.' || $1, 0))", [id]) if acquired
     end
   end
+
   result[:processes_after] = DecentJob::ProcessRecord.all.size
 when "cron_sources", "cron_sources_explicit"
   snapshot = -> { [DecentJob.configuration.cron.keys, DecentJob.configuration.enable_cron, DecentJob.configuration.enable_cron?] }
@@ -204,11 +215,13 @@ when "diagnostics"
     missing: {cron: "* * * * *", class: "MissingDiagnosticJob"},
     malformed: {cron: "invalid", class: "DiagnosticsHostJob"}
   }
+
   begin
     DecentJob.configure_rails(application)
   rescue ArgumentError => error
     result[:rejected_message] = error.message
   end
+
   result[:active_cron_keys] = DecentJob.configuration.cron.keys
   result[:active_errors] = DecentJob.configuration.errors.to_h
   DecentJob.configuration.preserve_job_records = ->(*) { raise "retention predicate failed" }
@@ -245,10 +258,12 @@ when "dequeue", "dequeue_explicit"
   result[:candidate_limit] = DecentJob.configuration.queue_select_limit
   first = RailsHostJob.perform_later("created first")
   second = RailsHostJob.perform_later("scheduled first")
+
   DecentJob.database.with_connection do |connection|
     connection.exec_params("UPDATE decent_jobs SET created_at = clock_timestamp() - interval '2 hours', scheduled_at = clock_timestamp() - interval '1 hour' WHERE id = $1", [first.provider_job_id])
     connection.exec_params("UPDATE decent_jobs SET created_at = clock_timestamp() - interval '1 hour', scheduled_at = clock_timestamp() - interval '2 hours' WHERE id = $1", [second.provider_job_id])
   end
+
   performer = DecentJob::Performer.new
   result[:initially_performed] = !!performer.perform_one
   DecentJob.configuration.queue_select_limit = 2
@@ -267,58 +282,72 @@ when "logging", "logging_explicit"
 when "boot", "custom_logger", "cron_boot"
   result[:started] = DecentJob.started?
   result[:async] = RailsHostJob.queue_adapter.execute_async?
+
   if ENV["HOST_RESULT"]
     Timeout.timeout(8) { sleep 0.01 until File.exist?(ENV.fetch("HOST_RESULT")) }
     result[:performed] = File.read(ENV.fetch("HOST_RESULT"))
   end
 when "transactions"
   job = nil
+
   ActiveRecord::Base.transaction do
     job = RailsHostJob.perform_later("commit")
     result[:commit_before_id] = job.provider_job_id
     result[:commit_before_count] = DecentJob.database.with_connection { |c| c.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0).to_i }
   end
+
   result[:commit_after] = store.find(job.provider_job_id).fetch("payload").fetch("arguments")
   rolled_back = nil
+
   ActiveRecord::Base.transaction do
     rolled_back = RailsHostJob.perform_later("rollback")
     raise ActiveRecord::Rollback
   end
+
   result[:rollback_id] = rolled_back.provider_job_id
   result[:count] = DecentJob.database.with_connection { |c| c.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0).to_i }
 when "nested"
   outer = nil
   inner = nil
   discarded = nil
+
   ActiveRecord::Base.transaction do
     outer = RailsHostJob.perform_later("outer")
     ActiveRecord::Base.transaction(requires_new: true) { inner = RailsHostJob.perform_later("inner") }
+
     ActiveRecord::Base.transaction(requires_new: true) do
       discarded = RailsHostJob.perform_later("discarded")
       raise ActiveRecord::Rollback
     end
+
     result[:before_ids] = [outer, inner, discarded].map(&:provider_job_id)
   end
+
   result[:after_arguments] = [outer, inner].map { |job| store.find(job.provider_job_id).fetch("payload").fetch("arguments") }
   result[:discarded_id] = discarded.provider_job_id
 when "bulk"
   deferred = RailsHostJob.new("deferred")
   immediate = RailsImmediateJob.new("immediate")
+
   ActiveRecord::Base.transaction do
     ActiveJob.perform_all_later(deferred, immediate)
     result[:deferred_before] = deferred.provider_job_id
     result[:immediate_before] = !!store.find(immediate.provider_job_id)
   end
+
   result[:deferred_after] = store.find(deferred.provider_job_id).fetch("payload").fetch("arguments")
   rolled_back = RailsHostJob.new("rollback")
+
   ActiveRecord::Base.transaction do
     ActiveJob.perform_all_later(rolled_back)
     raise ActiveRecord::Rollback
   end
+
   result[:rollback_id] = rolled_back.provider_job_id
 when "scheduled"
   time = Time.now.utc + 3600
   job = nil
+
   ActiveRecord::Base.transaction do
     job = RailsHostJob.set(wait_until: time, queue: "scheduled", priority: 9).perform_later("later")
     result[:before_id] = job.provider_job_id
@@ -326,6 +355,7 @@ when "scheduled"
     job.queue_name = "changed"
     job.priority = 100
   end
+
   row = store.find(job.provider_job_id)
   result[:schedule_delta] = row.fetch("scheduled_at").to_f - time.to_f
   result[:queue] = row.fetch("queue_name")
@@ -335,27 +365,32 @@ when "inline"
     RailsHostJob.perform_later("after commit")
     result[:before_perform] = HOST_EVENTS.any? { |event| event.first == "perform" }
   end
+
   result[:after_perform] = HOST_EVENTS.select { |event| event.first == "perform" }
 when "job_events"
   notifications = []
   snapshots = []
   DecentJob.configuration.preserve_job_records = false
+
   callback = lambda do |event|
     payload = event.payload
     snapshots << payload.fetch(:job)
     notifications << [event.name, payload.fetch(:job).payload.fetch("arguments"),
       ActiveRecord::Base.connection.transaction_open?, HOST_EVENTS.count { |entry| entry.first == "perform" }]
   end
+
   ActiveSupport::Notifications.subscribed(callback, /\A(?:enqueue_job|perform_job)\.decent_job\z/) do
     ActiveRecord::Base.transaction do
       RailsHostJob.perform_later("after commit")
       result[:before_events] = notifications.dup
     end
+
     ActiveRecord::Base.transaction do
       RailsHostJob.perform_later("rolled back")
       raise ActiveRecord::Rollback
     end
   end
+
   result[:notifications] = notifications
   result[:snapshots] = snapshots.map { |job| [job.job_class, job.payload.fetch("arguments")] }
   result[:performed] = HOST_EVENTS.select { |entry| entry.first == "perform" }
@@ -373,23 +408,28 @@ when "runtime_isolation"
   callbacks = []
   backend_pids = []
   buffer = DecentJob::Bulk::Buffer.new
+
   first = Fiber.new do
     application.executor.wrap do
       pool.transaction do |connection|
         backend_pids << connection.backend_pid
         pool.after_commit { callbacks << "first_commit" }
         pool.after_rollback { callbacks << "first_rollback" }
+
         DecentJob::Bulk.with_buffer(buffer) do
           RailsHostJob.perform_later("captured")
           Fiber.yield
         end
+
         raise "rollback first fiber"
       end
     end
   rescue RuntimeError => error
     raise unless error.message == "rollback first fiber"
   end
+
   first.resume
+
   independent = Fiber.new do
     application.executor.wrap do
       pool.transaction do |connection|
@@ -399,15 +439,19 @@ when "runtime_isolation"
       end
     end
   end.resume
+
   first.resume
   observed = Queue.new
+
   tracker = DecentJob::ProcessTracker.new(database: pool, state: -> {
     observed << application.executor.active?
     {}
   })
+
   application.executor.wrap do
     tracker.register { result[:monitor_executor] = Timeout.timeout(3) { observed.pop } }
   end
+
   result[:isolation] = ActiveSupport::IsolatedExecutionState.isolation_level
   result[:backend_pids] = backend_pids
   result[:captured_arguments] = buffer.jobs.map(&:arguments)

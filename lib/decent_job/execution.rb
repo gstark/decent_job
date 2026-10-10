@@ -35,6 +35,7 @@ module DecentJob
     # @raise [KeyError] if no row has this ID
     def self.find(id, database: nil)
       database ||= Current.execution&.fetch(:database, nil) || DecentJob.database
+
       database.with_connection do |connection|
         row = connection.exec_params("SELECT * FROM decent_job_executions WHERE id = $1", [id]).first
         raise KeyError, "Execution #{id} was not found" unless row

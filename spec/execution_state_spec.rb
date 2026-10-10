@@ -29,17 +29,22 @@ describe "runtime execution state" do
         inner = (name == :worker) ? Struct.new(:running?).new(true) : :inner
         outer_value = (name == :worker) ? true : outer
         inner_value = (name == :worker) ? false : inner
+
         within.call(outer) do
           _(read.call).must_equal outer_value
           _(Thread.new { read.call }.value).must_be_nil
+
           fiber = Fiber.new do
             initial = read.call
+
             within.call(inner) do
               Fiber.yield [initial, read.call]
               _(read.call).must_equal inner_value
             end
+
             read.call
           end
+
           initial, current = fiber.resume
           (isolation == :thread) ? _(initial).must_equal(outer_value) : _(initial).must_be_nil
           _(current).must_equal inner_value
@@ -48,6 +53,7 @@ describe "runtime execution state" do
           (isolation == :thread) ? _(restored).must_equal(outer_value) : _(restored).must_be_nil
           _(read.call).must_equal outer_value
         end
+
         _(read.call).must_be_nil
       end
 
@@ -55,6 +61,7 @@ describe "runtime execution state" do
         ActiveSupport::IsolatedExecutionState.isolation_level = isolation
         value = (name == :worker) ? Struct.new(:running?).new(false) : :outer
         expected = (name == :worker) ? true : value
+
         result = within.call(value) do
           _(within.call(nil) { :returned }).must_equal :returned
           _(read.call).must_equal expected
@@ -64,6 +71,7 @@ describe "runtime execution state" do
           _(read.call).must_equal expected
           :complete
         end
+
         _(result).must_equal :complete
         _(read.call).must_be_nil
       end
@@ -77,21 +85,26 @@ describe "runtime execution state" do
       observed = Queue.new
       release = Queue.new
       child = nil
+
       operation = lambda do
         ActiveSupport::IsolatedExecutionState.share_with(source) do
           initial = DecentJob::Current.execution
+
           DecentJob::Current.with(:child) do
             observed << [initial, DecentJob::Current.execution]
             (isolation == :thread) ? release.pop : Fiber.yield
           end
+
           observed << DecentJob::Current.execution
         end
       end
+
       DecentJob::Current.with(:parent) do
         child = (isolation == :thread) ? Thread.new(&operation) : Fiber.new(&operation)
         child.resume if isolation == :fiber
         _(Timeout.timeout(2) { observed.pop }).must_equal [:parent, :child]
         parent_while_child = DecentJob::Current.execution
+
         DecentJob::Current.with(:parent_changed) do
           (isolation == :thread) ? release.push(true) : child.resume
           child.value if isolation == :thread
@@ -100,9 +113,11 @@ describe "runtime execution state" do
           _(DecentJob::Current.execution).must_equal :parent_changed
         end
       end
+
       _(DecentJob::Current.execution).must_be_nil
     ensure
       release << true if release
+
       if child&.alive?
         (isolation == :thread) ? child.join(2) : child.resume
       end
@@ -115,6 +130,7 @@ describe "runtime execution state" do
       release = Queue.new
       observed = Queue.new
       child = nil
+
       operation = lambda do
         ActiveSupport::IsolatedExecutionState.share_with(source) do
           shared << true
@@ -122,10 +138,12 @@ describe "runtime execution state" do
           observed << DecentJob::Current.execution
         end
       end
+
       DecentJob::Current.with(:snapshot) do
         child = (isolation == :thread) ? Thread.new(&operation) : Fiber.new(&operation)
         child.resume if isolation == :fiber
         Timeout.timeout(2) { shared.pop }
+
         DecentJob::Current.with(:changed_after_sharing) do
           (isolation == :thread) ? release.push(true) : child.resume
           child.value if isolation == :thread
@@ -133,9 +151,11 @@ describe "runtime execution state" do
           _(DecentJob::Current.execution).must_equal :changed_after_sharing
         end
       end
+
       _(DecentJob::Current.execution).must_be_nil
     ensure
       release << true if release
+
       if child&.alive?
         (isolation == :thread) ? child.join(2) : child.resume
       end
@@ -146,18 +166,22 @@ describe "runtime execution state" do
       events = []
       pool = Object.new
       performer = Object.new
+
       performer.define_singleton_method(:perform_one) do |job_id:, **|
         events << [job_id, :start]
         Fiber.new { DecentJob::InlineBuffer.perform(pool, [:inner]) }.resume if job_id == :outer
         events << [job_id, :finish]
         nil
       end
+
       DecentJob::Performer.stub(:new, performer) { DecentJob::InlineBuffer.perform(pool, [:outer]) }
+
       expected = if isolation == :thread
         [[:outer, :start], [:outer, :finish], [:inner, :start], [:inner, :finish]]
       else
         [[:outer, :start], [:inner, :start], [:inner, :finish], [:outer, :finish]]
       end
+
       _(events).must_equal expected
     end
 
@@ -172,12 +196,14 @@ describe "runtime execution state" do
       current.define_singleton_method(:name) { "RuntimeStateCurrent" }
       executor.to_run { current.reset }
       executor.to_complete { current.reset }
+
       DecentJob::Current.with(:execution) do
         current.value = :request
         reloader.wrap { _(DecentJob::Current.execution).must_equal :execution }
         _(current.value).must_be_nil
         _(DecentJob::Current.execution).must_equal :execution
       end
+
       _(DecentJob::Current.execution).must_be_nil
     end
 
@@ -187,6 +213,7 @@ describe "runtime execution state" do
       reader, writer = IO.pipe
       pid = nil
       read_all = -> { scopes.values.map { |_within, read| read.call } }
+
       nest = lambda do |remaining, &block|
         if remaining.empty?
           block.call
@@ -196,20 +223,25 @@ describe "runtime execution state" do
           within.call(value) { nest.call(remaining.drop(1), &block) }
         end
       end
+
       suspended = Fiber.new do
         nest.call(scopes.to_a) do
           nest.call(scopes.to_a) do
             Fiber.yield
             read_all.call
           end
+
           read_all.call
         end
       end
+
       suspended.resume
+
       nest.call(scopes.to_a) do
         DecentJob.with_prepared_fork do
           pid = fork do
             reader.close
+
             begin
               ActiveSupport::IsolatedExecutionState[:application_state] = :preserved
               DecentJob.after_supervisor_fork(DecentJob.configuration.dup)
@@ -221,10 +253,12 @@ describe "runtime execution state" do
             ensure
               writer.close
             end
+
             exit! 0
           end
         end
       end
+
       suspended.resume
       writer.close
       _(Timeout.timeout(5) { Marshal.load(reader.read) }).must_equal [Array.new(scopes.size), Array.new(scopes.size), Array.new(scopes.size), :preserved]
@@ -232,6 +266,7 @@ describe "runtime execution state" do
     ensure
       reader&.close unless reader&.closed?
       writer&.close unless writer&.closed?
+
       if pid
         begin
           Process.kill("KILL", pid)

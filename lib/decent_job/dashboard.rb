@@ -140,6 +140,7 @@ module DecentJob
 
     def route(request, view, queries)
       segments = request.path.split("/").reject(&:empty?)
+
       if request.get?
         get(segments, request, view, queries)
       elsif request.post?
@@ -172,6 +173,7 @@ module DecentJob
     # redirect with a notice, not an error page.
     def post(segments, request, view, queries)
       form = request.form
+
       case segments
       in ["theme"]
         theme = %w[light dark].include?(form["theme"]) ? form["theme"] : ""
@@ -188,11 +190,13 @@ module DecentJob
       in ["schedules", key, action] if %w[enable disable run].include?(action)
         entry = CronEntry.find(key, configuration: configuration)
         entry = CronEntry.new(entry.params, database: database)
+
         case action
         when "enable" then entry.enable
         when "disable" then entry.disable
         when "run" then entry.enqueue
         end
+
         redirect(view, view.url("/schedules/#{key}"), notice: "#{verb(action)} schedule #{key}")
       in ["pauses"]
         kind = {"queue" => :queue, "job_class" => :job_class, "label" => :label}[form["kind"]]
@@ -272,6 +276,7 @@ module DecentJob
       form = request.form
       action = form["action"].to_s
       raise BadRequest, "Unknown bulk action #{action.inspect}." unless JOB_ACTIONS.include?(action)
+
       ids = if form["all"] == "1"
         filter = form.slice("status", "queue", "job_class", "label", "cron_key", "batch_id", "q", "finished_after", "finished_before")
         filter["status"] = Array(filter["status"]) if filter["status"]
@@ -279,14 +284,17 @@ module DecentJob
       else
         Array(form["ids"]).select { |id| id.to_s.match?(UUID) }
       end
+
       done = 0
       failed = 0
+
       ids.each do |id|
         perform_job_action(load_job(id), action, form)
         done += 1
       rescue Job::StateMismatchError, Job::LockedError, Job::DeserializationError, Job::AdapterMismatchError, KeyError
         failed += 1
       end
+
       summary = "#{verb(action)} #{done} jobs"
       summary += ", #{failed} skipped" if failed.positive?
       redirect(view, back(request, view.url("/jobs")), notice: summary)
@@ -310,6 +318,7 @@ module DecentJob
           SELECT id FROM decent_jobs WHERE state = 'discarded' AND job_class = $1 AND COALESCE(error->>'class', '') = $2 ORDER BY id LIMIT 10000
         SQL
       end
+
       ids.count do |id|
         load_job(id).destroy_job
         true
@@ -357,12 +366,14 @@ module DecentJob
 
     def back(request, fallback = nil)
       referer = request.env["HTTP_REFERER"].to_s
+
       path = begin
         uri = URI.parse(referer)
         [uri.path, uri.query].compact.join("?") if uri.path
       rescue URI::InvalidURIError
         nil
       end
+
       mount = request.script_name.empty? ? "/" : request.script_name
       return path if path&.start_with?(mount)
       fallback || "#{request.script_name}/"

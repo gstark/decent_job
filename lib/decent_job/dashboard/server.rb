@@ -34,6 +34,7 @@ module DecentJob
         rescue LoadError
           raise Unavailable, 'The dashboard server needs WEBrick. Add gem "webrick" to the Gemfile, or mount DecentJob::Dashboard in a Rack application.'
         end
+
         @app = app
         @host = host
         @configured_port = port
@@ -78,6 +79,7 @@ module DecentJob
         )
         status, headers, body = @app.call(env)
         response.status = status
+
         headers.each do |key, value|
           if key == "set-cookie"
             value.split("\n").each { |cookie| response.cookies << cookie }
@@ -85,6 +87,7 @@ module DecentJob
             response[key] = value
           end
         end
+
         content = +""
         body.each { |part| content << part }
         response.body = content

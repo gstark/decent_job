@@ -86,10 +86,12 @@ describe "job record preservation" do
 
   it "validates the policy" do
     config = DecentJob::Configuration.new
+
     [true, false, :on_unhandled_error, ->(*) { true }].each do |policy|
       config.preserve_job_records = policy
       _(config.validate!).must_equal config
     end
+
     [nil, :always, "false", 1].each do |policy|
       config.preserve_job_records = policy
       error = _ { config.validate! }.must_raise ArgumentError
@@ -121,10 +123,12 @@ describe "job record preservation" do
 
   it "passes the actual executed object and success context to the predicate" do
     received = []
+
     DecentJob.configuration.preserve_job_records = ->(*context) {
       received << context
       false
     }
+
     job = PreservationJob.perform_later("instance mutation")
     @performer.perform_one
     _(received.size).must_equal 1
@@ -138,10 +142,12 @@ describe "job record preservation" do
    PreservationExhaustedJob => :retry_stopped, PreservationHandledExhaustedJob => :retry_stopped, PreservationHandledJob => :handled}.each do |job_class, event|
     it "passes #{event} and the actual exception for #{job_class}" do
       received = []
+
       DecentJob.configuration.preserve_job_records = ->(*context) {
         received << context
         true
       }
+
       job_class.perform_later
       result = @performer.perform_one
       _(received.first.first).must_be_kind_of job_class
@@ -160,14 +166,18 @@ describe "job record preservation" do
 
   it "passes an existing job instance when argument deserialization fails" do
     received = []
+
     DecentJob.configuration.preserve_job_records = ->(*context) {
       received << context
       false
     }
+
     job = PreservationJob.perform_later
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET payload = jsonb_set(payload, '{arguments}', '[{\"_aj_serialized\": \"RemovedArgumentSerializer\"}]') WHERE id = $1", [job.provider_job_id])
     end
+
     result = @performer.perform_one
     _(received.size).must_equal 1
     _(received.first.first).must_be_kind_of PreservationJob
@@ -180,10 +190,12 @@ describe "job record preservation" do
   it "retains records when the predicate and error reporter both raise" do
     received = []
     DecentJob.configuration.preserve_job_records = ->(*) { raise "predicate failed" }
+
     DecentJob.configuration.on_thread_error = ->(error) {
       received << error
       raise "reporter failed"
     }
+
     job = PreservationJob.perform_later
     _(@performer.perform_one.state).must_equal "succeeded"
     _(received.map(&:message)).must_equal ["predicate failed"]
@@ -194,11 +206,14 @@ describe "job record preservation" do
     DecentJob.configuration.preserve_job_records = lambda do |*|
       database.with_connection { |connection| connection.exec("SELECT missing_preservation_function()") }
     end
+
     reported = []
+
     DecentJob.configuration.on_thread_error = lambda do |error|
       reported << error
       database.with_connection { |connection| connection.exec("SELECT missing_reporter_function()") }
     end
+
     job = PreservationJob.perform_later
     _(@performer.perform_one.state).must_equal "succeeded"
     _(reported.first).must_be_kind_of PG::UndefinedFunction
@@ -208,10 +223,12 @@ describe "job record preservation" do
   [RetryingJob, PreservationReenqueueJob].each do |job_class|
     it "preserves unfinished #{job_class} history without evaluating the predicate" do
       received = []
+
       DecentJob.configuration.preserve_job_records = ->(*context) {
         received << context
         false
       }
+
       job = job_class.perform_later("retry")
       _(@performer.perform_one.state).must_equal "retried"
       _(received).must_be_empty
@@ -226,14 +243,18 @@ describe "job record preservation" do
 
   it "evaluates a missing job class with nil and its unhandled deserialization error" do
     received = []
+
     DecentJob.configuration.preserve_job_records = ->(*context) {
       received << context
       false
     }
+
     job = PreservationJob.perform_later
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET payload = jsonb_set(payload, '{job_class}', '\"RemovedPreservationJob\"') WHERE id = $1", [job.provider_job_id])
     end
+
     result = @performer.perform_one
     _(received.first).must_equal [nil, result.error, :unhandled]
     _(result.error).must_be_kind_of NameError
@@ -288,11 +309,13 @@ describe "job record preservation" do
     job = PreservationHandledJob.new
     batch = DecentJob::Batch.enqueue([job], database: database)
     calls = 0
+
     DecentJob.configuration.preserve_job_records = lambda do |*_context|
       calls += 1
       batch.retry if calls == 1
       false
     end
+
     @performer.perform_one
     _(@store.find(job.provider_job_id).fetch("state")).must_equal "ready"
     _(@store.executions(job.provider_job_id).map { |attempt| attempt.fetch("state") }).must_equal ["discarded"]
@@ -306,6 +329,7 @@ describe "job record preservation" do
     DecentJob.configuration.preserve_job_records = false
     job = DiscardingJob.new
     batch = DecentJob::Batch.enqueue([job], database: database)
+
     database.with_connection do |connection|
       connection.exec(<<~SQL)
         CREATE FUNCTION reject_preservation_delete() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -315,15 +339,18 @@ describe "job record preservation" do
           FOR EACH ROW EXECUTE FUNCTION reject_preservation_delete();
       SQL
     end
+
     _ { @performer.perform_one }.must_raise PG::RaiseException
     row = @store.find(job.provider_job_id)
     _(row.fetch("state")).must_equal "running"
     _(row.fetch("finished_at")).must_be_nil
     _(@store.executions(job.provider_job_id).first.fetch("state")).must_equal "running"
+
     database.with_connection do |connection|
       _(connection.exec("SELECT count(*) FROM decent_job_batch_updates").getvalue(0, 0)).must_equal "0"
       connection.exec("DROP TRIGGER reject_preservation_delete ON decent_jobs")
     end
+
     @performer.perform_one
     _(@store.find(job.provider_job_id)).must_be_nil
     _(batch.reload.discarded?).must_equal true

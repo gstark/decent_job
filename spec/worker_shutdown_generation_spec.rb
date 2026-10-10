@@ -10,16 +10,19 @@ describe "forced shutdown generation ownership" do
     release = Queue.new
     at_force = Queue.new
     resume_force = Queue.new
+
     worker.define_singleton_method(:run) do |_pool, _index|
       @mutex.synchronize { @executing_job_ids[Thread.current] = "job-#{Thread.current.object_id}" }
       entered << Thread.current
       release.pop
     end
+
     worker.define_singleton_method(:interrupt_executions) do |**snapshot|
       at_force << true
       resume_force.pop
       super(**snapshot)
     end
+
     worker.start
     old_thread = Timeout.timeout(2) { entered.pop }
     shutdown = Thread.new { worker.shutdown(timeout: 0, force: true) }

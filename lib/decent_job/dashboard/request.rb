@@ -55,6 +55,7 @@ module DecentJob
         @form ||= begin
           input = env["rack.input"]
           type = env.fetch("CONTENT_TYPE", "").to_s
+
           if post? && input && type.start_with?("application/x-www-form-urlencoded")
             body = input.read(MAX_BODY_BYTES + 1) || ""
             input.rewind if input.respond_to?(:rewind)

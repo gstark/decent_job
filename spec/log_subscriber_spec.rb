@@ -94,23 +94,29 @@ describe "DecentJob logging" do
 
   it "logs job identifiers without serializing arguments and restores caller tags" do
     job = Struct.new(:id).new("job-123")
+
     @logger.tagged("ActiveJob", "caller") do
       DecentJob::Notifications.instrument("perform_job.decent_job", job: job, process_id: 42, thread_name: "worker")
       _(@logger.formatter.current_tags).must_equal ["ActiveJob", "caller"]
     end
+
     _(@output.string).must_include "[ActiveJob] [caller] [ActiveJob] [DecentJob] [42] [worker] Executed DecentJob job-123"
     _(@logger.formatter.current_tags).must_equal []
   end
 
   it "pluralizes cron and concurrency messages" do
     job = LoggingJob.new("secret-argument")
+
     [1, 2].each do |count|
       DecentJob::Notifications.instrument("cron_manager_start.decent_job", cron_entries: Array.new(count))
+
       %i[enqueue_concurrency_limit_exceeded enqueue_concurrency_throttle_exceeded].each do |name|
         DecentJob::Notifications.instrument("#{name}.decent_job", job: job, key: "account", limit: count)
       end
+
       _(@output.string).must_include "#{count} #{(count == 1) ? "job" : "jobs"}"
     end
+
     _(@output.string).must_include "Aborted enqueue of LoggingJob (Job ID: #{job.job_id})"
     _(@output.string).must_include "concurrency key 'account'"
     _(@output.string).wont_include "secret-argument"
@@ -147,11 +153,13 @@ describe "DecentJob logging" do
     broadcast = ActiveSupport::BroadcastLogger.new(@logger, second)
     @subscriber.loggers.replace([broadcast])
     @subscriber.reset_logger
+
     @logger.tagged("caller") do
       DecentJob::Notifications.instrument("scheduler_shutdown_start.decent_job", process_id: 42)
       _(@logger.formatter.current_tags).must_equal ["caller"]
       _(second.formatter.current_tags).must_equal []
     end
+
     _(@output.string.lines).must_equal ["[caller] [DecentJob] [42] DecentJob shutting down scheduler...\n"]
     _(second_output.string.lines).must_equal ["[DecentJob] [42] DecentJob shutting down scheduler...\n"]
     _(broadcast.broadcasts).must_equal [@logger, second]
@@ -176,6 +184,7 @@ describe "DecentJob logging" do
     _(plain_output.string).must_equal ""
     def second.warn(*) = raise("broken nested sink")
     def second.error(*) = raise("broken nested error sink")
+
     @logger.tagged("outer") do
       second.tagged("nested") do
         DecentJob::Notifications.instrument("scheduler_shutdown_kill.decent_job", process_id: 42)
@@ -183,6 +192,7 @@ describe "DecentJob logging" do
         _(second.formatter.current_tags).must_equal ["nested"]
       end
     end
+
     _(@logger.formatter.current_tags).must_equal []
     _(second.formatter.current_tags).must_equal []
     _(broadcast.broadcasts).must_equal [@logger, inner]
@@ -209,6 +219,7 @@ describe "DecentJob logging" do
 
   it "restores tags and contains failing log destinations" do
     def @logger.info(*) = raise("broken sink")
+
     @logger.tagged("caller") do
       DecentJob::Notifications.instrument("notifier_listen.decent_job")
       _(@logger.formatter.current_tags).must_equal ["caller"]

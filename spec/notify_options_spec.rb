@@ -38,6 +38,7 @@ describe DecentJob::ActiveJobExtensions::NotifyOptions do
   it "serializes only explicit instance values and preserves both boolean values" do
     job = NotifyOptionsJob.new
     _(job.serialize.key?("decent_job_notify")).must_equal false
+
     [false, true].each do |value|
       job = NotifyOptionsJob.set(decent_job_notify: value).perform_later
       _(job.serialize["decent_job_notify"]).must_equal value

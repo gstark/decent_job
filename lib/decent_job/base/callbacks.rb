@@ -120,9 +120,11 @@ module DecentJob
         def add_callback(kind, stage, *filters, **options, &block)
           filters << block if block
           raise ArgumentError, "a callback filter or block is required" if filters.empty?
+
           unless filters.all? { |filter| filter.is_a?(Symbol) || filter.is_a?(String) || filter.is_a?(Proc) }
             raise ArgumentError, "callback filters must be method names or procs"
           end
+
           unknown = options.keys - %i[if unless]
           raise ArgumentError, "unknown callback options: #{unknown.join(", ")}" unless unknown.empty?
 
@@ -153,6 +155,7 @@ module DecentJob
         chain = self.class.callbacks_for(kind)
         value = nil
         halted = false
+
         run = lambda do |index|
           if index == chain.size
             value = block.call
@@ -168,6 +171,7 @@ module DecentJob
               Callbacks.invoke(self, callback.filter)
               true
             end
+
             continued ? run.call(index + 1) : halted = true
           when :around
             Callbacks.invoke(self, callback.filter, -> { run.call(index + 1) })
@@ -176,6 +180,7 @@ module DecentJob
             Callbacks.invoke(self, callback.filter) unless halted
           end
         end
+
         run.call(0)
         halted ? false : value
       end

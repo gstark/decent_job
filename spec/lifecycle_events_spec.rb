@@ -48,6 +48,7 @@ describe "scheduler lifecycle events" do
     _(payloads.map { |payload| payload[:queues] }).must_equal %w[fast slow]
     _(payloads.map { |payload| payload[:max_threads] }).must_equal [1, 2]
     _(payloads.map { |payload| payload[:pool_index] }).must_equal [0, 1]
+
     payloads.each do |payload|
       _(payload[:scheduler]).must_be_same_as instance
       _(payload[:performer_name]).must_equal payload[:queues]
@@ -56,6 +57,7 @@ describe "scheduler lifecycle events" do
       _(payload[:run_id]).wont_be_nil
       _(payload[:operation_duration]).must_be :>=, 0
     end
+
     _(payloads.map { |payload| payload[:run_id] }.uniq.size).must_equal 1
   end
 
@@ -63,11 +65,13 @@ describe "scheduler lifecycle events" do
     adapter = DecentJob::Adapter.new(database: database, execution_mode: :async_all)
     DecentJob.configuration.max_threads = 1
     DecentJob.configuration.enable_listen_notify = false
+
     subscribe("scheduler_create_pool") do |event|
       @events << [adapter.async_started?, DecentJob.stats, event.payload[:scheduler].stats]
       adapter.shutdown(timeout: 5)
       adapter.restart(timeout: 5)
     end
+
     Timeout.timeout(5) { adapter.start_async }
     _(@events.size).must_equal 1
     _(pop.first).must_equal true
@@ -100,9 +104,11 @@ describe "scheduler lifecycle events" do
     DecentJob.configuration.database_url = @connection_options
     DecentJob.configuration.max_threads = 1
     DecentJob.configuration.enable_listen_notify = false
+
     subscribe("scheduler_create_pool") do |event|
       @events << [DecentJob.stats, DecentJob.reset!, event.payload.dup]
     end
+
     returned = Timeout.timeout(5) { DecentJob.start }
     _(@events.size).must_equal 1
     observed = pop
@@ -115,11 +121,13 @@ describe "scheduler lifecycle events" do
   it "contains failed create observers and failing reporters after successful allocation" do
     reported = []
     subscribe("scheduler_create_pool") { raise "create observer failed" }
+
     instance = worker(on_thread_error: ->(error) {
       reported << error
       instance.stats
       raise "reporter failed"
     })
+
     _(instance.start).must_be_same_as instance
     _(instance.running?).must_equal true
     _(reported.map(&:message)).must_equal ["create observer failed"]
@@ -130,10 +138,12 @@ describe "scheduler lifecycle events" do
     second = worker
     DecentJob.start_worker(first)
     DecentJob.start_worker(second)
+
     subscribe("scheduler_shutdown_start") do |event|
       @events << [first.running?, second.running?, DecentJob.stats, event.payload]
       DecentJob.shutdown(timeout: 0)
     end
+
     _(Timeout.timeout(5) { DecentJob.shutdown(timeout: 5) }).must_equal true
     received = []
     received << pop until @events.empty?
@@ -215,8 +225,10 @@ describe "scheduler lifecycle events" do
 
   it "keeps the replacement identity when a create observer starts a still newer run" do
     instance = worker.start
+
     subscribe("scheduler_create_pool") do |event|
       @events << [:create, event.payload.dup]
+
       if event.payload[:run_id] == 2
         Thread.new do
           instance.shutdown(timeout: 5)
@@ -224,6 +236,7 @@ describe "scheduler lifecycle events" do
         end.value
       end
     end
+
     subscribe("scheduler_restart_pools") { |event| @events << [:restart, event.payload.dup] }
     _(Timeout.timeout(5) { instance.restart(timeout: 5) }).must_be_same_as instance
     observations = 3.times.map { pop }
@@ -294,12 +307,14 @@ describe "standalone cron lifecycle events" do
         entry.define_singleton_method(:next_at) { |**| nil }
       end
     end
+
     callback = ActiveSupport::Notifications.subscribe("cron_manager_start.decent_job") do |event|
       manager = event.payload[:cron_manager]
       event.payload[:cron_entries].clear
       manager.shutdown(timeout: 5)
       manager.restart(timeout: 5)
     end
+
     @manager = DecentJob::CronManager.new(entries)
     Timeout.timeout(5) { @manager.start }
     _(@manager.cron_entries).must_equal entries

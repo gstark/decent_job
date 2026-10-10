@@ -152,11 +152,13 @@ module DecentJob
       #   autoloader.
       def for_payload(payload)
         name = payload.fetch("job_class")
+
         job_class = begin
           Support.constantize(name)
         rescue NameError
           raise UnknownJobClassError, name
         end
+
         for_class(job_class) || raise(ArgumentError, "#{name} is not a supported job class")
       end
 

@@ -20,10 +20,12 @@ describe "cron reference conformance" do
       schedule = DecentJob::CronSchedule.parse(entry.fetch("expression"))
       _(schedule).wont_be_nil
       cursor = Time.iso8601(entry.fetch("after"))
+
       actual = entry.fetch("next").map do
         cursor = schedule.next_at(after: cursor)
         cursor.utc.iso8601
       end
+
       _(actual).must_equal entry.fetch("next")
     end
   end

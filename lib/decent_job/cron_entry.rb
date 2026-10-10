@@ -105,8 +105,10 @@ module DecentJob
     # @api private
     def self.validate_jobs(jobs)
       database = current_context.fetch(:database)
+
       jobs.each do |job|
         adapter = job.queue_adapter if Integrations.job?(job)
+
         unless adapter.is_a?(Adapter) && adapter.database.equal?(database)
           raise ArgumentError, "Cron jobs must use a DecentJob adapter with the cron entry database"
         end
@@ -146,6 +148,7 @@ module DecentJob
     %i[key args kwargs set description cron].each do |name|
       define_method(name) { params[name] }
     end
+
     alias_method :id, :key
     alias_method :to_param, :key
 
@@ -164,6 +167,7 @@ module DecentJob
       @errors = {}
       add_error(:key, "must be a Symbol") unless key.is_a?(Symbol)
       add_error(:cron, "is not a valid schedule") unless cron.respond_to?(:call) || schedule
+
       unless Support.blank?(job_class) || job_class.is_a?(Class) || job_class.respond_to?(:call)
         begin
           resolved = job_class.is_a?(String) && Support.constantize(job_class)
@@ -172,10 +176,12 @@ module DecentJob
           add_error(:class, "does not exist")
         end
       end
+
       VALUE_TYPES.each do |name, type|
         value = public_send(name)
         add_error(name, "must be a #{type}") unless value.nil? || value.respond_to?(:call) || value.is_a?(type)
       end
+
       errors.empty?
     end
 
@@ -225,12 +231,14 @@ module DecentJob
 
       parsed = CronSchedule.parse(value)
       occurrence = parsed&.next_at(after: after)
+
       # A clock change inside a callable expression must not move its chain
       # behind the preceding intended occurrence. Keep the default zone-aware
       # calculation for ordinary scheduling and forward clock changes.
       if !after && previously_at && occurrence && occurrence <= previously_at
         occurrence = parsed.next_at(after: previously_at)
       end
+
       occurrence
     end
 
@@ -265,6 +273,7 @@ module DecentJob
       return unless parsed
 
       cursor = period.begin
+
       loop do
         cursor = parsed.next_at(after: cursor)
         break if cursor >= period.end
@@ -370,6 +379,7 @@ module DecentJob
       buffer = Bulk::Buffer.new
       result = nil
       attempted = false
+
       Bulk.with_buffer(nil) do
         connection_pool.transaction do
           self.class.with_context(key: key, at: cron_at, database: connection_pool) do
@@ -382,17 +392,20 @@ module DecentJob
               ConcurrencyControls.new(connection_pool).lock_scopes(buffer.jobs)
               attempted = !buffer.jobs.empty?
               pending = buffer.jobs.reject(&:provider_job_id)
+
               connection_pool.after_rollback do
                 pending.each do |job|
                   job.provider_job_id = nil
                   job.successfully_enqueued = false
                 end
               end
+
               buffer.enqueue
             end
           end
         end
       end
+
       if Integrations.job?(result)
         result.successfully_enqueued? ? result : false
       elsif result == false

@@ -49,15 +49,18 @@ module DecentJob
     #   are deferred while the value is set and restored.
     def self.with(key, value)
       scope = previous = nil
+
       Thread.handle_interrupt(Object => :never) do
         scope = state
         previous = scope.values[key]
         store(scope, key, value)
       end
+
       yield
     ensure
       Thread.handle_interrupt(Object => :never) do
         current = IsolatedState[:decent_job]
+
         # A reset or fork starts a new generation. Never publish an old scope's
         # snapshot again, even if its ensure runs before the next state read.
         if scope && current && current.pid == Process.pid && current.generation.equal?(scope.generation)
@@ -77,10 +80,12 @@ module DecentJob
 
     def self.state
       current = IsolatedState[:decent_job]
+
       unless current && current.pid == Process.pid
         current = State.new(pid: Process.pid, generation: Object.new, values: {}.freeze)
         IsolatedState[:decent_job] = current
       end
+
       current
     end
 

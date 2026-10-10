@@ -22,9 +22,11 @@ describe "age cleanup" do
   def finished_job(klass = RecordingJob, at: Time.now - 3600)
     job = (klass == RecordingJob) ? klass.perform_later("cleanup") : klass.perform_later
     @performer.perform_one(job_id: job.provider_job_id)
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET finished_at = $2 WHERE id = $1", [job.provider_job_id, at.utc.iso8601(6)])
     end
+
     job
   end
 
@@ -45,11 +47,13 @@ describe "age cleanup" do
     unfinished = RecordingJob.perform_later
     payloads = []
     subscriber = ActiveSupport::Notifications.subscribe("cleanup_preserved_jobs.decent_job") { |event| payloads << event.payload }
+
     begin
       _(clean(older_than: 60, in_batches_of: 1)).must_equal 4
     ensure
       ActiveSupport::Notifications.unsubscribe(subscriber)
     end
+
     [old, discarded].each { |job| _(@store.find(job.provider_job_id)).must_be_nil }
     [recent, unfinished].each { |job| _(@store.find(job.provider_job_id)).wont_be_nil }
     payload = payloads.fetch(0)
@@ -82,6 +86,7 @@ describe "age cleanup" do
     job = finished_job(at: timestamp - 60)
     calls = []
     subscriber = ActiveSupport::Notifications.subscribe("cleanup_preserved_jobs.decent_job") { |event| calls << event.payload }
+
     begin
       Time.stub(:now, timestamp) do
         _(clean(older_than: 60)).must_equal 2
@@ -90,14 +95,17 @@ describe "age cleanup" do
     ensure
       ActiveSupport::Notifications.unsubscribe(subscriber)
     end
+
     _(@store.find(job.provider_job_id)).must_be_nil
   end
 
   it "progresses past a locked first page and skips ownership on the same connection" do
     jobs = 3.times.map { finished_job(at: Time.at(Time.now.to_i - 3600)) }.sort_by(&:provider_job_id)
+
     database.with_connection do |connection|
       key = connection.exec_params("SELECT #{DecentJob::ConcurrencyClaims::JOB_KEY_SQL} FROM decent_jobs WHERE id = $1", [jobs.first.provider_job_id]).getvalue(0, 0)
       connection.exec_params("SELECT pg_advisory_lock($1::bigint)", [key])
+
       begin
         _(Timeout.timeout(2) { clean(older_than: 60, in_batches_of: 1) }).must_equal 4
         _(@store.find(jobs.first.provider_job_id)).wont_be_nil
@@ -105,16 +113,20 @@ describe "age cleanup" do
         connection.exec_params("SELECT pg_advisory_unlock($1::bigint)", [key])
       end
     end
+
     _(clean(older_than: 60)).must_equal 2
   end
 
   it "skips row and scope contention without waiting and retries on a later sweep" do
     job = finished_job
     execution_id = @store.executions(job.provider_job_id).first.fetch("id")
+
     database.with_connection do |connection|
       connection.exec_params("INSERT INTO decent_job_concurrency_claims (scope, job_id, execution_id, state) VALUES ('busy', $1, $2, 'waiting')", [job.provider_job_id, execution_id])
     end
+
     other = database.connect
+
     begin
       other.exec("BEGIN")
       other.exec("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || '.decent_job.concurrency.busy', 0))")
@@ -133,10 +145,12 @@ describe "age cleanup" do
   it "checks stopping between records" do
     3.times { finished_job }
     calls = 0
+
     clean(older_than: 60, in_batches_of: 3, stopping: -> {
       calls += 1
       calls > 3
     })
+
     remaining = database.with_connection { |connection| connection.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0).to_i }
     _(remaining).must_be :>, 0
   end
@@ -158,9 +172,11 @@ describe "age cleanup" do
     age_batch(completed)
     age_batch(discarded, discarded: true)
     age_batch(partial, finished: false)
+
     database.with_connection do |connection|
       connection.exec_params("INSERT INTO decent_job_batch_updates (batch_id, generation) VALUES ($1, 0)", [completed.id])
     end
+
     _(clean(older_than: 60, include_discarded: false)).must_equal 1
     _(DecentJob::BatchStore.new(database).find(completed.id)).must_be_nil
     _(DecentJob::BatchStore.new(database).find(discarded.id)).wont_be_nil
@@ -173,9 +189,11 @@ describe "age cleanup" do
     pending = DecentJob::Batch.enqueue([RecordingJob.new], database: database)
     callback = DecentJob::Batch.enqueue([], database: database)
     [pending, callback].each { |batch| age_batch(batch) }
+
     database.with_connection do |connection|
       connection.exec_params("INSERT INTO decent_job_batch_events (batch_id, generation, event, job_class) VALUES ($1, 0, 'finish', 'RecordingJob')", [callback.id])
     end
+
     _(clean(older_than: 60)).must_equal 0
   end
 
@@ -183,6 +201,7 @@ describe "age cleanup" do
     batch = DecentJob::Batch.enqueue([], database: database)
     age_batch(batch)
     other = database.connect
+
     begin
       other.exec("BEGIN")
       other.exec_params("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || '.decent_job.batch.' || $1, 0))", [batch.id])
@@ -201,17 +220,21 @@ describe "age cleanup" do
     _(threads.sum(&:value)).must_equal 20
     _(clean(older_than: 60)).must_equal 0
   end
+
   it "processes the oldest eligible jobs first when stopped early" do
     jobs = 2.times.map { finished_job }.sort_by(&:provider_job_id)
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET finished_at = now() - interval '2 hours' WHERE id = $1", [jobs.last.provider_job_id])
     end
+
     _(clean(older_than: 60, in_batches_of: 1, stopping: -> { @store.find(jobs.last.provider_job_id).nil? })).must_equal 2
     _(@store.find(jobs.first.provider_job_id)).wont_be_nil
   end
 
   it "restores the caller's lock timeout and respects a tighter timeout" do
     job = finished_job
+
     database.transaction do |connection|
       connection.exec("SET LOCAL lock_timeout = '5ms'")
       connection.exec("CREATE TABLE observed_cleanup_timeout (value text)")
@@ -226,6 +249,7 @@ describe "age cleanup" do
       _(connection.exec("SELECT value FROM observed_cleanup_timeout").getvalue(0, 0)).must_equal "5ms"
       _(@store.find(job.provider_job_id)).must_be_nil
     end
+
     database.transaction do |connection|
       connection.exec("SET LOCAL lock_timeout = '2s'")
       finished_job
@@ -241,10 +265,13 @@ describe "age cleanup" do
     @performer.perform_one(job_id: job.provider_job_id)
     _(batch.reload.finished?).must_equal true
     age_batch(batch)
+
     database.with_connection do |connection|
       _(connection.exec_params("SELECT count(*) FROM decent_job_batch_pending_jobs WHERE batch_id = $1", [batch.id]).getvalue(0, 0)).must_equal "1"
     end
+
     _(clean(older_than: 60)).must_equal 1
+
     database.with_connection do |connection|
       _(connection.exec("SELECT count(*) FROM decent_job_batch_pending_jobs").getvalue(0, 0)).must_equal "0"
     end
@@ -252,28 +279,36 @@ describe "age cleanup" do
 
   it "honors the current attempt's stopping callback without globally disabling explicit cleanup" do
     finished_job
+
     DecentJob::Current.with(stopping: -> { true }) do
       _(clean(older_than: 60)).must_equal 0
     end
+
     DecentJob.shutdown
     _(clean(older_than: 60)).must_equal 2
   end
 
   it "removes orphan batch updates without counting them and skips locked orphan rows" do
     orphan = SecureRandom.uuid
+
     database.with_connection do |connection|
       connection.exec_params("INSERT INTO decent_job_batch_updates (batch_id, generation) VALUES ($1, 0), ($1, 1)", [orphan])
     end
+
     other = database.connect
+
     begin
       other.exec("BEGIN")
       other.exec("SELECT id FROM decent_job_batch_updates ORDER BY id LIMIT 1 FOR UPDATE")
       _(Timeout.timeout(2) { clean(in_batches_of: 1) }).must_equal 0
+
       database.with_connection do |connection|
         _(connection.exec("SELECT count(*) FROM decent_job_batch_updates").getvalue(0, 0)).must_equal "1"
       end
+
       other.exec("COMMIT")
       _(clean(in_batches_of: 1)).must_equal 0
+
       database.with_connection do |connection|
         _(connection.exec("SELECT count(*) FROM decent_job_batch_updates").getvalue(0, 0)).must_equal "0"
       end
@@ -286,12 +321,15 @@ describe "age cleanup" do
     database.with_connection do |connection|
       original = connection.method(:exec_params)
       fired = false
+
       connection.define_singleton_method(:exec_params) do |sql, *arguments|
         result = original.call(sql, *arguments)
+
         if !fired && sql.include?("SELECT id, finished_at FROM #{table}")
           fired = true
           callback.call
         end
+
         result
       end
     end
@@ -299,9 +337,11 @@ describe "age cleanup" do
 
   it "rechecks a discarded job retried after its cleanup candidate was read" do
     job = finished_job(DiscardingJob)
+
     after_candidate_page("decent_jobs") do
       DecentJob::Job.find(job.provider_job_id, database: database).retry_job
     end
+
     _(clean(older_than: 60)).must_equal 0
     _(@store.find(job.provider_job_id).fetch("state")).must_equal "ready"
     _(@store.executions(job.provider_job_id).size).must_equal 1
@@ -312,9 +352,11 @@ describe "age cleanup" do
     batch = DecentJob::Batch.enqueue([job], database: database)
     @performer.perform_one(job_id: job.provider_job_id)
     age_batch(batch)
+
     after_candidate_page("decent_job_batches") do
       DecentJob::Job.find(job.provider_job_id, database: database).retry_job
     end
+
     _(clean(older_than: 60)).must_equal 0
     _(batch.reload.finished?).must_equal true
     _(DecentJob::Job.find(job.provider_job_id, database: database).batch_id).must_equal batch.id
@@ -334,10 +376,12 @@ describe "age cleanup" do
     batch = DecentJob::Batch.enqueue([job], database: database)
     @performer.perform_one(job_id: job.provider_job_id)
     age_batch(batch)
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET finished_at = now() - interval '1 hour', error = jsonb_build_object('force_discarded', true) WHERE id = $1", [job.provider_job_id])
       key = connection.exec_params("SELECT #{DecentJob::ConcurrencyClaims::JOB_KEY_SQL} FROM decent_jobs WHERE id = $1", [job.provider_job_id]).getvalue(0, 0)
       connection.exec_params("SELECT pg_advisory_lock($1::bigint)", [key])
+
       begin
         _(clean(older_than: 60)).must_equal 0
         _(batch.reload.finished?).must_equal true
@@ -345,16 +389,20 @@ describe "age cleanup" do
         connection.exec_params("SELECT pg_advisory_unlock($1::bigint)", [key])
       end
     end
+
     _(clean(older_than: 60)).must_equal 3
   end
 
   it "rolls back cleanup when a foreign key side effect meets a busy event row" do
     job = finished_job
     batch = DecentJob::Batch.enqueue([], database: database)
+
     database.with_connection do |connection|
       connection.exec_params("INSERT INTO decent_job_batch_events (batch_id, generation, event, job_class, job_id, dispatched_at) VALUES ($1, 0, 'finish', 'RecordingJob', $2, now())", [batch.id, job.provider_job_id])
     end
+
     other = database.connect
+
     begin
       other.exec("BEGIN")
       other.exec("SELECT * FROM decent_job_batch_events FOR UPDATE")
@@ -372,10 +420,13 @@ describe "age cleanup" do
     owner = finished_job
     waiter = RecordingJob.perform_later("waiter")
     execution = @store.executions(owner.provider_job_id).first.fetch("id")
+
     database.with_connection do |connection|
       connection.exec_params("INSERT INTO decent_job_concurrency_claims (scope, job_id, execution_id, state) VALUES ('promotion', $1, $3, 'granted'), ('promotion', $2, $3, 'waiting')", [owner.provider_job_id, waiter.provider_job_id, execution])
     end
+
     other = database.connect
+
     begin
       other.exec("BEGIN")
       other.exec_params("SELECT id FROM decent_jobs WHERE id = $1 FOR UPDATE", [waiter.provider_job_id])
@@ -388,9 +439,11 @@ describe "age cleanup" do
       other.finish
     end
   end
+
   it "reports committed counts when a later cleanup candidate fails" do
     first = finished_job(at: Time.now - 7200)
     second = finished_job
+
     database.with_connection do |connection|
       connection.exec(<<~SQL)
         CREATE FUNCTION reject_second_cleanup() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -402,8 +455,10 @@ describe "age cleanup" do
         CREATE TRIGGER reject_second_cleanup BEFORE DELETE ON decent_jobs FOR EACH ROW EXECUTE FUNCTION reject_second_cleanup();
       SQL
     end
+
     payloads = []
     subscriber = ActiveSupport::Notifications.subscribe("cleanup_preserved_jobs.decent_job") { |event| payloads << event.payload }
+
     begin
       _ { clean(older_than: 60) }.must_raise PG::RaiseException
       _(payloads.first.slice(:destroyed_jobs_count, :destroyed_executions_count, :destroyed_records_count)).must_equal({destroyed_jobs_count: 1, destroyed_executions_count: 1, destroyed_records_count: 2})
@@ -413,14 +468,17 @@ describe "age cleanup" do
       ActiveSupport::Notifications.unsubscribe(subscriber)
     end
   end
+
   it "excludes retained discarded records before paging through cleanup candidates" do
     discarded = finished_job(DiscardingJob, at: Time.now - 7200)
     successful = finished_job
     checks = 0
+
     stopping = lambda do
       checks += 1
       checks > 2
     end
+
     _(clean(older_than: 60, include_discarded: false, in_batches_of: 1, stopping: stopping)).must_equal 2
     _(@store.find(discarded.provider_job_id)).wont_be_nil
     _(@store.find(successful.provider_job_id)).must_be_nil

@@ -68,6 +68,7 @@ describe DecentJob::Job do
 
   it "uses the current execution database when finding jobs" do
     aj = RecordingJob.perform_later("hello")
+
     DecentJob::Current.with(database: database) do
       _(DecentJob::Job.find(aj.provider_job_id).database).must_equal database
     end
@@ -130,9 +131,11 @@ describe DecentJob::Job do
     worker = Thread.new { @performer.perform_one }
     BlockingJob.started.pop
     _(job.reload.running?).must_equal true
+
     [:reschedule_job, :retry_job, :destroy_job].each do |action|
       _(proc { job.public_send(action) }).must_raise DecentJob::Job::LockedError
     end
+
     _(proc { job.discard_job("no") }).must_raise DecentJob::Job::LockedError
   ensure
     BlockingJob.release << true
@@ -157,6 +160,7 @@ describe DecentJob::Job do
     BlockingJob.release << true
     worker&.value
   end
+
   it "retains the original error and marks a manual retry until its next attempt succeeds" do
     job = managed(RecordingJob.perform_later("done"))
     job.discard_job("manual discard")
@@ -191,12 +195,14 @@ describe DecentJob::Job do
     database.with_connection { |connection| connection.exec_params("UPDATE decent_jobs SET state = 'running' WHERE id = $1", [job.id]) }
     _(job.reload.running?).must_equal false
     _(job.status).must_equal :queued
+
     DecentJob::Claim.new(database).with_next do
       database.with_connection { |connection| connection.exec_params("UPDATE decent_jobs SET state = 'ready' WHERE id = $1", [job.id]) }
       _(job.reload.running?).must_equal true
       _(job.status).must_equal :running
     end
   end
+
   [ManagementDiscardHandlerFailureJob, ManagementRetryHandlerFailureJob].each do |klass|
     it "records a new exception from #{klass} as unhandled on the job and attempt" do
       klass.queue_adapter = @adapter
@@ -224,6 +230,7 @@ describe DecentJob::Job do
     _(attempt.fetch("error_event")).must_equal "retry_stopped"
     _(attempt.fetch("error").fetch("class")).must_equal "ArgumentError"
   end
+
   it "keeps attributes detached so editing their identity cannot redirect management to another job" do
     first = managed(RecordingJob.perform_later("first"))
     second = managed(RecordingJob.perform_later("second"))

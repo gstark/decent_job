@@ -10,6 +10,7 @@ class InterruptContextJob < ActiveJob::Base
   def perform
     context = DecentJob::Current.execution
     observations << context&.fetch(:execution_interrupted, nil)
+
     if context && context[:execution_id]
       row = DecentJob::Store.new(context.fetch(:database)).find(context.fetch(:id))
       stored_errors << row.slice("error", "error_event")
@@ -58,10 +59,12 @@ describe "interrupted executions" do
 
   def abandon(job)
     id = SecureRandom.uuid
+
     database.transaction do |connection|
       connection.exec_params("INSERT INTO decent_job_executions (id, job_id, process_id, started_at) VALUES ($1, $2, 123, clock_timestamp() - interval '1 minute')", [id, job.provider_job_id])
       connection.exec_params("UPDATE decent_jobs SET state = 'running', execution_id = $2, executions_count = executions_count + 1 WHERE id = $1", [job.provider_job_id, id])
     end
+
     @store.executions(job.provider_job_id).last
   end
 
@@ -136,6 +139,7 @@ describe "interrupted executions" do
       _(@store.find(job.provider_job_id).fetch("error_event")).must_equal "interrupted"
       _(@store.executions(job.provider_job_id).map { |attempt| attempt.fetch("error_event") }).must_equal ["interrupted", "interrupted"]
     end
+
     _(InterruptContextJob.observations).must_be_empty
   end
 
@@ -185,9 +189,11 @@ describe "interrupted executions" do
     job.provider_job_id = SecureRandom.uuid
     other = DecentJob::Database.new(url: @connection_options, pool_size: 1)
     context = {job_id: job.job_id, id: job.provider_job_id, database: database, execution_interrupted: Time.now}
+
     [context.merge(job_id: SecureRandom.uuid), context.merge(database: other)].each do |unrelated|
       DecentJob::Current.with(unrelated) { job.perform_now }
     end
+
     InterruptHookJob.queue_adapter = :test
     DecentJob::Current.with(context) { job.perform_now }
     _(InterruptContextJob.observations.size).must_equal 3

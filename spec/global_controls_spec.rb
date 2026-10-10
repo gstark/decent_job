@@ -29,6 +29,7 @@ describe "global shutdown inspection" do
   it "checks every registered resource outside the registry mutex" do
     worker = DecentJob::Worker.new(database: Object.new, enable_listen_notify: false)
     manager = DecentJob::CronManager.new
+
     [worker, manager].each do |resource|
       resource.define_singleton_method(:shutdown?) do
         raise "registry mutex held during inspection" if DecentJob.runtime_mutex.owned?
@@ -36,11 +37,14 @@ describe "global shutdown inspection" do
         super()
       end
     end
+
     manager.start
+
     DecentJob.runtime_mutex.synchronize do
       DecentJob.instance_variable_get(:@workers) << worker
       DecentJob.instance_variable_get(:@cron_managers)[Object.new] = manager
     end
+
     inspectors = 5.times.map { Thread.new { 20.times.map { DecentJob.shutdown? } } }
     Timeout.timeout(3) { inspectors.each { |thread| _(thread.value).must_equal [false] * 20 } }
     manager.shutdown
@@ -116,12 +120,14 @@ describe "global inline execution" do
   it "keeps future jobs pending when only the Ruby test clock advances" do
     now = Time.now
     future = RecordingJob.set(wait_until: now + 300).perform_later("future")
+
     Time.stub(:now, now + 360) do
       %i[advisory skiplocked hybrid].each do |strategy|
         DecentJob.configuration.lock_strategy = strategy
         _(DecentJob.perform_inline).must_equal 0
       end
     end
+
     _(RecordingJob.events).must_be_empty
     _(DecentJob::Store.new(database).find(future.provider_job_id).fetch("state")).must_equal "ready"
   end

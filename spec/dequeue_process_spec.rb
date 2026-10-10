@@ -26,11 +26,13 @@ describe "dequeue policy across CLI processes" do
 
   def records(type = nil)
     return [] unless File.exist?(@log)
+
     rows = File.readlines(@log).filter_map do |line|
       JSON.parse(line)
     rescue JSON::ParserError
       nil
     end
+
     type ? rows.select { |row| row.fetch("type") == type } : rows
   end
 
@@ -47,14 +49,17 @@ describe "dequeue policy across CLI processes" do
                    "DECENT_JOB_IDLE_TIMEOUT" => nil, "NOTIFY_SOCKET" => nil, "WATCHDOG_USEC" => nil}
     command = [RbConfig.ruby, "-Ilib", "exe/decent_job", "start", "--require", "spec/support/dequeue_cli_app.rb",
       "--max-threads", "1", "--poll-interval", "0.02", "--shutdown-timeout", "3", *options]
+
     Open3.popen3(environment, *command, pgroup: true) do |input, output, error, process|
       input.close
       stdout = Thread.new { output.read }
       stderr = Thread.new { error.read }
+
       await do
         raise "Worker stopped: #{stderr.value}\n#{stdout.value}" unless process.alive?
         records.any?
       end
+
       yield
       Process.kill("TERM", process.pid)
       status = Timeout.timeout(6) { process.value }
@@ -65,6 +70,7 @@ describe "dequeue policy across CLI processes" do
         Process.kill("KILL", -process.pid)
         process.join
       end
+
       stdout&.join
       stderr&.join
     end
@@ -75,12 +81,15 @@ describe "dequeue policy across CLI processes" do
       first = DequeueProcessJob.perform_later("created first")
       second = DequeueProcessJob.perform_later("scheduled first")
       future = DequeueProcessJob.set(wait: 3600, priority: -100).perform_later("future")
+
       database.with_connection do |connection|
         connection.exec_params("UPDATE decent_jobs SET created_at = clock_timestamp() - interval '2 hours', scheduled_at = clock_timestamp() - interval '1 hour' WHERE id = $1", [first.provider_job_id])
         connection.exec_params("UPDATE decent_jobs SET created_at = clock_timestamp() - interval '1 hour', scheduled_at = clock_timestamp() - interval '2 hours' WHERE id = $1", [second.provider_job_id])
       end
+
       options = (sort == "scheduled_at") ? ["--dequeue-query-sort", sort] : []
       host_options = (sort == "scheduled_at") ? {sort_env: "created_at", app_sort: "created_at"} : {}
+
       run_worker(*options, **host_options) do
         await { records("performed").size == 2 }
         expected = ["created first", "scheduled first"]
@@ -99,6 +108,7 @@ describe "dequeue policy across CLI processes" do
       owner = PG.connect(@connection_options)
       key = owner.exec_params("SELECT hashtextextended(current_schema() || '.decent_jobs.' || $1::text, 0)", [first.provider_job_id]).getvalue(0, 0)
       owner.exec_params("SELECT pg_advisory_lock($1::bigint)", [key])
+
       run_worker("--queue-select-limit", limit.to_s, app_limit: "0") do
         await { records("empty").any? }
         expected = (limit == 1) ? [] : %w[second third]

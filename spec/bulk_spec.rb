@@ -73,6 +73,7 @@ describe DecentJob::Bulk do
 
   it "leaves no writes when the block raises and restores capture state" do
     job = nil
+
     _ {
       DecentJob::Bulk.enqueue do
         job = BulkJob.perform_later("discarded")
@@ -89,6 +90,7 @@ describe DecentJob::Bulk do
 
   it "joins nested enqueue blocks to the outer capture" do
     inner = nil
+
     result = DecentJob::Bulk.enqueue do
       BulkJob.perform_later("before")
       inner = DecentJob::Bulk.enqueue { BulkJob.perform_later("inner") }
@@ -108,12 +110,14 @@ describe DecentJob::Bulk do
         raise "outer abort"
       end
     }.must_raise RuntimeError
+
     database.with_connection { |connection| _(connection.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0)).must_equal "0" }
   end
 
   it "captures independently in separate threads" do
     entered = Queue.new
     release = Queue.new
+
     worker = Thread.new do
       DecentJob::Bulk.enqueue do
         BulkJob.perform_later("thread")
@@ -121,6 +125,7 @@ describe DecentJob::Bulk do
         release.pop
       end
     end
+
     entered.pop
     outside = BulkJob.perform_later("outside")
     _(outside.provider_job_id).wont_be_nil
@@ -134,9 +139,11 @@ describe DecentJob::Bulk do
 
   it "preserves queue, priority, scheduled time, and provider identifier" do
     scheduled_at = Time.now.utc + 3600
+
     job = DecentJob::Bulk.enqueue do
       BulkJob.set(queue: "bulk", priority: 7, wait_until: scheduled_at).perform_later("later")
     end.first
+
     row = @store.find(job.provider_job_id)
 
     _(row.fetch("queue_name")).must_equal "bulk"
@@ -157,6 +164,7 @@ describe DecentJob::Bulk do
   it "enforces controls for captured jobs without repeating callbacks" do
     ControlledBulkJob.decent_job_control_concurrency_with(total_limit: 1)
     first = second = nil
+
     result = DecentJob::Bulk.enqueue do
       first = ControlledBulkJob.perform_later("accepted")
       second = ControlledBulkJob.perform_later("rejected")
@@ -189,6 +197,7 @@ describe DecentJob::Bulk do
   it "runs captured callbacks once before reporting eventual admission" do
     ControlledBulkJob.decent_job_control_concurrency_with(total_limit: 1)
     jobs = []
+
     accepted = DecentJob::Bulk.enqueue do
       jobs << ControlledBulkJob.perform_later("accepted")
       jobs << ControlledBulkJob.perform_later("rejected")
@@ -204,6 +213,7 @@ describe DecentJob::Bulk do
 
   it "executes inline jobs only after the capture has completed" do
     BulkJob.queue_adapter = DecentJob::Adapter.new(database: database, execution_mode: :inline)
+
     result = DecentJob::Bulk.enqueue do
       BulkJob.perform_later("inline")
       _(BulkJob.events).must_be_empty
@@ -215,6 +225,7 @@ describe DecentJob::Bulk do
 
   it "captures direct adapter bulk enqueues" do
     jobs = [BulkJob.new("one"), BulkJob.new("two")]
+
     result = DecentJob::Bulk.enqueue do
       @adapter.enqueue_all(jobs)
       database.with_connection { |connection| _(connection.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0)).must_equal "0" }
@@ -226,6 +237,7 @@ describe DecentJob::Bulk do
 
   it "restores the previous buffer after an isolated capture" do
     captured = nil
+
     result = DecentJob::Bulk.enqueue do
       previous = DecentJob::Bulk.current_buffer
       captured = DecentJob::Bulk.capture { BulkJob.perform_later("captured only") }

@@ -39,6 +39,7 @@ describe "daemon PID ownership" do
 
   it "checks the directory before detaching" do
     instance = daemon(File.join(@directory, "missing", "worker.pid"))
+
     Process.stub(:daemon, ->(*) { flunk "must not detach" }) do
       _ { instance.daemonize }.must_raise ArgumentError
     end
@@ -60,15 +61,18 @@ describe "daemon PID ownership" do
   it "refuses a live PID without truncating the file" do
     instance = daemon
     File.write(@path, Process.pid.to_s)
+
     Process.stub(:daemon, ->(*) { flunk "must not detach" }) do
       _ { instance.daemonize }.must_raise DecentJob::Daemon::AlreadyRunning
     end
+
     _(File.read(@path)).must_equal Process.pid.to_s
   end
 
   it "treats EPERM as a live owner" do
     instance = daemon
     File.write(@path, "123")
+
     Process.stub(:kill, ->(signal, pid) {
       _(signal).must_equal 0
       _(pid).must_equal 123
@@ -76,6 +80,7 @@ describe "daemon PID ownership" do
     }) do
       _ { instance.daemonize }.must_raise DecentJob::Daemon::AlreadyRunning
     end
+
     _(File.read(@path)).must_equal "123"
   end
 
@@ -97,6 +102,7 @@ describe "daemon PID ownership" do
     first, second = daemon, daemon
     detach(first)
     File.write(@path, "") # A competing launch must respect the lock even without a live PID.
+
     Process.stub(:daemon, ->(*) { flunk "must not detach" }) do
       _ { second.daemonize }.must_raise DecentJob::Daemon::AlreadyRunning
     end
@@ -132,6 +138,7 @@ describe "daemon PID ownership" do
     instance = daemon
     detach(instance)
     reader, writer = IO.pipe
+
     pid = Process.fork do
       reader.close
       DecentJob::Daemon.after_fork!
@@ -142,6 +149,7 @@ describe "daemon PID ownership" do
       writer.close
       exit! 0
     end
+
     writer.close
     _(reader.read).must_equal "locked"
     Process.wait(pid)
@@ -153,21 +161,25 @@ describe "daemon PID ownership" do
 
   it "releases the descriptor when detaching fails" do
     instance = daemon
+
     Process.stub(:daemon, ->(*) { raise "detach failed" }) do
       error = _ { instance.daemonize }.must_raise RuntimeError
       _(error.message).must_equal "detach failed"
     end
+
     detach(daemon)
   end
 
   it "rejects manually owned workers before detaching" do
     worker = DecentJob::Worker.new(database: nil)
     instance = daemon
+
     worker.stub(:shutdown?, false) do
       Process.stub(:daemon, ->(*) { flunk "must not detach" }) do
         _ { instance.daemonize }.must_raise DecentJob::ForkInProgress
       end
     end
+
     contender = File.open(@path, File::RDWR)
     _(contender.flock(File::LOCK_EX | File::LOCK_NB)).must_equal 0
   ensure
@@ -196,6 +208,7 @@ describe "daemon PID ownership" do
 
   it "reports unsupported native daemon implementations as ordinary startup failures" do
     instance = daemon
+
     Process.stub(:daemon, ->(*) { raise NotImplementedError }) do
       error = _ { instance.daemonize }.must_raise RuntimeError
       _(error.message).must_match(/unavailable/)
@@ -205,10 +218,12 @@ describe "daemon PID ownership" do
   it "fails clearly when native daemonization is unavailable" do
     instance = daemon
     responds = Process.method(:respond_to?)
+
     Process.stub(:respond_to?, ->(name, *args) { (name == :daemon) ? false : responds.call(name, *args) }) do
       error = _ { instance.daemonize }.must_raise RuntimeError
       _(error.message).must_match(/unavailable/)
     end
+
     _(File.exist?(@path)).must_equal false
   end
 end

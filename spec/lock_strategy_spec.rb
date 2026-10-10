@@ -29,6 +29,7 @@ describe "lock strategies" do
     it "persists #{strategy} ownership and releases it after a nonlocal exit without finishing the attempt" do
       DecentJob.configuration.lock_strategy = strategy
       job = RecordingJob.perform_later("owned")
+
       value = catch(:leave) do
         DecentJob::Claim.new(database).with_next do |row|
           _(row["lock_type"]).must_equal strategy.to_s
@@ -36,13 +37,16 @@ describe "lock strategies" do
           _(DecentJob::Job.find(row.fetch("id"), database: database).running?).must_equal true
           _(advisory_locked?(row.fetch("id"))).must_equal(strategy != :skiplocked)
           _(database.stats.fetch(:active)).must_equal((strategy == :skiplocked) ? 0 : 1)
+
           %i[advisory skiplocked hybrid].each do |other|
             DecentJob.configuration.lock_strategy = other
             _(DecentJob::Claim.new(database).with_next(job_id: job.provider_job_id) { :stolen }).must_be_nil
           end
+
           throw :leave, :escaped
         end
       end
+
       _(value).must_equal :escaped
       row = DecentJob::Store.new(database).find(job.provider_job_id)
       _(row["locked_by_id"]).must_be_nil
@@ -123,13 +127,17 @@ describe "skiplocked execution lifecycle" do
     job = RecordingJob.perform_later("reporting")
     record = DecentJob::Job.find(job.provider_job_id, database: database)
     _(record.running?).must_equal false
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET locked_by_id = $2 WHERE id = $1", [record.id, SecureRandom.uuid])
     end
+
     _(record.running?).must_equal true
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET finished_at = clock_timestamp(), state = 'discarded' WHERE id = $1", [record.id])
     end
+
     _(record.reload.running?).must_equal true
     _(record.status).must_equal :discarded
     database.with_connection { |connection| connection.exec_params("DELETE FROM decent_jobs WHERE id = $1", [record.id]) }
@@ -163,9 +171,11 @@ describe "skiplocked execution lifecycle" do
     second = BlockingJob.perform_later
     pool = database
     tracker = DecentJob::ProcessTracker.new(database: pool)
+
     @threads = [first, second].map do |job|
       Thread.new { DecentJob::Performer.new(database: pool, process_tracker: tracker).perform_one(job_id: job.provider_job_id) }
     end
+
     2.times { Timeout.timeout(5) { BlockingJob.started.pop } }
     owner = DecentJob::Job.find(first.provider_job_id, database: database).locked_by_id
     @threads.first.kill
@@ -215,36 +225,43 @@ describe "claim interruption boundaries" do
     tracker = DecentJob::ProcessTracker.new(database: database)
     registered = Queue.new
     keep_registered = Queue.new
+
     keeper = Thread.new {
       tracker.register {
         registered << true
         keep_registered.pop
       }
     }
+
     Timeout.timeout(5) { registered.pop }
     entered = Queue.new
     proceed = Queue.new
     caught = Queue.new
     pool = database
+
     @thread = Thread.new do
       performer = DecentJob::Performer.new(database: pool, process_tracker: tracker,
         on_execution_start: -> {
           entered << true
           proceed.pop
         })
+
       performer.perform_one
     rescue Exception => error # standard:disable Lint/RescueException
       caught << error
     end
+
     Timeout.timeout(5) { entered.pop }
     borrowed = Queue.new
     release_holder = Queue.new
+
     holder = Thread.new {
       pool.with_connection {
         borrowed << true
         release_holder.pop
       }
     }
+
     Timeout.timeout(5) { borrowed.pop }
     proceed << true
     error = Timeout.timeout(5) { caught.pop }
@@ -272,12 +289,14 @@ describe "claim interruption boundaries" do
     job = RecordingJob.perform_later("closed pool")
     @observer = database.connect
     error = LockStrategyFatalError.new("original failure")
+
     caught = _ do
       DecentJob::Claim.new(database).with_next do
         database.close
         raise error
       end
     end.must_raise LockStrategyFatalError
+
     _(caught).must_equal error
     row = @observer.exec_params("SELECT locked_by_id, lock_type FROM decent_jobs WHERE id = $1", [job.provider_job_id]).first
     _(row).must_equal({"locked_by_id" => nil, "lock_type" => nil})
@@ -289,25 +308,31 @@ describe "claim interruption boundaries" do
     @observer = database.connect
     releasing = Queue.new
     pool = database
+
     @thread = Thread.new do
       DecentJob::Claim.new(pool).with_next do
         pool.close
         connections = 0
+
         pool.define_singleton_method(:connect) do
           connection = super()
           connections += 1
+
           if connections == 1
             connection.singleton_class.alias_method :original_exec_params, :exec_params
+
             connection.define_singleton_method(:exec_params) do |sql, *arguments|
               releasing << true
               Queue.new.pop
               original_exec_params(sql, *arguments)
             end
           end
+
           connection
         end
       end
     end
+
     Timeout.timeout(5) { releasing.pop }
     @thread.kill
     _(@thread.join(3)).must_equal @thread
@@ -320,6 +345,7 @@ describe "claim interruption boundaries" do
     DecentJob.configuration.lock_strategy = :skiplocked
     RecordingJob.perform_later("failed fallback")
     error = PG::ConnectionBad.new("cleanup connection unavailable")
+
     caught = _ do
       DecentJob::Claim.new(database).with_next do
         database.close
@@ -327,6 +353,7 @@ describe "claim interruption boundaries" do
         :completed
       end
     end.must_raise PG::ConnectionBad
+
     _(caught).must_equal error
   end
 
@@ -336,25 +363,32 @@ describe "claim interruption boundaries" do
     acquired = Queue.new
     error = Class.new(StandardError).new("interrupted acquisition")
     original_pid = nil
+
     database.with_connection do |connection|
       original_pid = connection.backend_pid
       connection.singleton_class.alias_method :original_exec_params, :exec_params
+
       connection.define_singleton_method(:exec_params) do |sql, *arguments|
         result = original_exec_params(sql, *arguments)
+
         if sql.include?("pg_try_advisory_lock")
           acquired << true
           Queue.new.pop
         end
+
         result
       end
     end
+
     pool = database
     caught = nil
+
     @thread = Thread.new do
       DecentJob::Claim.new(pool).with_next { :unexpected }
     rescue => exception
       caught = exception
     end
+
     Timeout.timeout(5) { acquired.pop }
     @thread.raise(error)
     _(@thread.join(3)).must_equal @thread
@@ -370,15 +404,18 @@ describe "claim interruption boundaries" do
     @observer = database.connect
     original_pid = nil
     error = Class.new(StandardError).new("original body failure")
+
     caught = _ do
       DecentJob::Claim.new(database).with_next do
         database.with_connection do |connection|
           original_pid = connection.backend_pid
           @observer.exec_params("SELECT pg_terminate_backend($1)", [original_pid])
         end
+
         raise error
       end
     end.must_raise error.class
+
     _(caught).must_equal error
     database.with_connection { |connection| _(connection.backend_pid).wont_equal original_pid }
     _(DecentJob::Performer.new(database: database).perform_one.state).must_equal "succeeded"
@@ -389,6 +426,7 @@ describe "claim interruption boundaries" do
     DecentJob.configuration.lock_strategy = :hybrid
     job = RecordingJob.perform_later("hybrid successful body")
     @observer = database.connect
+
     begin
       raise "previously handled failure"
     rescue RuntimeError
@@ -397,10 +435,12 @@ describe "claim interruption boundaries" do
           database.with_connection do |connection|
             @observer.exec_params("SELECT pg_terminate_backend($1)", [connection.backend_pid])
           end
+
           :completed
         end
       end.must_raise PG::ConnectionBad
     end
+
     _(DecentJob::Performer.new(database: database).perform_one.state).must_equal "succeeded"
   end
 
@@ -408,16 +448,20 @@ describe "claim interruption boundaries" do
     DecentJob.configuration.lock_strategy = :skiplocked
     job = RecordingJob.perform_later("cleanup boundary")
     releasing = Queue.new
+
     database.with_connection do |connection|
       connection.singleton_class.alias_method :original_exec_params, :exec_params
+
       connection.define_singleton_method(:exec_params) do |sql, *arguments|
         if sql.include?("UPDATE decent_jobs SET locked_by_id = NULL")
           releasing << true
           Queue.new.pop
         end
+
         original_exec_params(sql, *arguments)
       end
     end
+
     pool = database
     @thread = Thread.new { DecentJob::Claim.new(pool).with_next { :unfinished } }
     Timeout.timeout(5) { releasing.pop }
@@ -438,9 +482,11 @@ describe "claim interruption boundaries" do
     backend = nil
     pool = database
     @observer = database.connect
+
     @thread = Thread.new do
       pool.with_connection do |connection|
         backend = connection.backend_pid
+
         begin
           DecentJob::Claim.new(pool).with_next do |row|
             pool.transaction do
@@ -456,6 +502,7 @@ describe "claim interruption boundaries" do
         end
       end
     end
+
     Timeout.timeout(5) { entered.pop }
     @thread.kill
     _(@thread.join(3)).must_equal @thread
@@ -487,17 +534,22 @@ describe "claim interruption boundaries" do
       DecentJob.configuration.lock_strategy = strategy
       job = RecordingJob.perform_later("commit boundary")
       committed = Queue.new
+
       database.with_connection do |connection|
         connection.singleton_class.alias_method :original_exec, :exec
+
         connection.define_singleton_method(:exec) do |sql, *arguments|
           result = original_exec(sql, *arguments)
+
           if sql == "COMMIT"
             committed << true
             Queue.new.pop
           end
+
           result
         end
       end
+
       pool = database
       @thread = Thread.new { DecentJob::Claim.new(pool).with_next { :unexpected } }
       Timeout.timeout(5) { committed.pop }
@@ -520,6 +572,7 @@ describe "claim interruption boundaries" do
       @observer.exec_params("SELECT id FROM decent_job_executions WHERE job_id = $1 FOR UPDATE", [job.provider_job_id])
       pool = database
       @thread = Thread.new { DecentJob::Claim.new(pool).with_next { :unexpected } }
+
       Timeout.timeout(5) do
         loop do
           @observer.exec("SELECT pg_stat_clear_snapshot()")
@@ -528,6 +581,7 @@ describe "claim interruption boundaries" do
           sleep 0.01
         end
       end
+
       @thread.kill
       _(@thread.join(3)).must_equal @thread
       @observer.exec("ROLLBACK")

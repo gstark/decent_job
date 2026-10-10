@@ -30,10 +30,12 @@ describe "global restart observation selection" do
     entered = Queue.new
     release = Queue.new
     worker = DecentJob::Worker.new(database: @database, max_threads: 1, enable_listen_notify: false)
+
     worker.define_singleton_method(:run) do |*|
       entered << true
       release.pop
     end
+
     @workers << worker
     @releases << release
     DecentJob.start_worker(worker)
@@ -56,14 +58,18 @@ describe "global restart observation selection" do
   it "does not report a failed restart for an owner excluded by its local stop" do
     failure = IOError.new("drain failed")
     @target_release << true
+
     @target.define_singleton_method(:drain_shutdown) do |*arguments, **options|
       value = super(*arguments, **options)
+
       unless @reported_test_failure
         @reported_test_failure = true
         raise failure
       end
+
       value
     end
+
     _(assert_raises(IOError) { DecentJob.restart(timeout: 2) }).must_be_same_as failure
     assert_target_outcome(:failed)
     _(@events.first[:error]).must_be_same_as failure

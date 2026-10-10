@@ -22,6 +22,7 @@ module DecentJob
         def initialize(components)
           @fields = {}
           @times = []
+
           components.flatten.each do |component|
             if component.key == :time
               @times << component
@@ -30,8 +31,10 @@ module DecentJob
               @fields[component.key] = existing ? existing.merge(component) : component
             end
           end
+
           if @fields[:monthday] || @fields[:weekday] || @fields[:month]
             @times << Component.new(:time, 0, 0) if @times.empty?
+
             if @fields[:month] && !@fields[:monthday] && !@fields[:weekday]
               @fields[:monthday] = Component.new(:monthday, 1)
             end
@@ -64,21 +67,27 @@ module DecentJob
         def first_time_group
           return [["*"], ["*"]] if @times.empty?
           times = @times.dup
+
           while times.size > 1 && (index = times.index(&:graded?))
             neighbor = (index == 0) ? 1 : index - 1
             graded = times[index]
             other = times.delete_at(neighbor)
             times[times.index(graded)] = graded.merge(other)
           end
+
           by_minute = {}
+
           times.each do |time|
             hours, minutes = time.values.map { |value| Array(value) }
             minutes.each { |minute| (by_minute[minute] ||= []).concat(hours) }
           end
+
           by_hours = {}
+
           by_minute.each do |minute, hours|
             (by_hours[hours.sort] ||= []) << minute
           end
+
           by_hours.first
         rescue ArgumentError
           # Mixed symbolic and numeric hours cannot form a reference time group.

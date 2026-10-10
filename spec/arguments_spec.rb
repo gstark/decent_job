@@ -46,6 +46,7 @@ describe DecentJob::Arguments do
   it "round-trips GlobalID records when GlobalID is loaded" do
     require "globalid"
     GlobalID.app ||= "decent-job-spec"
+
     record_class = Class.new do
       include GlobalID::Identification
 
@@ -59,6 +60,7 @@ describe DecentJob::Arguments do
 
       def ==(other) = other.is_a?(self.class) && other.id == id
     end
+
     Object.const_set(:ArgumentsSpecRecord, record_class)
     serialized = DecentJob::Arguments.serialize([record_class.new("7")])
     _(serialized).must_equal [{"_aj_globalid" => "gid://#{GlobalID.app}/ArgumentsSpecRecord/7"}]

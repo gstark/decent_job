@@ -112,6 +112,7 @@ module DecentJob
             AcceptCallback: method(:accept_client))
           @port = @server.listeners.first.addr[1]
           @server.mount("/", ApplicationServlet, method(:respond))
+
           @thread = Thread.new do
             @server.start
           rescue => error
@@ -122,8 +123,10 @@ module DecentJob
               @condition.broadcast
             }
           end
+
           @condition.wait(@mutex) until @ready || @stopping
         end
+
         self
       end
 
@@ -145,12 +148,14 @@ module DecentJob
           @stopping = true
           @clients.each { |client| client.close unless client.closed? }
           @server&.close_listeners
+
           if @pid == Process.pid
             [@server, @thread, @request_threads.include?(Thread.current)]
           else
             [nil, nil, false]
           end
         end
+
         server&.shutdown
         return true unless thread
         return false if thread == Thread.current || request_thread
@@ -168,6 +173,7 @@ module DecentJob
           @clients.each { |client| client.close unless client.closed? }
           @server&.close_listeners
         end
+
         self
       end
 
@@ -197,6 +203,7 @@ module DecentJob
           @report.call(error)
           Response.error(500)
         end
+
         status, headers, content = result
         response.status = status
         headers.each { |key, value| response[key] = value }

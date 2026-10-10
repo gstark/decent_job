@@ -51,6 +51,7 @@ module DecentJob
         def rescue_from(*classes, with: nil, &block)
           callback = with || block
           raise ArgumentError, "rescue_from needs a handler: pass with: or a block" unless callback
+
           classes.each do |klass|
             next if klass.is_a?(String) || (klass.is_a?(Class) && klass <= Exception)
 
@@ -89,10 +90,12 @@ module DecentJob
         def retry_on(*exceptions, wait: 3, attempts: 5, queue: nil, priority: nil, jitter: JITTER_DEFAULT, &block)
           rescue_from(*exceptions) do |error|
             executions = executions_for(exceptions)
+
             if attempts == :unlimited || executions < attempts
               retry_job(wait: determine_delay(wait, executions, jitter), queue: queue, priority: priority, error: error)
             else
               record_outcome(:retry_stopped, error)
+
               if block
                 block.call(self, error)
                 run_after_discard_procs(error)
@@ -186,6 +189,7 @@ module DecentJob
       def retry_job(options = {})
         record_outcome(:retried, options[:error])
         scheduled_at, queue_name, priority = self.scheduled_at, self.queue_name, self.priority
+
         begin
           enqueue(options.slice(:wait, :wait_until, :queue, :priority))
         ensure
@@ -198,6 +202,7 @@ module DecentJob
       # Returns the retry delay in seconds. Matches Active Job's formula.
       def determine_delay(wait, executions, jitter)
         jitter = (jitter == JITTER_DEFAULT) ? self.class.retry_jitter : (jitter || 0.0)
+
         case wait
         when :polynomially_longer
           delay = executions**4
@@ -230,11 +235,13 @@ module DecentJob
       # block raised. One failing block does not skip the others.
       def run_after_discard_procs(exception)
         errors = []
+
         self.class.after_discard_procs.each do |block|
           instance_exec(self, exception, &block)
         rescue => error
           errors << error
         end
+
         raise errors.last unless errors.empty?
       end
 

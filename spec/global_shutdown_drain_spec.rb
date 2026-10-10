@@ -9,12 +9,14 @@ describe "global shutdown drain inspection" do
 
   before do
     DecentJob::Schema.new(database).migrate
+
     DecentJob.configure do |config|
       config.database_url = @connection_options
       config.max_threads = 1
       config.poll_interval = 0.01
       config.enable_listen_notify = false
     end
+
     BlockingJob.started = Queue.new
     BlockingJob.release = Queue.new
     @release = Queue.new
@@ -50,10 +52,12 @@ describe "global shutdown drain inspection" do
     BlockingJob.queue_adapter = DecentJob::Adapter.new(database: DecentJob.database, execution_mode: :external)
     BlockingJob.perform_later
     entered = Queue.new
+
     DecentJob.configuration.cron = {holding: {class: -> {
       entered << true
       @release.pop
     }, cron: ->(previous) { previous ? previous + 60 : Time.now }}}
+
     worker = DecentJob.start
     manager = DecentJob.start_cron
     pop(BlockingJob.started)
@@ -94,26 +98,32 @@ describe "global shutdown drain inspection" do
       entered = Queue.new
       release = @release
       original = DecentJob.database.method(:connect)
+
       DecentJob.database.define_singleton_method(:connect) do
         original.call.tap do |connection|
           connection_role = nil
+
           connection.define_singleton_method(:exec) do |sql, *arguments, &block|
             connection_role = :listener if sql == "LISTEN decent_job"
             super(sql, *arguments, &block)
           end
+
           connection.define_singleton_method(:exec_params) do |sql, *arguments, &block|
             connection_role = :heartbeat if sql.include?("INSERT INTO decent_job_processes")
             super(sql, *arguments, &block)
           end
+
           connection.define_singleton_method(:finish) do
             if connection_role == role
               entered << true
               release.pop
             end
+
             super()
           end
         end
       end
+
       worker = DecentJob.start
       await { worker.connected? }
       _(DecentJob.shutdown(timeout: 0)).must_equal false

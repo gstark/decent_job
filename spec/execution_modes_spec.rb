@@ -49,6 +49,7 @@ describe "execution modes" do
 
     it "runs #{mode} asynchronously inside webservers" do
       adapter = DecentJob::Adapter.new(execution_mode: mode)
+
       DecentJob.configuration.stub(:in_webserver?, true) do
         _(adapter.execute_async?).must_equal true
         _(adapter.execute_external?).must_equal false

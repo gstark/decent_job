@@ -53,10 +53,12 @@ describe "scheduler future cache parity" do
     # before the cache assertions. The heartbeat has its own session.
     database.with_connection do
       @worker.start
+
       [future, (future + 1).to_json, (future + 2).to_i].each_with_index do |scheduled_at, index|
         @worker.wake(scheduled_at: scheduled_at)
         _(@worker.stats.fetch(:schedulers).first.fetch(:active_cache)).must_equal index + 1
       end
+
       _(errors).must_equal []
     end
   end

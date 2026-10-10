@@ -73,6 +73,7 @@ describe "recurring enqueue integration" do
     RUBY
     processes = []
     reaped = []
+
     2.times do
       gate_read, gate_write = IO.pipe
       result_read, result_write = IO.pipe
@@ -83,19 +84,23 @@ describe "recurring enqueue integration" do
       result_write.close
       processes << [pid, gate_write, result_read]
     end
+
     Timeout.timeout(10) do
       processes.each { |_, _, reader| _(reader.gets&.strip).must_equal "ready" }
       processes.each { |_, writer, _| writer.write("x") }
       results = processes.map { |_, _, reader| JSON.parse(reader.gets) }
+
       processes.each do |pid, _, _|
         status = Process.wait2(pid).last
         reaped << pid
         _(status.success?).must_equal true
       end
+
       _(results.count { |result| result.fetch("accepted") }).must_equal 1
       _(results.map { |result| result.fetch("enabled") }).must_equal [false, false]
       _(results.filter_map { |result| result.fetch("provider_id") }).must_equal rows.map { |row| row.fetch("id") }
     end
+
     _(rows.size).must_equal 1
     _(rows.first.fetch("cron_at")).must_equal @at
   ensure
@@ -116,12 +121,14 @@ describe "recurring enqueue integration" do
   it "rolls back occurrence ownership with the enclosing transaction" do
     entry = cron_entry
     rolled_back = nil
+
     _ {
       database.transaction do
         rolled_back = entry.enqueue(@at)
         raise "rollback"
       end
     }.must_raise RuntimeError
+
     _(rows).must_be_empty
     _(rolled_back.provider_job_id).must_be_nil
     _(rolled_back.successfully_enqueued?).must_equal false
@@ -134,10 +141,12 @@ describe "recurring enqueue integration" do
     entry = cron_entry
     entry.enqueue(@at)
     ordinary = nil
+
     database.transaction do
       _(entry.enqueue(@at)).must_equal false
       ordinary = CronIntegrationJob.perform_later("ordinary")
     end
+
     _(rows.size).must_equal 2
     _(DecentJob::Store.new(database).find(ordinary.provider_job_id).fetch("cron_key")).must_be_nil
   end
@@ -192,10 +201,12 @@ describe "recurring enqueue integration" do
 
   it "keeps an entry's identity when invoked inside a bulk capture" do
     accepted = nil
+
     captured = DecentJob::Bulk.enqueue do
       CronIntegrationJob.perform_later("ordinary")
       accepted = cron_entry.enqueue(@at)
     end
+
     _(accepted.provider_job_id).wont_be_nil
     _(captured.size).must_equal 1
     _(rows.size).must_equal 2
@@ -206,6 +217,7 @@ describe "recurring enqueue integration" do
     CronIntegrationLimitedJob.decent_job_control_concurrency_with(key: -> { arguments.first }, total_limit: 10)
     arrived = Queue.new
     release = Queue.new
+
     entries = [["a", "b"], ["b", "a"]].each_with_index.map do |keys, index|
       cron_entry(key: :"integration_#{index}", class: -> {
         ActiveJob.perform_all_later(*keys.map { |key| CronIntegrationLimitedJob.new(key) })
@@ -213,16 +225,20 @@ describe "recurring enqueue integration" do
         release.pop
       })
     end
+
     threads = entries.map { |entry| Thread.new { entry.enqueue } }
+
     Timeout.timeout(10) do
       2.times { arrived.pop }
       2.times { release << true }
       threads.each(&:value)
     end
+
     _(rows.size).must_equal 4
     _(rows.map { |row| row.fetch("cron_key") }.tally).must_equal({"integration_0" => 2, "integration_1" => 2})
   ensure
     2.times { release << true } if release
+
     Array(threads).each do |thread|
       thread.kill if thread.alive?
       thread.join

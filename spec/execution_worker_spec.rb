@@ -82,10 +82,12 @@ describe "worker execution error reporting" do
   it "isolates nonstandard exceptions from reporters" do
     FailingJob.perform_later
     RecordingJob.perform_later("reporter survived")
+
     worker(on_thread_error: lambda { |error|
       @errors << error
       raise NotImplementedError, "reporter unavailable"
     }).start
+
     _(pop(@errors)).must_be_kind_of RuntimeError
     _(pop(RecordingJob.events)).must_equal "reporter survived"
     @worker.shutdown(timeout: 5)
@@ -105,21 +107,25 @@ describe "worker execution error reporting" do
     _(@worker.running?).must_equal true
     _(@worker.started?).must_equal false
     _(@worker.connected?).must_equal false
+
     releaser = Thread.new {
       sleep 0.1
       WorkerBlockingJob.release << true
     }
+
     raised = _ { @worker.shutdown(timeout: 5) }.must_raise WorkerFatalError
     _(raised).must_equal error
     _(WorkerBlockingJob.completed.size).must_equal 1
     _(DecentJob::Store.new(database).executions(holding_job.provider_job_id).last.fetch("state")).must_equal "succeeded"
   ensure
     releaser&.join
+
     begin
       @worker&.shutdown(timeout: 5)
     rescue WorkerFatalError
       nil
     end
+
     @worker = nil
     Thread.report_on_exception = previous_reporting
   end
@@ -139,10 +145,12 @@ describe "worker execution error reporting" do
     Timeout.timeout(5) { sleep 0.005 while fatal.running? }
     _(DecentJob.started?).must_equal false
     _(DecentJob.connected?).must_equal false
+
     releaser = Thread.new {
       sleep 0.1
       WorkerBlockingJob.release << true
     }
+
     raised = _ { DecentJob.reset! }.must_raise WorkerFatalError
     _(raised).must_equal error
     _(WorkerBlockingJob.completed.size).must_equal 1
@@ -151,11 +159,13 @@ describe "worker execution error reporting" do
     _(DecentJob.configuration.handled_exceptions).must_equal [StandardError, NotImplementedError]
   ensure
     releaser&.join
+
     begin
       DecentJob.reset!
     rescue WorkerFatalError
       nil
     end
+
     holding&.shutdown(timeout: 5)
     @worker = nil
     Thread.report_on_exception = previous_reporting
@@ -168,10 +178,12 @@ describe "worker execution error reporting" do
       RecordingJob.perform_later("must not run")
       previous_reporting = Thread.report_on_exception
       Thread.report_on_exception = false
+
       worker(on_thread_error: lambda { |error|
         @errors << error
         raise NotImplementedError, "reporter unavailable"
       }).start
+
       error = pop(@errors)
       raised = _ { @worker.shutdown(timeout: 5) }.must_raise (klass == FailingJob) ? RuntimeError : WorkerFatalError
       _(raised).must_equal error

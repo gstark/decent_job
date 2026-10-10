@@ -152,6 +152,7 @@ module DecentJob
     def enqueue_all(jobs, callbacks: true)
       raising_integration_errors(jobs.first) do
         jobs = jobs.uniq
+
         if Bulk.capture(jobs, queue_adapter: self)
           jobs.each { |job| job.successfully_enqueued = true }
           return jobs.size
@@ -159,14 +160,17 @@ module DecentJob
 
         controlled, plain = jobs.partition { |job| ConcurrencyControls.controlled?(job) }
         count = persist(plain, skip_duplicates: true)
+
         controlled.each do |job|
           if callbacks
             job.enqueue
           else
             enqueue_without_callbacks(job)
           end
+
           count += 1 if job.successfully_enqueued?
         end
+
         count
       end
     end
@@ -201,12 +205,15 @@ module DecentJob
       return :stopping if @worker_mutex.synchronize { @stopping } || DecentJob.stopping? || context&.fetch(:stopping, nil)&.call
 
       matching = context && (!job_instance || job_instance.job_id == context[:job_id])
+
       if matching && context[:execution_id]
         finished = database.with_connection do |connection|
           connection.exec_params("SELECT 1 FROM decent_job_executions WHERE id = $1 AND job_id = $2 AND finished_at IS NOT NULL", [context[:execution_id], context[:id]]).ntuples.positive?
         end
+
         return :force_discarded if finished
       end
+
       return false unless DecentJob.configuration.enable_pauses
       return Pauses.new(database).paused?(job_instance: job_instance) if job_instance
       return false unless matching && context[:id]
@@ -254,11 +261,13 @@ module DecentJob
             handles.each { |handle| handle.restart_failed(:refused) }
             return false
           end
+
           DecentJob.synchronize_resource_start do
             if DecentJob.stopping?
               handles.each { |handle| handle.restart_failed(:refused) }
               return false
             end
+
             return false unless handles.map(&:restart).all?
             @lifecycle_revision += 1
             @stopping = false
@@ -266,6 +275,7 @@ module DecentJob
           end
         end
       end
+
       start_async
       self
     end
@@ -282,6 +292,7 @@ module DecentJob
       @worker_mutex.synchronize do
         @lifecycle_revision += 1
         @stopping = true
+
         DecentJob.runtime_mutex.synchronize do
           DecentJob.locally_stop_worker(@worker)
           handles = @database ? DecentJob.begin_cron_shutdown(database: @database) : []
@@ -387,14 +398,17 @@ module DecentJob
         return if @worker_mutex.synchronize { @stopping }
         connection_pool = @database || DecentJob.database(automatic: true)
         return unless connection_pool
+
         worker = @worker_mutex.synchronize do
           return if @stopping
+
           DecentJob.synchronize_resource_start(automatic: true) do
             @database ||= connection_pool
             @worker ||= Worker.new(database: connection_pool, **DecentJob.configuration.worker_options)
             DecentJob.start_worker(@worker)
           end
         end
+
         DecentJob.start_cron(database: database, automatic: true) if worker && DecentJob.configuration.enable_cron
         worker
       end
@@ -406,14 +420,17 @@ module DecentJob
     # the row in place. The UPDATE checks execution ownership.
     def reschedule_job(job, context, payload:, attributes:, scheduled_at:)
       attempted = store.enqueue_attributes(job, id: context.fetch(:id), payload: payload)
+
       if attributes
         attempted = attributes.merge(attempted.slice("payload", "queue_name", "priority", "labels", "concurrency_keys", "scheduled_at"))
           .merge("state" => "ready", "finished_at" => nil, "performed_at" => nil, "error_event" => "retried")
       end
+
       instrument_enqueue(job, scheduled_at: scheduled_at, attributes: attempted) do |event, prepared|
         store.reschedule(job, context, payload: prepared.fetch("payload")) { |row| event[:job] = Job.from_attributes(row, database: database) }
         event[:accepted] = true
       end
+
       job.provider_job_id
     end
 
@@ -424,17 +441,21 @@ module DecentJob
       return if Bulk.capture(job, queue_adapter: self, callbacks_run: true)
 
       context = Current.execution
+
       if context && context[:database].equal?(database) && context[:job_id] == job.job_id
         reschedule(job, context, scheduled_at: scheduled_at)
         return job.provider_job_id
       end
+
       ConcurrencyControls.new(database).enqueue(job) do
         instrument_enqueue(job, scheduled_at: scheduled_at) do |payload, attributes|
           persist([job], attributes: [attributes], dispatch: false) { |row| payload[:job] = Job.from_attributes(row, database: database) }
           payload[:accepted] = !job.provider_job_id.nil?
         end
+
         after_enqueue([job.provider_job_id]) if job.provider_job_id
       end
+
       raise EnqueueError, "cron occurrence already enqueued" unless job.provider_job_id
       job.provider_job_id
     end
@@ -467,16 +488,19 @@ module DecentJob
       # Cron capture also flushes through bulk enqueue, but only its occurrence
       # constraint may reject silently. Other uniqueness failures must escape.
       skip_duplicates = false if CronEntry.context_for(database)
+
       ids = begin
         store.enqueue_all(jobs, attributes: attributes, skip_duplicates: skip_duplicates, &block)
       rescue PG::Error => error
         raise EnqueueError, error.message
       end
+
       jobs.zip(ids).each do |job, id|
         job.provider_job_id = id
         job.successfully_enqueued = !id.nil?
         job.enqueue_error = id ? nil : Integrations.for_job(job).enqueue_error(EnqueueError.new("job or cron occurrence already enqueued"))
       end
+
       ids = ids.compact
       after_enqueue(ids) if dispatch
       ids.size

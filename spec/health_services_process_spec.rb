@@ -42,8 +42,10 @@ describe "CLI health probes and systemd lifecycle" do
           nil
         end
       end
+
       process.join
     end
+
     @notifications.close
     FileUtils.remove_entry(@directory)
   end
@@ -71,6 +73,7 @@ describe "CLI health probes and systemd lifecycle" do
 
   def run_cli(*arguments)
     command = [RbConfig.ruby, "-Ilib", "exe/decent_job", "start", "--require", File.expand_path("support/health_services_cli_app.rb", __dir__), "--shutdown-timeout", "3", *arguments]
+
     Open3.popen3(@environment, *command) do |input, output, error, process|
       @processes << process
       input.close
@@ -83,6 +86,7 @@ describe "CLI health probes and systemd lifecycle" do
           nil
         end
       end
+
       process.join
     end
   end
@@ -98,6 +102,7 @@ describe "CLI health probes and systemd lifecycle" do
     release = File.join(@directory, "release")
     finished = File.join(@directory, "finished")
     DecentJob::Store.new(database).enqueue_all([HealthServicesJob.new(started, release, finished)])
+
     run_cli do |process, output, error|
       startup_output = await_boot(output, error)
       _(startup_output.scan("[DecentJob] Pinging systemd watchdog every").size).must_equal 1
@@ -129,6 +134,7 @@ describe "CLI health probes and systemd lifecycle" do
 
   it "reports connectivity without LISTEN and ignores another PID's watchdog" do
     @environment["WATCHDOG_PID"] = "0"
+
     run_cli("--no-listen-notify") do |process, output, error|
       await_boot(output, error)
       await_notification("READY=1")
@@ -146,6 +152,7 @@ describe "CLI health probes and systemd lifecycle" do
     cli_port = unused_port
     @environment["DECENT_JOB_HEALTH_CONFIG_PORT"] = configured_port.to_s
     @environment["DECENT_JOB_HEALTH_CUSTOM_APP"] = "true"
+
     run_cli("--probe-port", cli_port.to_s) do |process, output, error|
       await_started(output, error)
       result = response("/custom?value=two", port: cli_port)
@@ -162,6 +169,7 @@ describe "CLI health probes and systemd lifecycle" do
 
   it "fails a probe bind cleanly without leaving worker presence behind" do
     occupied = TCPServer.new("0.0.0.0", @port)
+
     run_cli do |process, _output, error|
       _(Timeout.timeout(5) { process.value.exitstatus }).must_equal 1
       _(error.read).must_match(/address.*use|EADDRINUSE/i)
@@ -186,6 +194,7 @@ describe "CLI health probes and systemd lifecycle" do
 
   it "keeps watchdog coverage while a custom probe callback drains" do
     @environment["DECENT_JOB_HEALTH_BLOCKING_APP"] = @directory
+
     run_cli do |process, output, error|
       await_boot(output, error)
       await_notification("READY=1")

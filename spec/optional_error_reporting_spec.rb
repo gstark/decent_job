@@ -6,6 +6,7 @@ require "timeout"
 
 describe "disabled error reporting" do
   before { DecentJob.configure { |config| config.on_thread_error = nil } }
+
   after do
     DecentJob.clear_lifecycle_hooks
     DecentJob.reset!
@@ -23,9 +24,11 @@ describe "disabled error reporting" do
     subscription = ActiveSupport::Notifications.subscribe("optional_reporter.decent_job") { raise "observer failed" }
     assert_equal false, DecentJob::Instrumentation.instrument("optional_reporter.decent_job", {}, database: nil) { false }
     application_error = RuntimeError.new("application failed")
+
     actual = assert_raises(RuntimeError) do
       DecentJob::Instrumentation.instrument("optional_reporter.decent_job", {}, database: nil) { raise application_error }
     end
+
     assert_same application_error, actual
   ensure
     ActiveSupport::Notifications.unsubscribe(subscription) if subscription
@@ -44,6 +47,7 @@ describe "disabled error reporting" do
     pids.each { |pid| assert_raises(Errno::ECHILD) { Process.waitpid(pid, Process::WNOHANG) } }
   ensure
     ActiveSupport::Notifications.unsubscribe(subscription) if subscription
+
     pids&.each do |pid|
       next if Process.waitpid(pid, Process::WNOHANG)
       Process.kill("KILL", pid)
@@ -74,6 +78,7 @@ describe "disabled error reporting during job execution" do
     DecentJob.configuration.preserve_job_records = ->(*) {
       database.with_connection { |connection| connection.exec("SELECT missing_optional_reporter_function()") }
     }
+
     job = RecordingJob.perform_later("preserved")
     result = DecentJob::Performer.new(database: database).perform_one
     assert_equal "succeeded", result.state
@@ -86,14 +91,17 @@ describe "disabled error reporting during job execution" do
     batches = DecentJob::BatchStore.new(database)
     broken = batches.save(id: nil, attributes: {on_finish: RecordingJob}).fetch("id")
     healthy = batches.save(id: nil, attributes: {}).fetch("id")
+
     [broken, healthy].each do |id|
       batches.open(id)
       batches.mark_enqueued(id)
     end
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_job_batches SET on_finish = $1 WHERE id = $2", ["MissingOptionalReporterJob", broken])
       batches.request(connection, [broken, healthy])
     end
+
     assert_equal 2, batches.reconcile_pending
     assert_nil batches.find(broken).fetch("finished_at")
     refute_nil batches.find(healthy).fetch("finished_at")

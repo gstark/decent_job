@@ -80,6 +80,7 @@ module DecentJob
       # @raise [SubscriberError] when more than one subscriber failed
       def finish
         errors = []
+
         begin
           @external&.finish
         rescue ActiveSupport::Notifications::InstrumentationSubscriberError => error
@@ -87,15 +88,18 @@ module DecentJob
         rescue => error
           errors << error
         end
+
         unless @subscriptions.empty?
           duration = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - (@started || 0)) * 1000.0
           event = Event.new(name: @name, payload: @payload, duration: duration)
+
           @subscriptions.each do |subscription|
             subscription.callback.call(event)
           rescue => error
             errors << error
           end
         end
+
         raise errors.first if errors.size == 1
         raise SubscriberError, errors unless errors.empty?
       end
@@ -167,18 +171,22 @@ module DecentJob
       def instrument(name, payload = {})
         handle = build_handle(name, payload)
         handle.start
+
         begin
           result = yield payload if block_given?
         rescue Exception => error # standard:disable Lint/RescueException
           payload[:exception] = [error.class.name, error.message]
           payload[:exception_object] = error
+
           begin
             handle.finish
           rescue
             nil
           end
+
           raise
         end
+
         handle.finish
         result
       end

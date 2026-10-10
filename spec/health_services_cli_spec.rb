@@ -16,11 +16,13 @@ describe "health service CLI lifecycle" do
     output = StringIO.new
     error = StringIO.new
     cli = DecentJob::CLI.new(stdout: output, stderr: error)
+
     DecentJob.stub(:start, -> { raise "original startup failure" }) do
       DecentJob.stub(:shutdown, ->(**) { raise "secondary shutdown failure" }) do
         _(cli.run(["--probe-port", "0", "--probe-handler", "simple"])).must_equal 1
       end
     end
+
     _(DecentJob.configuration.probe_port).must_equal 0, error.string
     _(DecentJob.configuration.probe_handler).must_equal :simple
     _(error.string).must_include "original startup failure"

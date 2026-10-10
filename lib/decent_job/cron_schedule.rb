@@ -69,6 +69,7 @@ module DecentJob
     def initialize(expression)
       raise ArgumentError, "cron expression must be a string" unless expression.is_a?(String)
       @original = expression
+
       begin
         parse_numeric(expression)
       rescue ArgumentError
@@ -113,8 +114,10 @@ module DecentJob
       original_wall = origin.strftime("%F|%T")
       original_zone = @zone.local(source).strftime("%z|%Z")
       cursor = Time.at(source.to_i + 1).utc
+
       2048.times do
         local = @zone.local(cursor)
+
         if !includes?(@months, local.month)
           date = Date.new(local.year, local.month, 1) >> 1
           cursor = @zone.at(date.year, date.month)
@@ -134,6 +137,7 @@ module DecentJob
           return cursor.utc
         end
       end
+
       raise ArgumentError, "cron expression has no reachable occurrence: #{@original.inspect}"
     end
 
@@ -146,11 +150,13 @@ module DecentJob
     def within(range)
       result = []
       cursor = range.begin
+
       loop do
         cursor = next_at(after: cursor)
         break if cursor >= range.end
         result << cursor
       end
+
       result
     end
 
@@ -161,10 +167,12 @@ module DecentJob
     # requires both day fields to match instead of either one.
     def parse_numeric(expression)
       normalized = expression.strip
+
       if normalized.start_with?("@")
         name, suffix = normalized.split(/\s+/, 2)
         normalized = [ALIASES.fetch(name) { raise ArgumentError, "invalid cron alias" }, suffix].compact.join(" ")
       end
+
       raise ArgumentError, "invalid cron expression" if normalized.match?(/[\r\n]/)
       # Whitespace is allowed before trailing commas and between repeated
       # commas, but never between a list separator and its following value.
@@ -213,14 +221,17 @@ module DecentJob
     def day_matches?(time)
       last_day = Date.new(time.year, time.month, -1).day
       monthday = @monthdays.nil? || @monthdays.any? { |day| time.day == ((day < 0) ? last_day + day + 1 : day) }
+
       weekday = @weekdays.nil? || @weekdays.any? do |day, modifier|
         next false unless day == time.wday
+
         case modifier
         when Array then @zone.reference_week(time) % modifier[0] == modifier[1] % modifier[0]
         when Integer then [(time.day - 1).div(7) + 1, -((last_day - time.day).div(7) + 1)].include?(modifier)
         else true
         end
       end
+
       return monthday || weekday if @monthdays && @weekdays && !@day_and
       monthday && weekday
     end

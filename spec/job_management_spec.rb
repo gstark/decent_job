@@ -56,6 +56,7 @@ describe "job management callbacks and transactions" do
     I18n.available_locales = [:en, :fr]
     calls = []
     errors = []
+
     ManagementRetryJob.on_enqueue = lambda do |aj|
       calls << I18n.locale
       aj.queue_name = "manual"
@@ -63,6 +64,7 @@ describe "job management callbacks and transactions" do
       aj.arguments = ["changed"]
       aj.decent_job_labels = ["retried"]
     end
+
     subscriber = ->(_name, _start, _finish, _id, event) { errors << event[:error] }
     ActiveSupport::Notifications.subscribed(subscriber, "enqueue_retry.active_job") { job.retry_job }
     _(calls).must_equal [:fr]
@@ -87,9 +89,11 @@ describe "job management callbacks and transactions" do
 
   it "rejects missing classes on retry but discards and destroys them" do
     job = new_job
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET job_class = 'RemovedManagementJob', payload = jsonb_set(payload, '{job_class}', '\"RemovedManagementJob\"') WHERE id = $1", [job.id])
     end
+
     job.reload
     _(job.job_instance(ignore_deserialization_errors: true)).must_be_nil
     _(proc { job.job_instance }).must_raise DecentJob::UnknownJobClassError
@@ -101,9 +105,11 @@ describe "job management callbacks and transactions" do
 
   it "retries invalid arguments from the stored serialization even with labels and concurrency extensions" do
     job = new_job
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET payload = jsonb_set(payload, '{arguments}', '[{\"_aj_serialized\":\"RemovedArgumentSerializer\"}]') WHERE id = $1", [job.id])
     end
+
     job.reload
     _(proc { job.job_instance }).must_raise ActiveJob::DeserializationError
     _(job.job_instance(ignore_deserialization_errors: true)).must_be_kind_of ManagementRetryJob
@@ -146,13 +152,16 @@ describe "job management callbacks and transactions" do
     batch = DecentJob::Batch.new(database: database).tap(&:save)
     child = nil
     ManagementRetryJob.on_enqueue = ->(_) { child = ManagementChildJob.perform_later }
+
     captured = DecentJob::Bulk.capture do
       DecentJob::CronEntry.with_context(database: database, key: "ambient", at: Time.now) do
         DecentJob::Batch.within_thread(database: database, batch_id: batch.id) { job.retry_job }
       end
+
       _(job.reload.finished?).must_equal false
       _(child.provider_job_id).wont_be_nil
     end
+
     _(captured).must_equal []
     child_row = @store.find(child.provider_job_id)
     _(child_row.values_at("cron_key", "cron_at", "batch_id", "batch_callback_id")).must_equal [nil, nil, nil, nil]
@@ -161,12 +170,14 @@ describe "job management callbacks and transactions" do
   it "rolls parent and callback child writes back with the outer transaction" do
     job = discarded_job
     ManagementRetryJob.on_enqueue = ->(_) { ManagementChildJob.perform_later }
+
     _(proc do
       database.transaction do
         job.retry_job
         raise "rollback"
       end
     end).must_raise RuntimeError
+
     _(job.reload.discarded?).must_equal true
     _(database.with_connection { |connection| connection.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0) }).must_equal "1"
     _(job.executions).must_equal []
@@ -190,14 +201,17 @@ describe "job management callbacks and transactions" do
     ManagementRetryJob.queue_adapter = DecentJob::Adapter.new(database: database, execution_mode: :inline)
     ManagementRetryJob.on_perform = ->(_) { events << [DecentJob::Current.execution[:manual_retry], DecentJob::Bulk.current_buffer, DecentJob::CronEntry.current_context, DecentJob::Batch.current_context] }
     outer = {database: database, job_id: "ambient"}
+
     DecentJob::Current.with(outer) do
       database.transaction do
         job.retry_job
         _(events).must_equal []
         _(DecentJob::Current.execution).must_equal outer
       end
+
       _(DecentJob::Current.execution).must_equal outer
     end
+
     _(events).must_equal [[nil, nil, nil, nil]]
     _(job.reload.succeeded?).must_equal true
   end
@@ -206,6 +220,7 @@ describe "job management callbacks and transactions" do
     previous = DecentJob.configuration.lock_strategy
     DecentJob.configuration.lock_strategy = :advisory
     job = new_job
+
     DecentJob::Claim.new(database).with_next do
       _(proc { job.discard_job("ordinary") }).must_raise DecentJob::Job::LockedError
       separate = database.connect
@@ -216,17 +231,20 @@ describe "job management callbacks and transactions" do
   ensure
     DecentJob.configuration.lock_strategy = previous
   end
+
   it "clears accepted return values and child identifiers if the surrounding transaction rolls back" do
     job = discarded_job
     child = nil
     result = nil
     ManagementRetryJob.on_enqueue = ->(_) { child = ManagementChildJob.perform_later }
+
     _(proc do
       database.transaction do
         result = job.retry_job
         raise "rollback"
       end
     end).must_raise RuntimeError
+
     _(result.successfully_enqueued?).must_equal false
     _(result.provider_job_id).must_equal job.id
     _(child.successfully_enqueued?).must_equal false
@@ -238,10 +256,12 @@ describe "job management callbacks and transactions" do
     separate = database.connect
     separate.exec("BEGIN")
     separate.exec_params("SELECT id FROM decent_jobs WHERE id = $1 FOR UPDATE", [job.id])
+
     release = Thread.new {
       sleep 0.2
       separate.exec("ROLLBACK")
     }
+
     _(proc { job.reschedule_job }).must_raise DecentJob::Job::LockedError
   ensure
     release&.join
@@ -251,10 +271,12 @@ describe "job management callbacks and transactions" do
   it "does not let a batch retry resurrect a force-discarded attempt still executing" do
     started = Queue.new
     release = Queue.new
+
     ManagementRetryJob.on_perform = ->(_) {
       started << true
       release.pop
     }
+
     batch = DecentJob::Batch.enqueue([ManagementRetryJob.new], database: database)
     member = batch.job_instances.first
     job = DecentJob::Job.find(member.provider_job_id, database: database)
@@ -277,10 +299,12 @@ describe "job management callbacks and transactions" do
     started = Queue.new
     release = Queue.new
     ManagementRetryJob.decent_job_control_concurrency_with(key: "force-scope", perform_limit: 1)
+
     ManagementRetryJob.on_perform = ->(_) {
       started << true
       release.pop
     }
+
     first = new_job
     second = new_job
     worker = Thread.new { @performer.perform_one(job_id: first.id) }
@@ -307,14 +331,17 @@ describe "job management callbacks and transactions" do
     started = Queue.new
     release = Queue.new
     ManagementRetryJob.decent_job_control_concurrency_with(key: "force-scope", perform_limit: 1)
+
     ManagementRetryJob.before_perform_action = ->(_) {
       before << true
       proceed.pop
     }
+
     ManagementRetryJob.on_perform = ->(_) {
       started << true
       release.pop
     }
+
     job = new_job
     worker = Thread.new { @performer.perform_one(job_id: job.id) }
     Timeout.timeout(3) { before.pop }
@@ -332,11 +359,13 @@ describe "job management callbacks and transactions" do
   it "requests durable batch completion in the discard transaction and reconciles only after commit" do
     batch = DecentJob::Batch.enqueue([ManagementRetryJob.new], database: database)
     job = DecentJob::Job.find(batch.job_instances.first.provider_job_id, database: database)
+
     database.transaction do |connection|
       job.discard_job("batch member discarded")
       _(batch.reload.finished?).must_equal false
       _(connection.exec("SELECT count(*) FROM decent_job_batch_updates WHERE discarded").getvalue(0, 0)).must_equal "1"
     end
+
     _(batch.reload.finished?).must_equal true
     _(batch.discarded?).must_equal true
     _(job.executions).must_equal []
@@ -349,6 +378,7 @@ describe "job management callbacks and transactions" do
     separate.exec("BEGIN")
     separate.exec_params("UPDATE decent_jobs SET state = 'running', execution_id = $2 WHERE id = $1", [job.id, execution_id])
     separate.exec_params("INSERT INTO decent_job_executions (id, job_id, process_id) VALUES ($1, $2, $3)", [execution_id, job.id, Process.pid])
+
     database.with_connection do |connection|
       connection.exec(<<~SQL)
         CREATE FUNCTION require_claim_scope_lock() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -365,7 +395,9 @@ describe "job management callbacks and transactions" do
         FOR EACH ROW EXECUTE FUNCTION require_claim_scope_lock();
       SQL
     end
+
     worker = Thread.new { job.force_discard_job("concurrent grant") }
+
     Timeout.timeout(3) do
       loop do
         waiting = @admin.exec_params("SELECT 1 FROM pg_stat_activity WHERE wait_event = 'transactionid' AND query LIKE $1", ["%decent_jobs WHERE id =%FOR UPDATE%"]).ntuples.positive?
@@ -373,6 +405,7 @@ describe "job management callbacks and transactions" do
         sleep 0.01
       end
     end
+
     separate.exec("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || '.decent_job.concurrency.key:new-scope', 0))")
     separate.exec_params("INSERT INTO decent_job_concurrency_claims (scope, job_id, execution_id, state) VALUES ('key:new-scope', $1, $2, 'granted')", [job.id, execution_id])
     separate.exec("COMMIT")
@@ -384,23 +417,27 @@ describe "job management callbacks and transactions" do
     separate&.finish
     worker&.value
   end
+
   it "starts async retry execution after the surrounding transaction commits" do
     job = discarded_job
     events = Queue.new
     adapter = DecentJob::Adapter.new(database: database, execution_mode: :async_all)
     ManagementRetryJob.queue_adapter = adapter
     ManagementRetryJob.on_perform = ->(_) { events << true }
+
     database.transaction do
       job.retry_job
       _(events.empty?).must_equal true
       _(job.executions).must_equal []
     end
+
     _(Timeout.timeout(3) { events.pop }).must_equal true
     _(adapter.shutdown(timeout: 3)).must_equal true
     _(job.reload.succeeded?).must_equal true
   ensure
     adapter&.shutdown(timeout: 3)
   end
+
   it "clears captured child success when retry cannot acquire the parent row lock" do
     job = discarded_job
     child = nil
@@ -423,10 +460,12 @@ describe "job management callbacks and transactions" do
     existing = ManagementChildJob.perform_later
     existing_id = existing.provider_job_id
     child = nil
+
     ManagementRetryJob.on_enqueue = lambda do |_|
       DecentJob::Bulk.capture(existing)
       child = ManagementChildJob.perform_later
     end
+
     # Rule metadata resolves after bulk capture; legacy keys resolve in the
     # initial enqueue callback, before provisional success can be recorded.
     ManagementChildJob.decent_job_concurrency_rule(key: -> { raise "metadata failed" }, enqueue_limit: 1)
@@ -443,10 +482,12 @@ describe "job management callbacks and transactions" do
     child = nil
     other = DecentJob::Database.new(url: @connection_options)
     RecordingJob.queue_adapter = DecentJob::Adapter.new(database: other)
+
     ManagementRetryJob.on_enqueue = lambda do |_|
       child = ManagementChildJob.perform_later
       RecordingJob.perform_later("wrong database")
     end
+
     _(proc { job.retry_job }).must_raise ArgumentError
     _(child.successfully_enqueued?).must_equal false
     _(child.provider_job_id).must_be_nil
@@ -460,10 +501,12 @@ describe "job management callbacks and transactions" do
     order = []
     ManagementRetryJob.on_enqueue = ->(_) { order << :callback }
     observed = nil
+
     observer = lambda do |event|
       order << :event
       observed = event.payload
     end
+
     retried = nil
     ActiveSupport::Notifications.subscribed(observer, "enqueue_job.decent_job") { retried = job.retry_job }
     _(order).must_equal [:callback, :event]
@@ -476,9 +519,11 @@ describe "job management callbacks and transactions" do
 
   it "emits management retry snapshots from prepared payloads with missing arguments" do
     job = discarded_job
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET payload = jsonb_set(payload, '{arguments}', '[{\"_aj_serialized\":\"RemovedArgumentSerializer\"}]') WHERE id = $1", [job.id])
     end
+
     events = []
     observer = ->(event) { events << event }
     ActiveSupport::Notifications.subscribed(observer, "enqueue_job.decent_job") { job.retry_job }
@@ -491,11 +536,13 @@ describe "job management callbacks and transactions" do
     job = discarded_job
     events = []
     observer = ->(event) { events << event }
+
     ActiveSupport::Notifications.subscribed(observer, "enqueue_job.decent_job") do
       ManagementRetryJob.on_enqueue = ->(_) { throw :abort }
       _(job.retry_job).must_equal false
       _(events).must_be_empty
       ManagementRetryJob.on_enqueue = nil
+
       assert_raises(RuntimeError) do
         database.transaction do
           job.retry_job
@@ -503,6 +550,7 @@ describe "job management callbacks and transactions" do
         end
       end
     end
+
     _(events.size).must_equal 1
     _(events.first.payload[:accepted]).must_equal true
     _(job.reload.discarded?).must_equal true

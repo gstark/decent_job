@@ -17,18 +17,22 @@ describe "interruption during ownership release" do
     mutex = tracker.instance_variable_get(:@mutex)
     entered = Queue.new
     release = Queue.new
+
     thread = Thread.new {
       tracker.register(wait_for_monitor: false) {
         entered << true
         release.pop
       }
     }
+
     Timeout.timeout(2) { entered.pop }
+
     mutex.synchronize do
       release << true
       await_sleep(thread)
       thread.kill
     end
+
     _(thread.join(1)).must_equal thread
     _(tracker.instance_variable_get(:@registrations)).must_equal 0
   ensure
@@ -43,20 +47,24 @@ describe "interruption during ownership release" do
     pool = DecentJob::Database.new(url: "unused", pool_size: 1)
     entered = Queue.new
     release = Queue.new
+
     pool.define_singleton_method(:connect) do
       entered << true
       release.pop
       raise "connect failed"
     end
+
     thread = Thread.new { pool.with_connection {} }
     thread.report_on_exception = false
     Timeout.timeout(2) { entered.pop }
     mutex = pool.instance_variable_get(:@mutex)
+
     mutex.synchronize do
       release << true
       await_sleep(thread)
       thread.kill
     end
+
     _(thread.join(1)).must_equal thread
     _(pool.stats.fetch(:connections)).must_equal 0
     _(pool.stats.fetch(:active)).must_equal 0
@@ -100,6 +108,7 @@ describe "bounded cancellation cleanup" do
     @cancellation.define_singleton_method(:start) { started << true }
     @cancellation.define_singleton_method(:poll) { PG::PGRES_POLLING_READING }
     @cancellation.define_singleton_method(:socket_io) { reader }
+
     PG::CancelConnection.stub(:new, @cancellation) do
       @thread = Thread.new {
         @pool.with_connection {
@@ -107,6 +116,7 @@ describe "bounded cancellation cleanup" do
           Queue.new.pop
         }
       }
+
       Timeout.timeout(2) { @entered.pop }
       @thread.kill
       Timeout.timeout(2) { started.pop }
@@ -121,6 +131,7 @@ describe "bounded cancellation cleanup" do
 
   it "returns the reservation and closes both sessions if cancellation fails" do
     @cancellation.define_singleton_method(:start) { raise PG::ConnectionBad, "cancel unreachable" }
+
     PG::CancelConnection.stub(:new, @cancellation) do
       @thread = Thread.new {
         @pool.with_connection {
@@ -128,6 +139,7 @@ describe "bounded cancellation cleanup" do
           Queue.new.pop
         }
       }
+
       Timeout.timeout(2) { @entered.pop }
       @thread.kill
       _(@thread.join(1)).must_equal @thread

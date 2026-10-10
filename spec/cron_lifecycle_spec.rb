@@ -21,6 +21,7 @@ describe "cron lifecycle" do
       config.max_threads = 1
       config.cron = {recurring: {class: CronLifecycleJob, cron: ->(previous) { previous ? previous + 60 : Time.now }}}
     end
+
     DecentJob.install
     CronLifecycleJob.queue_adapter = DecentJob::Adapter.new
   end
@@ -54,6 +55,7 @@ describe "cron lifecycle" do
 
   it "automatically binds async cron to its explicit adapter database without opening the global database" do
     DecentJob.reset!
+
     DecentJob.configure do |config|
       config.database_url = nil
       config.enable_cron = true
@@ -61,6 +63,7 @@ describe "cron lifecycle" do
       config.max_threads = 1
       config.cron = {recurring: {class: CronLifecycleJob, cron: ->(previous) { previous ? previous + 60 : Time.now }}}
     end
+
     DecentJob::Schema.new(database).migrate
     CronLifecycleJob.queue_adapter = DecentJob::Adapter.new(database: database, execution_mode: :async_all)
     CronLifecycleJob.perform_later
@@ -73,10 +76,12 @@ describe "cron lifecycle" do
   it "shares one shutdown budget and waits for in-flight cron callbacks on a subsequent shutdown" do
     entered = Queue.new
     release = Queue.new
+
     DecentJob.configuration.cron = {slow: {cron: ->(previous) { previous ? previous + 60 : Time.now }, class: -> {
       entered << true
       release.pop
     }}}
+
     DecentJob.start_cron
     Timeout.timeout(5) { entered.pop }
     started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -93,18 +98,22 @@ describe "cron lifecycle" do
       DecentJob.database
       previous ? previous + 60 : Time.now
     }, class: CronLifecycleJob}}
+
     DecentJob.start_cron
     await { DecentJob::CronEntry.find(:nested).jobs.size == 1 }
   end
+
   it "stops adapter cron and prevents a draining callback from restarting async execution" do
     entered = Queue.new
     release = Queue.new
     DecentJob.configuration.enable_cron = true
+
     DecentJob.configuration.cron = {slow: {cron: ->(previous) { previous ? previous + 60 : Time.now }, class: -> {
       entered << true
       release.pop
       CronLifecycleJob.perform_later
     }}}
+
     adapter = DecentJob::Adapter.new(database: DecentJob.database, execution_mode: :async_all)
     CronLifecycleJob.queue_adapter = adapter
     CronLifecycleJob.perform_later
@@ -147,10 +156,12 @@ describe "cron lifecycle" do
   it "waits for callbacks and closes its database before reset returns" do
     entered = Queue.new
     release = Queue.new
+
     DecentJob.configuration.cron = {slow: {cron: ->(previous) { previous ? previous + 60 : Time.now }, class: -> {
       entered << true
       release.pop
     }}}
+
     pool = DecentJob.database
     scheduler = DecentJob.start_cron
     Timeout.timeout(5) { entered.pop }
@@ -166,6 +177,7 @@ describe "cron lifecycle" do
     release << true if release
     reset&.join(2)
   end
+
   it "rejects false timeout across global and adapter shutdown without stopping resources" do
     scheduler = DecentJob.start_cron
     adapter = CronLifecycleJob.queue_adapter
@@ -183,10 +195,12 @@ describe "cron configuration" do
     configuration = DecentJob::Configuration.new
     _(configuration.enable_cron).must_equal false
     _(configuration.cron_graceful_restart_period).must_be_nil
+
     [false, 0, -1, Float::INFINITY, Float::NAN, "4"].each do |value|
       configuration.cron_graceful_restart_period = value
       _ { configuration.validate! }.must_raise ArgumentError
     end
+
     configuration.cron_graceful_restart_period = 3
     _(configuration.cron_manager_options[:graceful_restart_period]).must_equal 3
     configuration.enable_cron = "true"
@@ -223,6 +237,7 @@ describe "cron configuration" do
     output = StringIO.new
     error = StringIO.new
     cli = DecentJob::CLI.new(stdout: output, stderr: error)
+
     DecentJob.stub(:install, true) do
       _(cli.run(["migrate", "--enable-cron", "--cron-graceful-restart-period", "2.5"])).must_equal 0
       _(DecentJob.configuration.enable_cron).must_equal true

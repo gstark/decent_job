@@ -74,6 +74,7 @@ module DecentJob
       # @note The tags are removed when the block exits, also on an exception.
       def tagged(*tags)
         pushed = formatter.push_tags(tags.flatten.compact.map(&:to_s).reject(&:empty?))
+
         begin
           yield self
         ensure

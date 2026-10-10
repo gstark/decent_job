@@ -35,8 +35,10 @@ if ENV["PGBOUNCER_PROCESS_CONNECTION"]
     config.logger = Logger.new(File::NULL)
     config.on_thread_error = ->(error) { PgBouncerProcessLog.write(type: "error", error: error.class.name, message: error.message) }
   end
+
   ActiveJob::Base.logger = Logger.new(File::NULL)
   PgBouncerProcessJob.queue_adapter = DecentJob::Adapter.new(execution_mode: :external)
+
   ActiveSupport::Notifications.subscribe("finished_job_task.decent_job") do |event|
     result = event.payload[:result]
     PgBouncerProcessLog.write(type: result ? "completed" : "empty", job_id: result&.job_id, state: result&.state)

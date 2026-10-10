@@ -26,6 +26,7 @@ describe "execution timing across processes" do
       Process.kill("KILL", @process.pid)
       @process.join
     end
+
     [@input, @output, @stderr].compact.each { |io| io.close unless io.closed? }
     FileUtils.remove_entry(@directory)
     DecentJob.reset!

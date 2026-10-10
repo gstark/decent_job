@@ -25,6 +25,7 @@ describe "supervisor configuration" do
     _(messages.string).must_match(/subprocesses/)
     _(config.single_process_config.queues).must_equal "critical:2;mail:1;default:3"
     config.validate!
+
     ["a|", "|b", "a||b", "a| ;b", " "].each do |queues|
       config.queues = queues
       _ { config.validate! }.must_raise ArgumentError
@@ -59,14 +60,17 @@ describe "cluster CLI options" do
     require "minitest/mock"
     output = StringIO.new
     cli = DecentJob::CLI.new(stdout: output, stderr: output)
+
     DecentJob::Supervisor.stub(:new, ->(*) { raise "cluster chosen" }) do
       _(cli.run(["--subprocesses", "2"])).must_equal 1
     end
+
     _(output.string).must_include "cluster chosen"
     _(cli.run(["--subprocesses", "-1"])).must_equal 2
   ensure
     DecentJob.reset!
   end
+
   it "applies CLI values over application values over environment defaults" do
     require "decent_job/cli"
     require "minitest/mock"
@@ -78,9 +82,11 @@ describe "cluster CLI options" do
     _(DecentJob.configuration.subprocesses).must_equal 2
     output = StringIO.new
     cli = DecentJob::CLI.new(stdout: output, stderr: output)
+
     DecentJob::Supervisor.stub(:new, ->(*) { raise "chosen #{DecentJob.configuration.subprocesses}" }) do
       _(cli.run(["--subprocesses", "4"])).must_equal 1
     end
+
     _(output.string).must_include "chosen 4"
   ensure
     ENV["DECENT_JOB_SUBPROCESSES"] = previous
@@ -93,11 +99,13 @@ describe "cluster CLI options" do
     output = StringIO.new
     cli = DecentJob::CLI.new(stdout: output, stderr: output)
     responds = Process.method(:respond_to?)
+
     Process.stub(:respond_to?, ->(name, *args) { (name == :fork) ? false : responds.call(name, *args) }) do
       DecentJob.stub(:start, -> { Process.kill("TERM", Process.pid) }) do
         _(cli.run(["--queues", "fast:2;mail:1|slow:3", "--subprocesses", "7"])).must_equal 0
       end
     end
+
     _(DecentJob.configuration.queues).must_equal "fast:2;mail:1;slow:3"
     _(DecentJob.configuration.subprocesses).must_equal 0
     _(output.string).must_include "fork is unavailable"

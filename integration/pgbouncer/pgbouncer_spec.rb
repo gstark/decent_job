@@ -50,6 +50,7 @@ class PgBouncerInterruptedJob < PgBouncerRecordingJob
     if block_query
       self.class.queue_adapter.database.with_connection { |connection| connection.exec("SELECT pg_sleep(60)") }
     end
+
     super
   end
 end
@@ -57,6 +58,7 @@ end
 describe "PgBouncer transaction pooling" do
   before do
     DecentJob.reset!
+
     DecentJob.configure do |config|
       config.lock_strategy = :skiplocked
       config.enable_listen_notify = false
@@ -64,6 +66,7 @@ describe "PgBouncer transaction pooling" do
       config.process_heartbeat_interval = 0.05
       config.poll_interval = 0.02
     end
+
     @workers = []
     @threads = []
     @fixture = PgBouncerFixture.new
@@ -85,6 +88,7 @@ describe "PgBouncer transaction pooling" do
     5.times { PgBouncerLimitedJob.release << true } if PgBouncerLimitedJob.release
     @threads.each { |thread| Timeout.timeout(5) { thread.value } }
     @adapter&.shutdown
+
     if @database
       # Check while backend sessions remain alive: disconnecting PgBouncer could
       # otherwise hide leaked session advisory locks.
@@ -109,6 +113,7 @@ describe "PgBouncer transaction pooling" do
           next if worker.fetch(:process).alive? || worker[:stopping]
           raise "Worker exited: #{worker.fetch(:stderr).value}"
         end
+
         sleep 0.01
       end
     end
@@ -116,6 +121,7 @@ describe "PgBouncer transaction pooling" do
 
   def records(type, role: nil)
     return [] unless File.exist?(@log)
+
     File.readlines(@log).filter_map do |line|
       row = JSON.parse(line)
       row if row.fetch("type") == type && (!role || row.fetch("role") == role)
@@ -155,6 +161,7 @@ describe "PgBouncer transaction pooling" do
       Process.kill("KILL", -worker.fetch(:process).pid)
       Timeout.timeout(5) { worker.fetch(:process).value }
     end
+
     @workers.delete(worker)
     worker.fetch(:stdout).join
     worker.fetch(:stderr).join
@@ -186,23 +193,28 @@ describe "PgBouncer transaction pooling" do
   it "commits outer work while rolling back savepoints and full transactions" do
     observer = database.connect
     rolled_back = nil
+
     database.transaction do
       PgBouncerRecordingJob.perform_later("outer")
+
       _ {
         database.transaction {
           rolled_back = PgBouncerRecordingJob.perform_later("savepoint")
           raise "rollback"
         }
       }.must_raise RuntimeError
+
       _(observer.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0)).must_equal "0"
       _(@store.find(rolled_back.provider_job_id)).must_be_nil
     end
+
     _ {
       database.transaction {
         PgBouncerRecordingJob.perform_later("transaction")
         raise "rollback"
       }
     }.must_raise RuntimeError
+
     _(sql("SELECT payload->'arguments' AS arguments FROM decent_jobs")).must_equal [{"arguments" => '["outer"]'}]
     _(@performer.perform_one.state).must_equal "succeeded"
     _(PgBouncerRecordingJob.events.pop(true)).must_equal "outer"
@@ -214,10 +226,12 @@ describe "PgBouncer transaction pooling" do
     DecentJob.configure { |config| config.database_url = @fixture.connection_options }
     adapter = DecentJob::Adapter.new(database: DecentJob.database, execution_mode: :external)
     [PgBouncerRecordingJob, PgBouncerRetryJob].each { |job| job.queue_adapter = adapter }
+
     database.transaction do |connection|
       connection.exec("SET TRANSACTION READ ONLY")
       _(DecentJob.migrated?(database: database)).must_equal true
     end
+
     _(DecentJob.migrated?).must_equal true
     _(DecentJob.shutdown?).must_equal true
     PgBouncerRetryJob.perform_later("retry")
@@ -267,6 +281,7 @@ describe "PgBouncer transaction pooling" do
     batch = DecentJob::Batch.enqueue(database: database, on_success: PgBouncerCallbackJob, on_finish: PgBouncerCallbackJob) do
       DecentJob::Bulk.enqueue { 3.times { |index| PgBouncerRecordingJob.perform_later(index) } }
     end
+
     _(batch.job_instances.size).must_equal 3
     nil while @performer.perform_one
     _(batch.reload.succeeded?).must_equal true
@@ -318,10 +333,12 @@ describe "PgBouncer transaction pooling" do
     entry = DecentJob::CronEntry.new(key: "pooled", cron: "@daily", class: PgBouncerRecordingJob, args: ["cron"], database: database)
     at = Time.now
     first = entry.enqueue(at)
+
     database.transaction do
       _(entry.enqueue(at)).must_equal false
       _(sql("SELECT 42 AS value").first.fetch("value")).must_equal "42"
     end
+
     pauses = DecentJob::Pauses.new(database)
     pauses.pause(queue: "default")
     performer = DecentJob::Performer.new(database: database, enable_pauses: true)
@@ -408,10 +425,12 @@ describe "PgBouncer transaction pooling" do
     _(@store.find(job.provider_job_id).fetch("locked_by_id")).must_equal owner_id
     sql("UPDATE decent_job_processes SET updated_at = clock_timestamp() - interval '6 minutes' WHERE id = $1", [owner_id])
     _(DecentJob::ProcessRecord.inactive(database: database).map(&:id)).must_include owner_id
+
     await {
       DecentJob::ProcessRecord.cleanup(database: database)
       records("completed", role: "replacement").any?
     }
+
     stop_worker(replacement)
     _(records("started").map { |row| row.fetch("role") }).must_equal %w[owner replacement]
     _(@store.executions(job.provider_job_id).map { |row| row.fetch("state") }).must_equal %w[interrupted succeeded]

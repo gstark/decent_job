@@ -57,9 +57,11 @@ module DecentJob
       unless port.is_a?(Integer) && (0..65_535).cover?(port)
         raise ArgumentError, "probe port must be an integer between 0 and 65535"
       end
+
       [request_timeout, response_timeout].each do |timeout|
         raise ArgumentError, "probe timeouts must be finite and positive" unless timeout.is_a?(Numeric) && timeout.real? && timeout.finite? && timeout.positive?
       end
+
       raise ArgumentError, "probe app must be callable" if app && !app.respond_to?(:call)
       @on_thread_error = on_thread_error
       klass = handler_class(handler)
@@ -90,6 +92,7 @@ module DecentJob
       if !timeout.nil? && (!timeout.is_a?(Numeric) || !timeout.real? || !timeout.finite? || timeout.negative?)
         raise ArgumentError, "timeout must be finite and nonnegative"
       end
+
       @handler.stop(timeout: timeout)
     end
 

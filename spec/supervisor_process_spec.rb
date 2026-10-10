@@ -67,6 +67,7 @@ describe "supervised CLI processes" do
 
   def run_cli(*arguments)
     command = [RbConfig.ruby, "-Ilib", "exe/decent_job", "start", "--require", File.expand_path("support/supervisor_cli_app.rb", __dir__), "--shutdown-timeout", "2", *arguments]
+
     Open3.popen3(@environment, *command, pgroup: true) do |input, output, error, process|
       input.close
       yield process, output, error
@@ -84,6 +85,7 @@ describe "supervised CLI processes" do
     # Darwin reports EPERM for a group containing only unreaped zombies.
     # Keep real permission failures visible whenever a live member remains.
     members, status = Open3.capture2("ps", "-eo", "pgid=,state=")
+
     raise unless status.success? && members.lines.none? { |line|
       group, state = line.split
       group.to_i == pid && !state.start_with?("Z")
@@ -93,33 +95,39 @@ describe "supervised CLI processes" do
   it "accepts a zombie-only process group when Darwin refuses group cleanup" do
     status = Minitest::Mock.new
     status.expect(:success?, true)
+
     Process.stub(:kill, ->(*) { raise Errno::EPERM }) do
       Open3.stub(:capture2, ["42 Z\n43 R\n", status]) do
         terminate_process_group(42)
       end
     end
+
     status.verify
   end
 
   it "preserves permission errors when the target process group still has a live member" do
     status = Minitest::Mock.new
     status.expect(:success?, true)
+
     Process.stub(:kill, ->(*) { raise Errno::EPERM }) do
       Open3.stub(:capture2, ["42 Z\n42 S\n", status]) do
         _ { terminate_process_group(42) }.must_raise Errno::EPERM
       end
     end
+
     status.verify
   end
 
   it "preserves permission errors when process-group inspection fails" do
     status = Minitest::Mock.new
     status.expect(:success?, false)
+
     Process.stub(:kill, ->(*) { raise Errno::EPERM }) do
       Open3.stub(:capture2, ["", status]) do
         _ { terminate_process_group(42) }.must_raise Errno::EPERM
       end
     end
+
     status.verify
   end
 
@@ -138,6 +146,7 @@ describe "supervised CLI processes" do
       SupervisorProcessJob.new(first).set(queue: "first"),
       SupervisorProcessJob.new(second).set(queue: "second")
     ])
+
     run_cli("--queues", "first:2|second:3") do |process, output, error|
       await_connected
       await { File.exist?(first) && File.exist?(second) }
@@ -145,10 +154,12 @@ describe "supervised CLI processes" do
       _(records.map { |record| record.fetch("pid") }.uniq.size).must_equal 2
       _(records.map { |record| record.fetch("queue") }).must_equal %w[first second]
       preloaded = JSON.parse(File.read(File.join(@directory, "preloaded"))).values
+
       records.each do |record|
         _(preloaded).wont_include record.fetch("global_backend")
         _(preloaded).wont_include record.fetch("explicit_backend")
       end
+
       states = DecentJob::ProcessRecord.all(database: database).map(&:state)
       _(states.map { |state| state.fetch("schedulers").sum { |scheduler| scheduler.fetch("max_threads") } }.sort).must_equal [2, 3]
       _(File.readlines(File.join(@directory, "forks")).map(&:to_i)).must_equal [process.pid, process.pid]
@@ -185,6 +196,7 @@ describe "supervised CLI processes" do
     release = File.join(@directory, "release")
     finished = File.join(@directory, "finished")
     DecentJob::Store.new(database).enqueue_all([SupervisorProcessJob.new(started, release, finished)])
+
     run_cli do |process, _output, error|
       await_connected
       await { File.exist?(started) }
@@ -206,13 +218,16 @@ describe "supervised CLI processes" do
 
   it "terminates children whose application boot hooks have not returned" do
     @environment["DECENT_JOB_SUPERVISOR_BLOCK_BOOT"] = "true"
+
     run_cli do |process, _output, error|
       await { children.size == 2 }
+
       await do
         response("/status/connected").code == "503"
       rescue Errno::ECONNREFUSED
         false
       end
+
       Process.kill("TERM", process.pid)
       status = Timeout.timeout(5) { process.value.exitstatus }
       errors = error.read
@@ -233,6 +248,7 @@ describe "supervised CLI processes" do
       Process.kill("KILL", process.pid)
       process.join
       rebound = nil
+
       Timeout.timeout(2) do
         until rebound
           begin
@@ -242,6 +258,7 @@ describe "supervised CLI processes" do
           end
         end
       end
+
       _(rebound.addr[1]).must_equal @port
       await { DecentJob::ProcessRecord.active(database: database).empty? }
     ensure
@@ -253,6 +270,7 @@ describe "supervised CLI processes" do
     started = File.join(@directory, "started")
     release = File.join(@directory, "never")
     DecentJob::Store.new(database).enqueue_all([SupervisorProcessJob.new(started, release)])
+
     run_cli("--shutdown-timeout", "0.2") do |process, _output, error|
       await_connected
       await { File.exist?(started) }
@@ -266,6 +284,7 @@ describe "supervised CLI processes" do
 
   it "cleans up already forked children when the probe cannot bind" do
     occupied = TCPServer.new("0.0.0.0", @port)
+
     run_cli do |process, _output, error|
       _(Timeout.timeout(6) { process.value.exitstatus }).must_equal 1
       _(error.read).must_match(/address.*use|EADDRINUSE/i)

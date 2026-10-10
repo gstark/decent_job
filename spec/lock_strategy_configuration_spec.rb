@@ -20,12 +20,14 @@ describe "lock strategy configuration" do
   it "defaults to advisory and accepts exact strings and symbols" do
     configuration = DecentJob::Configuration.new
     _(configuration.lock_strategy).must_equal :advisory
+
     %i[advisory skiplocked hybrid].each do |strategy|
       [strategy, strategy.to_s].each do |value|
         configuration.lock_strategy = value
         _(configuration.lock_strategy).must_equal strategy
       end
     end
+
     [false, true, 0, "", "skip_locked", "Hybrid", " hybrid"].each do |value|
       _ { configuration.lock_strategy = value }.must_raise ArgumentError
       _(configuration.lock_strategy).must_equal :hybrid
@@ -53,9 +55,11 @@ describe "lock strategy configuration" do
     output = StringIO.new
     errors = StringIO.new
     cli = DecentJob::CLI.new(stdout: output, stderr: errors)
+
     DecentJob.stub(:install, nil) do
       _(cli.run(["migrate", "--lock-strategy", "hybrid"])).must_equal 0
     end
+
     _(DecentJob.configuration.lock_strategy).must_equal :hybrid
     _(cli.run(["help"])).must_equal 0
     _(output.string).must_include "--lock-strategy"

@@ -32,6 +32,7 @@ describe "cleanup through the executable" do
       Process.kill("KILL", @process.pid)
       @process.join
     end
+
     [@input, @output, @stderr].compact.each { |io| io.close unless io.closed? }
     @lock_connection&.finish unless @lock_connection&.finished?
     FileUtils.remove_entry(@directory)
@@ -40,9 +41,11 @@ describe "cleanup through the executable" do
   def completed_job(age: 1_300_000, discarded: false)
     job = CleanupProcessJob.perform_later(nil, discarded)
     DecentJob::Performer.new(database: database).perform_one(job_id: job.provider_job_id)
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET finished_at = clock_timestamp() - $2::double precision * interval '1 second' WHERE id = $1", [job.provider_job_id, age])
     end
+
     job
   end
 
@@ -60,18 +63,22 @@ describe "cleanup through the executable" do
     recent = completed_job(age: 30)
     pending = CleanupProcessJob.set(wait: 3600).perform_later
     batch = DecentJob::Batch.enqueue([], database: database)
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_job_batches SET finished_at = clock_timestamp() - interval '15 days' WHERE id = $1", [batch.id])
     end
+
     event = run_cleanup("cleanup_preserved_jobs", "--in-batches-of", "1")
     _(event.fetch("destroyed_jobs_count")).must_equal 2
     _(event.fetch("destroyed_executions_count")).must_equal 2
     _(event.fetch("destroyed_batches_count")).must_equal 1
     _(event.fetch("destroyed_records_count")).must_equal 5
+
     [success, failure].each do |job|
       _(@store.find(job.provider_job_id)).must_be_nil
       _(@store.executions(job.provider_job_id)).must_be_empty
     end
+
     _(@store.find(recent.provider_job_id)).wont_be_nil
     _(@store.find(pending.provider_job_id)).wont_be_nil
     _(DecentJob::BatchStore.new(database).find(batch.id)).must_be_nil
@@ -98,6 +105,7 @@ describe "cleanup through the executable" do
 
   it "rejects invalid cleanup options before deleting records" do
     job = completed_job
+
     [["--in-batches-of", "0"], ["--older-than", "-1"]].each do |arguments|
       _output, error, status = Open3.capture3(@environment, *@command, "cleanup", *arguments)
       _(status.exitstatus).must_equal 2

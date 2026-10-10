@@ -8,6 +8,7 @@ class ForcedShutdownJob < ActiveJob::Base
 
   def perform(mode = "ruby")
     started << [Thread.current, DecentJob::Current.execution]
+
     if mode == "self"
       finished << shutdown_worker.shutdown(force: true)
       nil
@@ -109,13 +110,16 @@ describe "forced worker shutdown" do
       _(stored.fetch("state")).must_equal "running"
       _(stored["finished_at"]).must_be_nil
       execution_id = context.fetch(:execution_id)
+
       database.with_connection do |connection|
         execution = connection.exec_params("SELECT state, finished_at FROM decent_job_executions WHERE id = $1", [execution_id]).first
         _(execution.fetch("state")).must_equal "running"
         _(execution["finished_at"]).must_be_nil
       end
+
       recovered = DecentJob::Claim.new(database).with_next(job_id: job.provider_job_id) { |row| row }
       _(recovered.fetch("execution_interrupted")).wont_be_nil
+
       database.with_connection do |connection|
         _(connection.exec_params("SELECT state FROM decent_job_executions WHERE id = $1", [execution_id]).getvalue(0, 0)).must_equal "interrupted"
       end
@@ -125,6 +129,7 @@ describe "forced worker shutdown" do
   [false, true].each do |rescued|
     it "rolls back interrupted retention finalization when cleanup errors are #{rescued ? "rescued" : "raised"}" do
       policy_entered = Queue.new
+
       policy = lambda do |_job, _error, _event|
         begin
           policy_entered << true
@@ -136,6 +141,7 @@ describe "forced worker shutdown" do
         raise unless rescued
         true
       end
+
       DecentJob.configuration.preserve_job_records = policy
       job = ForcedShutdownJob.perform_later("complete")
       @worker.start
@@ -149,6 +155,7 @@ describe "forced worker shutdown" do
       _(@worker.stats.fetch(:total_executions_count)).must_equal 0
       recovered = DecentJob::Claim.new(database).with_next(job_id: job.provider_job_id) { |row| row }
       _(recovered.fetch("execution_interrupted")).wont_be_nil
+
       database.with_connection do |connection|
         _(connection.exec_params("SELECT state FROM decent_job_executions WHERE id = $1", [context.fetch(:execution_id)]).getvalue(0, 0)).must_equal "interrupted"
       end
@@ -160,11 +167,13 @@ describe "forced worker shutdown" do
     @worker.start
     @thread, = pop(ForcedShutdownJob.started)
     events = []
+
     subscriber = ActiveSupport::Notifications.subscribe("scheduler_shutdown_kill.decent_job") do |*args|
       events << args.last
       @worker.shutdown(timeout: 0, force: true)
       raise "observer failed"
     end
+
     _(@worker.shutdown(timeout: 0, force: true)).must_equal false
     pop(ForcedShutdownJob.cleanup)
     _(@worker.shutdown(timeout: 0, force: true)).must_equal false
@@ -176,22 +185,28 @@ describe "forced worker shutdown" do
   it "releases activity counters when interrupted during normal attempt cleanup" do
     cleanup_entered = Queue.new
     cleanup_release = Queue.new
+
     @worker.define_singleton_method(:cleanup_after_attempt) do
       cleanup_entered << true
       cleanup_release.pop
     end
+
     ForcedShutdownJob.perform_later("complete")
     @worker.start
     @thread, = pop(ForcedShutdownJob.started)
     pop(cleanup_entered)
     mutex = @worker.instance_variable_get(:@mutex)
+
     mutex.synchronize do
       cleanup_release << true
+
       Timeout.timeout(2) do
         Thread.pass until @thread.backtrace&.any? { |line| line.include?("synchronize") }
       end
+
       @thread.kill
     end
+
     _(@worker.shutdown(timeout: 5)).must_equal true
     _(@worker.stats.fetch(:schedulers).first.fetch(:active_threads)).must_equal 0
   ensure
@@ -212,11 +227,13 @@ describe "forced worker shutdown" do
   it "keeps the original tracker until its blocked monitor callback drains" do
     entered = Queue.new
     release = Queue.new
+
     @worker.define_singleton_method(:stats) do
       entered << true
       release.pop
       super()
     end
+
     @worker.start
     pop(entered)
     process_id = @worker.process_id
@@ -232,10 +249,12 @@ describe "forced worker shutdown" do
 
   it "returns from shutdown invoked by its tracker state callback" do
     returned = Queue.new
+
     @worker.define_singleton_method(:stats) do
       returned << shutdown(force: true)
       super()
     end
+
     @worker.start
     _(pop(returned)).must_equal false
     _(@worker.shutdown(timeout: 5)).must_equal true
@@ -291,6 +310,7 @@ describe "forced shutdown across registered resources" do
     @cron_started = Queue.new
     @cron_cleanup = Queue.new
     @cron_release = Queue.new
+
     DecentJob.configuration.cron = {blocked: {class: -> {
       begin
         @cron_started << Thread.current
@@ -335,11 +355,13 @@ describe "forced shutdown across registered resources" do
 
   it "lets cron callbacks finish inside the grace period without interruption" do
     finished = Queue.new
+
     DecentJob.configuration.cron = {quick: {class: -> {
       @cron_started << true
       sleep 0.03
       finished << true
     }, cron: ->(previous) { previous ? previous + 60 : Time.now }}}
+
     @manager = DecentJob.start_cron(database: database)
     pop(@cron_started)
     _(@manager.shutdown(timeout: 1, force: true)).must_equal true

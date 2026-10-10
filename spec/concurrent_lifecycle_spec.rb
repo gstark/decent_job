@@ -17,15 +17,19 @@ describe "concurrent lifecycle ownership" do
     release = Queue.new
     draining = Queue.new
     resume = Queue.new
+
     worker.define_singleton_method(:run) { |*_arguments|
       entered << Thread.current
       release.pop
     }
+
     DecentJob.start_worker(worker)
     previous = pop(entered)
+
     worker.define_singleton_method(:begin_shutdown) do
       super().tap do |handle|
         original = handle.method(:wait)
+
         handle.define_singleton_method(:wait) do |**options|
           draining << true
           resume.pop
@@ -33,6 +37,7 @@ describe "concurrent lifecycle ownership" do
         end
       end
     end
+
     stopper = Thread.new { DecentJob.shutdown(timeout: 1) }
     pop(draining)
     release << true
@@ -58,9 +63,11 @@ describe "concurrent lifecycle ownership" do
       resume = Queue.new
       original_begin = owner.method(:begin_shutdown) if owner.respond_to?(:begin_shutdown)
       _(original_begin).wont_be_nil
+
       owner.define_singleton_method(:begin_shutdown) do
         original_begin.call.tap do |handle|
           original = handle.method(:wait)
+
           handle.define_singleton_method(:wait) do |**options|
             draining << true
             resume.pop
@@ -68,6 +75,7 @@ describe "concurrent lifecycle ownership" do
           end
         end
       end
+
       restarter = Thread.new { owner.restart(timeout: 1) }
       pop(draining)
       owner.singleton_class.remove_method(:begin_shutdown)
@@ -148,11 +156,13 @@ describe "reset lifecycle boundaries" do
 
   before do
     DecentJob.reset!
+
     DecentJob.configure do |config|
       config.database_url = @connection_options
       config.enable_listen_notify = false
       config.max_threads = 1
     end
+
     DecentJob.install
   end
 
@@ -162,11 +172,13 @@ describe "reset lifecycle boundaries" do
     result = Queue.new
     release = Queue.new
     pool = DecentJob.database
+
     DecentJob.configuration.cron = {self_reset: {cron: ->(previous) { previous ? previous + 60 : Time.now }, class: -> {
       result << DecentJob.reset!
       release.pop
       pool.with_connection { |connection| result << connection.exec("SELECT 1").getvalue(0, 0) }
     }}}
+
     manager = DecentJob.start_cron
     _(Timeout.timeout(3) { result.pop }).must_equal false
     release << true
@@ -181,11 +193,13 @@ describe "reset lifecycle boundaries" do
   it "prevents direct startup during reset drain without holding the registry mutex" do
     entered = Queue.new
     release = Queue.new
+
     DecentJob.configuration.cron = {blocked: {cron: ->(previous) { previous ? previous + 60 : Time.now }, class: -> {
       entered << true
       release.pop
       DecentJob.database
     }}}
+
     manager = DecentJob.start_cron
     Timeout.timeout(3) { entered.pop }
     reset = Thread.new { DecentJob.reset! }
@@ -205,6 +219,7 @@ describe "reset lifecycle boundaries" do
     entered = Queue.new
     release = Queue.new
     DecentJob.reset!
+
     configuring = Thread.new do
       DecentJob.configure do |config|
         _(DecentJob.stopping?).must_equal false
@@ -213,6 +228,7 @@ describe "reset lifecycle boundaries" do
         config.max_threads = 2
       end
     end
+
     Timeout.timeout(3) { entered.pop }
     owner = DecentJob::CronManager.new
     _ { owner.start }.must_raise DecentJob::LifecycleInProgress
@@ -273,10 +289,12 @@ describe "automatic lifecycle admission" do
   it "excludes explicit startup while CLI configuration waits for a callback" do
     entered = Queue.new
     release = Queue.new
+
     DecentJob.configuration.cron = {blocked: {cron: ->(previous) { previous ? previous + 60 : Time.now }, class: -> {
       entered << true
       release.pop
     }}}
+
     manager = DecentJob.start_cron(database: database)
     Timeout.timeout(3) { entered.pop }
     applying = Thread.new { DecentJob.apply_cli_configuration(max_threads: 2) }
@@ -324,10 +342,12 @@ describe "runtime startup transitions" do
 
   it "validates database configuration outside the runtime mutex" do
     DecentJob.configuration.database_url = @connection_options
+
     DecentJob.configuration.define_singleton_method(:validate!) do
       DecentJob.stats
       super()
     end
+
     _(DecentJob.database).must_be_kind_of DecentJob::Database
   end
 
@@ -335,11 +355,13 @@ describe "runtime startup transitions" do
     DecentJob.prepare_rails!
     DecentJob.finish_rails_initialization!
     adapter = nil
+
     DecentJob.configure do |config|
       config.max_threads = 1
       adapter = DecentJob::Adapter.new(database: database, execution_mode: :async_all)
       _(adapter.async_started?).must_equal false
     end
+
     _(adapter.start_async).must_be_kind_of DecentJob::Worker
   end
 
@@ -365,6 +387,7 @@ describe "parallel lifecycle calls" do
   def concurrently(count, &operation)
     ready = Queue.new
     release = Queue.new
+
     threads = Array.new(count) do
       Thread.new do
         ready << true
@@ -372,6 +395,7 @@ describe "parallel lifecycle calls" do
         operation.call
       end
     end
+
     count.times { Timeout.timeout(3) { ready.pop } }
     count.times { release << true }
     threads.map(&:value)
@@ -383,10 +407,12 @@ describe "parallel lifecycle calls" do
     entered = Queue.new
     release = Queue.new
     worker = DecentJob::Worker.new(database: Object.new, max_threads: 1, enable_listen_notify: false)
+
     worker.define_singleton_method(:run) { |*_arguments|
       entered << Thread.current
       release.pop
     }
+
     concurrently(8) { worker.start }
     Timeout.timeout(3) { entered.pop }
     _(entered).must_be_empty
@@ -399,10 +425,12 @@ describe "parallel lifecycle calls" do
   it "creates only one cron run for simultaneous explicit starts" do
     entered = Queue.new
     entry = Object.new
+
     entry.define_singleton_method(:next_at) { |**|
       entered << true
       Time.now + 3600
     }
+
     manager = DecentJob::CronManager.new([entry])
     concurrently(8) { manager.start }
     Timeout.timeout(3) { entered.pop }
@@ -418,13 +446,16 @@ describe "parallel lifecycle calls" do
     release = Queue.new
     waiting = Queue.new
     resume = Queue.new
+
     worker.define_singleton_method(:run) { |*_arguments|
       entered << true
       release.pop
     }
+
     worker.define_singleton_method(:begin_shutdown) do
       super().tap do |handle|
         original = handle.method(:wait)
+
         handle.define_singleton_method(:wait) do |**options|
           waiting << true
           resume.pop
@@ -432,6 +463,7 @@ describe "parallel lifecycle calls" do
         end
       end
     end
+
     threads = Array.new(8) { Thread.new { worker.restart(timeout: 3) } }
     8.times { Timeout.timeout(3) { waiting.pop } }
     8.times { resume << true }
@@ -460,11 +492,13 @@ describe "startup generation boundaries" do
     release = Queue.new
     configuration = DecentJob.configuration
     original = configuration.method(:cron_entries)
+
     configuration.define_singleton_method(:cron_entries) do |**options|
       entered << true
       release.pop
       original.call(**options)
     end
+
     starter = Thread.new { DecentJob.start_cron(database: database) }
     Timeout.timeout(3) { entered.pop }
     _(DecentJob.shutdown(timeout: 0)).must_equal true
@@ -507,6 +541,7 @@ describe "interrupted runtime transitions" do
     entered = Queue.new
     release = Queue.new
     mutex = DecentJob.runtime_mutex
+
     mutex.define_singleton_method(:synchronize) do |&block|
       super(&block).tap do
         if Thread.current[:pause_transition] && DecentJob.instance_variable_get(:@runtime_transition)
@@ -516,10 +551,12 @@ describe "interrupted runtime transitions" do
         end
       end
     end
+
     configuring = Thread.new do
       Thread.current[:pause_transition] = true
       DecentJob.configure { |config| config.max_threads = 1 }
     end
+
     Timeout.timeout(3) { entered.pop }
     configuring.kill
     release << true
@@ -594,11 +631,13 @@ describe "pending cron startup" do
     release = Queue.new
     configuration = DecentJob.configuration
     original = configuration.method(:cron_entries)
+
     configuration.define_singleton_method(:cron_entries) do |**options|
       entered << true
       release.pop
       original.call(**options)
     end
+
     starter = Thread.new { DecentJob.start_cron(database: Object.new) }
     Timeout.timeout(3) { entered.pop }
     _(DecentJob.stop_cron(timeout: 0)).must_equal true

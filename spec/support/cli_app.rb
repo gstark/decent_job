@@ -22,5 +22,6 @@ if ENV["DECENT_JOB_CLI_SPEC_CONNECTION"]
     configuration.max_threads = 4
     configuration.poll_interval = 30
   end
+
   ActiveJob::Base.queue_adapter = :decent_job
 end

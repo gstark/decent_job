@@ -14,11 +14,13 @@ describe "automatic pool admission" do
     DecentJob.prepare_rails!
     DecentJob.finish_rails_initialization!
     adapter = nil
+
     DecentJob.configure do
       adapter = DecentJob::Adapter.new(execution_mode: :async_all)
       _(adapter.async_started?).must_equal false
       _(DecentJob.instance_variable_get(:@database)).must_be_nil
     end
+
     _(adapter.async_started?).must_equal false
   end
 
@@ -29,13 +31,16 @@ describe "automatic pool admission" do
     release = Queue.new
     configuration = DecentJob.configuration
     original = configuration.method(:validate!)
+
     configuration.define_singleton_method(:validate!) do
       entered << true
       release.pop
       original.call
     end
+
     starter = Thread.new { adapter.start_async }
     Timeout.timeout(3) { entered.pop }
+
     DecentJob.configure do
       release << true
       _(starter.value).must_be_nil
@@ -94,24 +99,30 @@ describe "performer admission before process registration" do
       release = Queue.new
       pool = DecentJob.database
       configuration = DecentJob.configuration
+
       pool.define_singleton_method(:with_connection) do |&block|
         if Thread.current[:pause_maintenance]
           Thread.current[:pause_maintenance] = false
           entered << true
           release.pop
         end
+
         super(&block)
       end
+
       performer = DecentJob::Performer.new(database: pool)
+
       execution = Thread.new do
         Thread.current[:pause_maintenance] = true
         performer.perform_one
       rescue DecentJob::ClosedDatabase => error
         error
       end
+
       Timeout.timeout(3) { entered.pop }
       _(pool.stats[:active]).must_equal 0
       _(pool.with_connection { |connection| connection.exec("SELECT count(*) FROM decent_job_processes").getvalue(0, 0) }).must_equal "0"
+
       case boundary
       when :reset
         _(DecentJob.reset!).must_equal false
@@ -120,6 +131,7 @@ describe "performer admission before process registration" do
       when :fork
         _ { DecentJob.with_prepared_fork { flunk "must not fork during maintenance" } }.must_raise DecentJob::ForkInProgress
       end
+
       _(DecentJob.configuration).must_be_same_as configuration
       _(DecentJob.database).must_be_same_as pool
       release << true
@@ -145,6 +157,7 @@ describe "performer admission release" do
 
   it "releases admission after errors and nonlocal exits and allows another attempt" do
     pool = DecentJob.database
+
     pool.define_singleton_method(:with_connection) do |&block|
       operation = Thread.current[:maintenance_exit]
       Thread.current[:maintenance_exit] = nil
@@ -152,6 +165,7 @@ describe "performer admission release" do
       throw :maintenance_exit, :returned if operation == :throw
       super(&block)
     end
+
     performer = DecentJob::Performer.new(database: pool)
     Thread.current[:maintenance_exit] = :raise
     _ { performer.perform_one }.must_raise IOError
@@ -171,9 +185,11 @@ describe "performer admission release" do
     unwinding = Queue.new
     release = Queue.new
     pool = DecentJob.database
+
     pool.define_singleton_method(:with_connection) do |&block|
       if Thread.current[:pause_maintenance]
         Thread.current[:pause_maintenance] = false
+
         begin
           entered << true
           Queue.new.pop
@@ -182,13 +198,17 @@ describe "performer admission release" do
           release.pop
         end
       end
+
       super(&block)
     end
+
     performer = DecentJob::Performer.new(database: pool)
+
     execution = Thread.new do
       Thread.current[:pause_maintenance] = true
       performer.perform_one
     end
+
     Timeout.timeout(3) { entered.pop }
     execution.kill
     Timeout.timeout(3) { unwinding.pop }
@@ -208,14 +228,17 @@ describe "performer admission release" do
     pool = DecentJob.database
     performer = DecentJob::Performer.new(database: pool)
     active_after_nested = nil
+
     pool.define_singleton_method(:with_connection) do |&block|
       if Thread.current[:nested_maintenance]
         Thread.current[:nested_maintenance] = false
         performer.perform_one
         active_after_nested = performer.active?
       end
+
       super(&block)
     end
+
     Thread.current[:nested_maintenance] = true
     _(performer.perform_one).must_be_nil
     _(active_after_nested).must_equal true
@@ -294,16 +317,19 @@ end
 describe "performer initialization inspection" do
   it "allows concurrent activity inspection at every initialization boundary" do
     snapshots = []
+
     observer = TracePoint.new(:line) do |event|
       next unless event.defined_class == DecentJob::Performer && event.method_id == :initialize
 
       instance = event.self
+
       snapshots << Thread.new do
         instance.active?
       rescue => error
         error
       end.value
     end
+
     observer.enable { DecentJob::Performer.new(database: Object.new) }
     _(snapshots).wont_be_empty
     _(snapshots.grep(Exception)).must_be_empty
@@ -319,6 +345,7 @@ describe "explicit global cron resumption" do
   before do
     DecentJob.reset!
     @deliveries = Queue.new
+
     DecentJob.configure do |config|
       config.database_url = @connection_options
       config.max_threads = 1
@@ -332,6 +359,7 @@ describe "explicit global cron resumption" do
         }
       }}
     end
+
     DecentJob.install
   end
 
@@ -360,15 +388,19 @@ describe "explicit global cron resumption" do
       release = Queue.new
       configuration = DecentJob.configuration
       resolve = configuration.method(:cron_entries)
+
       configuration.define_singleton_method(:cron_entries) do |**options|
         if Thread.current[:pause_cron_resolution]
           Thread.current[:pause_cron_resolution] = false
           entered << true
           release.pop
         end
+
         resolve.call(**options)
       end
+
       start_cron = DecentJob.method(:start_cron)
+
       intercepted_start_cron = lambda do |**options|
         if phase == :before_resolution
           entered << true
@@ -376,9 +408,12 @@ describe "explicit global cron resumption" do
         else
           Thread.current[:pause_cron_resolution] = true
         end
+
         start_cron.call(**options)
       end
+
       starter = nil
+
       DecentJob.stub(:start_cron, intercepted_start_cron) do
         starter = Thread.new { DecentJob.start }
         Timeout.timeout(3) { entered.pop }

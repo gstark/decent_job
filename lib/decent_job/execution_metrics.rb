@@ -66,11 +66,13 @@ module DecentJob
       unless group.is_a?(String) || group.is_a?(Symbol)
         raise ArgumentError, "group must be job_class or queue_name"
       end
+
       column = case group
       when :job_class, "job_class" then "job_class"
       when :queue_name, "queue_name" then "queue_name"
       else raise ArgumentError, "group must be job_class or queue_name"
       end
+
       aggregate(group: column, from: from, to: to, job_class: job_class, queue_name: queue_name)
     end
 
@@ -82,15 +84,18 @@ module DecentJob
       validate_filters!(from: from, to: to, job_class: job_class, queue_name: queue_name)
       conditions = []
       values = []
+
       [["scheduled_at >=", from&.iso8601(6)], ["scheduled_at <", to&.iso8601(6)],
         ["job_class =", job_class], ["queue_name =", queue_name]].each do |predicate, value|
         next if value.nil?
         values << value
         conditions << "#{predicate} $#{values.length}"
       end
+
       sql = "SELECT #{"#{group}, " if group}#{AGGREGATES_SQL} FROM decent_job_executions"
       sql += " WHERE #{conditions.join(" AND ")}" unless conditions.empty?
       sql += " GROUP BY #{group} ORDER BY #{group} ASC NULLS LAST" if group
+
       @database.with_connection do |connection|
         connection.exec_params(sql, values).map do |row|
           row.to_h do |key, value|
@@ -101,6 +106,7 @@ module DecentJob
             else
               value&.to_f
             end
+
             [key.to_sym, decoded]
           end
         end
@@ -111,7 +117,9 @@ module DecentJob
       {from: from, to: to}.each do |name, value|
         raise ArgumentError, "#{name} must be a Time or nil" unless value.nil? || value.is_a?(Time)
       end
+
       raise ArgumentError, "from must not be after to" if from && to && from > to
+
       {job_class: job_class, queue_name: queue_name}.each do |name, value|
         raise ArgumentError, "#{name} must be a String or nil" unless value.nil? || value.is_a?(String)
       end

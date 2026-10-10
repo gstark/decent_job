@@ -47,10 +47,12 @@ describe "execution inspection" do
     job = RecordingJob.perform_later("done")
     @performer.perform_one
     id = DecentJob::Store.new(database).executions(job.provider_job_id).first.fetch("id")
+
     DecentJob::Current.with(database: database) do
       _(DecentJob::Execution.find(id).database).must_equal database
       _(DecentJob::Execution.for_job(job.provider_job_id).map(&:id)).must_equal [id]
     end
+
     DecentJob.stub(:database, database) do
       _(DecentJob::Execution.find(id).database).must_equal database
       _(DecentJob::Execution.for_job(job.provider_job_id).map(&:id)).must_equal [id]
@@ -75,6 +77,7 @@ describe "execution inspection" do
   it "reports in-progress and interrupted wall intervals without inventing measured runtime" do
     RecordingJob.perform_later("done")
     first_id = nil
+
     DecentJob::Claim.new(database).with_next do |row|
       first_id = row.fetch("execution_id")
       execution = DecentJob::Execution.find(first_id, database: database)
@@ -85,6 +88,7 @@ describe "execution inspection" do
       _(execution.total_latency).must_be_nil
       _(execution.interrupted_duration).must_be_nil
     end
+
     @performer.perform_one
     execution = DecentJob::Execution.find(first_id, database: database)
     _(execution.status).must_equal :interrupted
@@ -96,17 +100,21 @@ describe "execution inspection" do
   it "keeps historical unknown metrics nil and defaults known payload numbering to one" do
     job = RecordingJob.perform_later("done")
     @performer.perform_one
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_job_executions SET payload = NULL, scheduled_at = NULL, duration = NULL WHERE job_id = $1", [job.provider_job_id])
     end
+
     execution = DecentJob::Execution.for_job(job.provider_job_id, database: database).first
     _(execution.number).must_be_nil
     _(execution.queue_latency).must_be_nil
     _(execution.runtime_latency).must_be_nil
     _(execution.total_latency).must_be_nil
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_job_executions SET payload = '{}', scheduled_at = started_at + interval '5 seconds' WHERE job_id = $1", [job.provider_job_id])
     end
+
     execution = DecentJob::Execution.find(execution.id, database: database)
     _(execution.number).must_equal 1
     _(execution.queue_latency).must_equal(-5.0)

@@ -17,9 +17,11 @@ describe "supervisor fork safety" do
     parent_backend = pool.with_connection { |connection| connection.backend_pid }
     reader, writer = IO.pipe
     pid = nil
+
     DecentJob.with_prepared_fork do
       _(pool.stats[:connections]).must_equal 0
       _ { pool.with_connection {} }.must_raise DecentJob::ForkInProgress
+
       pid = fork do
         reader.close
         DecentJob.after_supervisor_fork(DecentJob.configuration.single_process_config)
@@ -28,6 +30,7 @@ describe "supervisor fork safety" do
         exit! 0
       end
     end
+
     writer.close
     same, child_backend = Marshal.load(reader.read)
     Process.waitpid(pid)
@@ -41,9 +44,11 @@ describe "supervisor fork safety" do
 
   it "refuses a borrowed pool and releases all preparation gates" do
     _(DecentJob.respond_to?(:with_prepared_fork)).must_equal true
+
     database.with_connection do
       _ { DecentJob.with_prepared_fork { flunk "must not fork" } }.must_raise DecentJob::ForkInProgress
     end
+
     _(database.with_connection { |connection| connection.exec("SELECT 2").getvalue(0, 0) }).must_equal "2"
   end
 
@@ -52,6 +57,7 @@ describe "supervisor fork safety" do
     DecentJob.before_supervisor_fork { database.with_connection { |connection| connection.exec("SELECT 1") } }
     DecentJob.with_prepared_fork { _(database.stats[:connections]).must_equal 0 }
   end
+
   it "rejects manual live workers until application hooks drain them" do
     DecentJob::Schema.new(database).migrate
     worker = DecentJob::Worker.new(database: database, max_threads: 1)
@@ -83,6 +89,7 @@ describe "supervisor fork safety" do
     release = Queue.new
     original = PG.method(:connect)
     connector = nil
+
     PG.stub(:connect, ->(*arguments) {
       entered << true
       release.pop
@@ -94,6 +101,7 @@ describe "supervisor fork safety" do
       release << true
       connector.join
     end
+
     DecentJob.with_prepared_fork { _(database.stats[:connections]).must_equal 0 }
   ensure
     release << true if release
@@ -104,17 +112,21 @@ describe "supervisor fork safety" do
     pool = database
     backend = pool.with_connection { |connection| connection.backend_pid }
     reader, writer = IO.pipe
+
     pid = fork do
       reader.close
+
       begin
         pool.prepare_fork
         writer.write("unsafe")
       rescue DecentJob::ForkedDatabase
         writer.write("guarded")
       end
+
       writer.close
       exit! 0
     end
+
     writer.close
     _(reader.read).must_equal "guarded"
     Process.waitpid(pid)
@@ -123,12 +135,15 @@ describe "supervisor fork safety" do
     reader&.close unless reader&.closed?
     writer&.close unless writer&.closed?
   end
+
   it "refuses directly owned process trackers until their registration drains" do
     DecentJob::Schema.new(database).migrate
     tracker = DecentJob::ProcessTracker.new(database: database)
+
     tracker.register do
       _ { DecentJob.with_prepared_fork { flunk "must not inherit a tracker session" } }.must_raise DecentJob::ForkInProgress
     end
+
     DecentJob.with_prepared_fork { _(database.stats[:connections]).must_equal 0 }
   end
 
@@ -141,23 +156,28 @@ describe "supervisor fork safety" do
     DecentJob.with_prepared_fork { _(tracker.connected?).must_equal false }
     _(errors).must_be_empty
   end
+
   it "drains a registered worker whose first tracker registration has not started" do
     require "minitest/mock"
     entered = Queue.new
     release = Queue.new
     tracker = DecentJob::ProcessTracker.new(database: database)
     original_register = tracker.method(:register)
+
     tracker.define_singleton_method(:register) do |**options, &block|
       entered << true
       release.pop
       original_register.call(**options, &block)
     end
+
     worker = DecentJob::Worker.new(database: database, max_threads: 1, enable_listen_notify: false)
     original_shutdown = worker.method(:begin_shutdown)
+
     worker.define_singleton_method(:begin_shutdown) do
       release << true
       original_shutdown.call
     end
+
     DecentJob::ProcessTracker.stub(:new, tracker) do
       DecentJob.start_worker(worker)
       entered.pop

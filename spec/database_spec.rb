@@ -13,27 +13,33 @@ describe "database connections" do
 
   it "rolls back failed transactions" do
     database.with_connection { |connection| connection.exec("CREATE TABLE examples (value integer)") }
+
     _ {
       database.transaction do |connection|
         connection.exec("INSERT INTO examples VALUES (1)")
         raise "abort"
       end
     }.must_raise RuntimeError
+
     database.with_connection { |connection| _(connection.exec("SELECT * FROM examples").ntuples).must_equal 0 }
   end
 
   it "isolates nested rollbacks with savepoints" do
     database.with_connection { |connection| connection.exec("CREATE TABLE examples (value integer)") }
+
     database.transaction do |connection|
       connection.exec("INSERT INTO examples VALUES (1)")
+
       _ {
         database.transaction do |nested|
           nested.exec("INSERT INTO examples VALUES (2)")
           raise "abort nested"
         end
       }.must_raise RuntimeError
+
       connection.exec("INSERT INTO examples VALUES (3)")
     end
+
     database.with_connection do |connection|
       _(connection.exec("SELECT value FROM examples ORDER BY value").column_values(0)).must_equal ["1", "3"]
     end
@@ -43,6 +49,7 @@ describe "database connections" do
     ready = Queue.new
     release = Queue.new
     database
+
     workers = 3.times.map do
       Thread.new do
         database.with_connection do |connection|
@@ -51,6 +58,7 @@ describe "database connections" do
         end
       end
     end
+
     pids = 3.times.map { ready.pop }
     _(pids.uniq.size).must_equal 3
   ensure
@@ -60,12 +68,14 @@ describe "database connections" do
 
   it "times out when its connection budget is exhausted" do
     @database = DecentJob::Database.new(url: @connection_options, pool_size: 1, checkout_timeout: 0.02)
+
     database.with_connection do
       error = Thread.new do
         database.with_connection { flunk "must not borrow the busy connection" }
       rescue DecentJob::ConnectionTimeout => exception
         exception
       end.value
+
       _(error).must_be_kind_of DecentJob::ConnectionTimeout
     end
   end
@@ -81,18 +91,23 @@ describe "database connections" do
       connection.finish
       pid
     end
+
     database.with_connection { |connection| _(connection.backend_pid).wont_equal old_pid }
   end
 
   it "rolls back a transaction when its caller returns" do
     database.with_connection { |connection| connection.exec("CREATE TABLE examples (value integer)") }
+
     operation = lambda do
       database.transaction do |connection|
         connection.exec("INSERT INTO examples VALUES (1)")
+
         return nil
       end
     end
+
     operation.call
+
     database.with_connection do |connection|
       _(connection.transaction_status).must_equal PG::PQTRANS_IDLE
       _(connection.exec("SELECT * FROM examples").ntuples).must_equal 0
@@ -101,10 +116,12 @@ describe "database connections" do
 
   it "rolls back a transaction when its block exits with break" do
     database.with_connection { |connection| connection.exec("CREATE TABLE examples (value integer)") }
+
     database.transaction do |connection|
       connection.exec("INSERT INTO examples VALUES (1)")
       break
     end
+
     database.with_connection do |connection|
       _(connection.transaction_status).must_equal PG::PQTRANS_IDLE
       _(connection.exec("SELECT * FROM examples").ntuples).must_equal 0
@@ -113,8 +130,10 @@ describe "database connections" do
 
   it "rolls back throw while leaving an outer transaction usable" do
     database.with_connection { |connection| connection.exec("CREATE TABLE examples (value integer)") }
+
     database.transaction do |connection|
       connection.exec("INSERT INTO examples VALUES (1)")
+
       catch(:abort) do
         database.transaction do |nested|
           nested.exec("INSERT INTO examples VALUES (2)")
@@ -122,6 +141,7 @@ describe "database connections" do
         end
       end
     end
+
     database.with_connection do |connection|
       _(connection.exec("SELECT value FROM examples").column_values(0)).must_equal ["1"]
     end
@@ -130,28 +150,33 @@ describe "database connections" do
   it "runs every connection-release cleanup before propagating a cleanup failure" do
     events = []
     error = RuntimeError.new("first cleanup failed")
+
     caught = _ do
       database.with_connection do
         database.after_connection_release { raise error }
         database.after_connection_release { events << database.stats.fetch(:active) }
       end
     end.must_raise RuntimeError
+
     _(caught).must_equal error
     _(events).must_equal [0]
   end
 
   it "runs after-commit callbacks only after the outer transaction commits" do
     events = []
+
     database.transaction do
       database.after_commit { events << :outer }
       database.transaction { database.after_commit { events << :nested } }
       _(events).must_be_empty
     end
+
     _(events).must_equal [:outer, :nested]
   end
 
   it "drops callbacks belonging to rolled back savepoints" do
     events = []
+
     database.transaction do
       _ {
         database.transaction do
@@ -159,16 +184,20 @@ describe "database connections" do
           raise "abort"
         end
       }.must_raise RuntimeError
+
       database.after_commit { events << :committed }
     end
+
     _(events).must_equal [:committed]
   end
 
   it "does not report an aborted PostgreSQL transaction as committed" do
     events = []
+
     _ {
       database.transaction do |connection|
         database.after_commit { events << :committed }
+
         begin
           connection.exec("SELECT 1 / 0")
         rescue PG::DivisionByZero
@@ -176,10 +205,13 @@ describe "database connections" do
         end
       end
     }.must_raise DecentJob::TransactionAborted
+
     _(events).must_be_empty
   end
+
   it "runs rollback callbacks from committed savepoints when their outer transaction rolls back" do
     events = []
+
     _ {
       database.transaction do
         database.after_rollback { events << :outer }
@@ -189,13 +221,16 @@ describe "database connections" do
         raise "abort outer"
       end
     }.must_raise RuntimeError
+
     _(events).must_equal [:outer, :nested, :last]
   end
 
   it "runs only a failed savepoint's rollback callbacks while leaving the outer transaction usable" do
     events = []
+
     database.transaction do |connection|
       database.after_rollback { events << :outer_rollback }
+
       _ {
         database.transaction do
           database.after_rollback { events << :nested_rollback }
@@ -203,40 +238,48 @@ describe "database connections" do
           raise "abort nested"
         end
       }.must_raise RuntimeError
+
       _(events).must_equal [:nested_rollback]
       _(connection.exec("SELECT 1").getvalue(0, 0)).must_equal "1"
       database.after_commit { events << :outer_commit }
     end
+
     _(events).must_equal [:nested_rollback, :outer_commit]
   end
 
   it "drops rollback callbacks on commit and does not invoke them outside a transaction" do
     events = []
     database.after_rollback { events << :outside }
+
     database.transaction do
       database.after_rollback { events << :outer }
       database.transaction { database.after_rollback { events << :nested } }
     end
+
     _(events).must_equal []
   end
 
   it "runs rollback callbacks when a transaction exits without raising" do
     events = []
+
     database.transaction do
       database.after_rollback { events << :rolled_back }
       break
     end
+
     _(events).must_equal [:rolled_back]
   end
 
   it "does not run rollback callbacks when an after-commit callback raises" do
     events = []
+
     _ {
       database.transaction do
         database.after_rollback { events << :rolled_back }
         database.after_commit { raise "already committed" }
       end
     }.must_raise RuntimeError
+
     _(events).must_equal []
   end
 end

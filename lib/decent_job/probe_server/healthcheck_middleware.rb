@@ -34,6 +34,7 @@ module DecentJob
         else
           return @app.call(env)
         end
+
         [status, {"Content-Type" => "text/plain; charset=utf-8"}, [text]]
       end
     end

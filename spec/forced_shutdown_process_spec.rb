@@ -21,9 +21,11 @@ describe "forced worker shutdown across processes" do
 
   after do
     @adapter.shutdown(timeout: 5)
+
     if @original_pid
       @admin.exec_params("SELECT pg_cancel_backend($1) WHERE EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND query = 'SELECT pg_sleep(60)')", [@original_pid])
     end
+
     FileUtils.remove_entry(@directory)
   end
 
@@ -45,6 +47,7 @@ describe "forced worker shutdown across processes" do
   def run_child
     environment = {"FORCED_SHUTDOWN_DATABASE" => JSON.generate(@connection_options), "FORCED_SHUTDOWN_DIRECTORY" => @directory}
     command = [RbConfig.ruby, "-Ilib", "spec/support/forced_shutdown_process.rb"]
+
     Open3.popen3(environment, *command, pgroup: true) do |input, output, error, process|
       input.close
       stdout = Thread.new { output.read }
@@ -57,6 +60,7 @@ describe "forced worker shutdown across processes" do
         Process.kill("KILL", -process.pid)
         process.join
       end
+
       stdout&.join
       stderr&.join
     end
@@ -65,14 +69,17 @@ describe "forced worker shutdown across processes" do
   %w[ruby postgres].each do |mode|
     it "interrupts blocked #{mode} work while preserving cleanup ownership and replacement recovery" do
       job = ForcedShutdownProcessJob.perform_later(@directory, mode)
+
       run_child do
         await { snapshot("started") }
         original_pid = @original_pid = snapshot("started").fetch("backend_pid")
+
         if mode == "postgres"
           await do
             @admin.exec_params("SELECT wait_event FROM pg_stat_activity WHERE pid = $1", [original_pid]).first&.fetch("wait_event") == "PgSleep"
           end
         end
+
         signal("force")
         await { snapshot("forced") && File.exist?(File.join(@directory, "cleanup")) }
         forced = snapshot("forced")
@@ -93,10 +100,12 @@ describe "forced worker shutdown across processes" do
         _(drained.fetch("backend_pid")).wont_equal original_pid
         _(drained.fetch("pool").fetch("active")).must_equal 0
         _(drained.fetch("errors")).must_be_empty
+
         Timeout.timeout(3) do
           sleep 0.01 until @admin.exec_params("SELECT pid FROM pg_stat_activity WHERE pid = $1", [original_pid]).ntuples.zero?
         end
       end
+
       _(File.exist?(File.join(@directory, "completed"))).must_equal false
       _(database.with_connection { |connection| connection.exec("SELECT count(*) FROM forced_shutdown_probe").getvalue(0, 0) }).must_equal "0"
       result = DecentJob::Performer.new(database: database).perform_one(job_id: job.provider_job_id, raise_errors: true)

@@ -46,8 +46,10 @@ module DecentJob
         Support.class_setting(base, :decent_job_concurrency_config, {}.freeze)
         Support.class_setting(base, :decent_job_concurrency_rules, [].freeze)
         base.retry_on ConcurrencyExceededError, attempts: Float::INFINITY, wait: :polynomially_longer
+
         base.before_perform do |job|
           context = Current.execution
+
           if job.queue_adapter.is_a?(Adapter) && context && context[:job_id] == job.job_id
             PerformControls.new(context.fetch(:database)).check(job, context)
           end
@@ -153,9 +155,11 @@ module DecentJob
         deserialize_arguments_if_needed
         rules = self.class.decent_job_concurrency_rules.filter_map { |rule| rule.resolve(self, stage: stage) }
         configuration = self.class.decent_job_concurrency_config
+
         if !configuration.empty? && !decent_job_concurrency_key.nil?
           rules.unshift(ConcurrencyRule.new(**configuration.merge(key: decent_job_concurrency_key)).resolve(self, stage: stage))
         end
+
         rules
       end
 

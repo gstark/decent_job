@@ -25,12 +25,14 @@ describe "configuration defaults" do
   it "defaults process advisory locking to Rails development and updates worker options" do
     config = DecentJob::Configuration.new
     assert_equal false, config.advisory_lock_heartbeat
+
     %w[development test production development].each do |environment|
       apply_host(config, environment: environment)
       expected = environment == "development"
       assert_equal expected, config.advisory_lock_heartbeat
       assert_equal expected, config.worker_options.fetch(:advisory_lock_heartbeat)
     end
+
     config.process_heartbeat_interval = 2
     assert_equal 2, config.worker_options.fetch(:process_heartbeat_interval)
     assert_raises(ArgumentError) { config.process_heartbeat_interval = nil }
@@ -90,6 +92,7 @@ describe "configuration defaults" do
       ENV["DECENT_JOB_CRON"] = value
       assert_equal({}, DecentJob::Configuration.new.cron)
     end
+
     ENV["DECENT_JOB_CRON"] = "not json"
     assert_raises(JSON::ParserError) { DecentJob::Configuration.new }
   end
@@ -98,11 +101,13 @@ describe "configuration defaults" do
     ENV["DECENT_JOB_CRON"] = JSON.generate(definitions)
     config = DecentJob::Configuration.new
     ENV["DECENT_JOB_CRON"] = JSON.generate(definitions(:changed))
+
     [{}, nil, false, "", " \t\n", "\u00a0", []].each do |blank|
       apply_host(config, cron: definitions(:host))
       apply_host(config, "cron" => blank)
       assert_equal definitions, config.cron
     end
+
     apply_host(config, cron: definitions(:replacement))
     assert_equal definitions(:replacement), config.cron
     apply_host(config)
@@ -161,18 +166,22 @@ describe "configuration defaults" do
 
   it "preserves invalid flag and cron diagnostics even when cron is effectively disabled" do
     config = DecentJob::Configuration.new
+
     [nil, "true", 1, {}, []].each do |flag|
       config.enable_cron = flag
       refute config.valid?
       assert_includes config.errors[:enable_cron], "must be true or false"
     end
+
     config.enable_cron = true
+
     [nil, false, "invalid", [:invalid], 1].each do |invalid|
       config.cron = invalid
       assert_equal false, config.enable_cron
       refute config.valid?
       assert_includes config.errors[:cron], "must be a Hash"
     end
+
     ["invalid", [:invalid], true, 1].each do |invalid|
       host_config = DecentJob::Configuration.new
       apply_host(host_config, cron: invalid)

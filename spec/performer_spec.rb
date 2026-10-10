@@ -82,10 +82,12 @@ describe "job execution" do
   it "recovers a running record after its owning connection disappears" do
     job = RecordingJob.perform_later("recovered")
     previous = SecureRandom.uuid
+
     database.transaction do |connection|
       connection.exec_params("UPDATE decent_jobs SET state = 'running', execution_id = $2 WHERE id = $1", [job.provider_job_id, previous])
       connection.exec_params("INSERT INTO decent_job_executions (id, job_id, process_id) VALUES ($1, $2, 999)", [previous, job.provider_job_id])
     end
+
     _(@performer.perform_one.state).must_equal "succeeded"
     _(RecordingJob.events.pop).must_equal "recovered"
     _(@store.executions(job.provider_job_id).map { |row| row.fetch("state") }).must_equal ["interrupted", "succeeded"]

@@ -15,9 +15,11 @@ describe "scheduled job discovery" do
 
   it "finds future eligible dates within queue selections and a limit" do
     now = Time.now
+
     jobs = %w[urgent ordinary paused].map.with_index do |queue, index|
       RecordingJob.set(queue: queue, wait_until: now + index + 60).perform_later(queue)
     end
+
     DecentJob::Pauses.new(database).pause(queue: "paused")
     times = @claim.next_scheduled_at(queues: "+ordinary,urgent", limit: 1)
     _(times.size).must_equal 1
@@ -39,9 +41,11 @@ describe "scheduled job discovery" do
     _(times.count { |time| time <= Time.now }).must_equal 2
     _(times.last.to_f).must_be_close_to future.scheduled_at.to_f, 0.001
   end
+
   it "keeps held due work out of discovery so it cannot displace future dates" do
     held = RecordingJob.perform_later("held")
     future = RecordingJob.set(wait: 60).perform_later("future")
+
     database.with_connection do |connection|
       connection.exec_params("SELECT pg_advisory_lock(hashtextextended(current_schema() || '.decent_jobs.' || $1, 0))", [held.provider_job_id])
       times = @claim.next_scheduled_at(limit: 1, now_limit: 1)
@@ -51,6 +55,7 @@ describe "scheduled job discovery" do
       connection.exec("SELECT pg_advisory_unlock_all()")
     end
   end
+
   it "omits due jobs by default and accepts independent zero limits" do
     RecordingJob.perform_later("due")
     RecordingJob.set(wait: 60).perform_later("future")

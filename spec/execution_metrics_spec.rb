@@ -81,6 +81,7 @@ describe "execution metrics persistence" do
   it "persists snapshots and the exact shared start time while an attempt is running" do
     job = RecordingJob.perform_later("snapshot")
     original = @store.find(job.provider_job_id)
+
     DecentJob::Claim.new(database).with_next do |row|
       execution = @store.executions(job.provider_job_id).first
       _(execution.fetch("payload")).must_equal original.fetch("payload")
@@ -109,12 +110,14 @@ describe "execution metrics persistence" do
     original_rails = Object.const_get(:Rails) if Object.const_defined?(:Rails)
     Object.send(:remove_const, :Rails) if original_rails
     executor = Object.new
+
     executor.define_singleton_method(:wrap) do |&block|
       MetricsCallbackJob.tick.call(7)
       block.call
     ensure
       MetricsCallbackJob.tick.call(11)
     end
+
     host = Module.new
     application = Struct.new(:executor, :reloader).new(Class.new(ActiveSupport::Executor), executor)
     host.define_singleton_method(:application) { application }
@@ -122,17 +125,21 @@ describe "execution metrics persistence" do
     job = MetricsCallbackJob.perform_later
     monotonic = 10.0
     wall = Time.now
+
     MetricsCallbackJob.tick = ->(seconds) {
       monotonic += seconds
       wall -= 3600
     }
+
     DecentJob.configuration.preserve_job_records = ->(*) {
       monotonic += 100
       true
     }
+
     Process.stub(:clock_gettime, ->(*) { monotonic }) do
       Time.stub(:now, -> { wall }) { @performer.perform_one }
     end
+
     _(@store.executions(job.provider_job_id).first.fetch("duration")).must_equal 28.0
   ensure
     Object.send(:remove_const, :Rails) if Object.const_defined?(:Rails)
@@ -174,6 +181,7 @@ describe "execution metrics persistence" do
   it "rejects negative and nonfinite duration values" do
     job = RecordingJob.perform_later("done")
     @performer.perform_one
+
     database.with_connection do |connection|
       %w[-1 NaN Infinity -Infinity].each do |invalid|
         _ { connection.exec_params("UPDATE decent_job_executions SET duration = $1 WHERE job_id = $2", [invalid, job.provider_job_id]) }.must_raise PG::CheckViolation

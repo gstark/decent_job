@@ -68,6 +68,7 @@ module DecentJob
       if !graceful_restart_period.nil? && (!graceful_restart_period.is_a?(Numeric) || !graceful_restart_period.finite? || !graceful_restart_period.positive?)
         raise ArgumentError, "graceful_restart_period must be a finite positive number or nil"
       end
+
       @cron_entries = entries.dup.freeze
       @graceful_restart_period = graceful_restart_period
       @on_thread_error = on_thread_error
@@ -120,6 +121,7 @@ module DecentJob
           zone = Time.zone if Time.respond_to?(:zone)
           @threads = []
           allocated = false
+
           begin
             Thread.handle_interrupt(Object => :never) do
               cron_entries.each do |entry|
@@ -129,6 +131,7 @@ module DecentJob
                 allocate_thread { with_zone(zone) { replay(entry, state, started_at) } } if @graceful_restart_period
               end
             end
+
             allocated = true
           ensure
             unless allocated
@@ -136,11 +139,13 @@ module DecentJob
               @threads.each(&:kill)
             end
           end
+
           LifecycleEvents.record(self, "cron_manager_start",
             {cron_manager: self, cron_entries: cron_entries.dup, run_id: @run_id,
              operation_duration: monotonic_time - began}, on_error: @on_thread_error)
         end
       end
+
       self
     end
 
@@ -192,14 +197,17 @@ module DecentJob
       threads, interrupted_threads = snapshot
       # Fatal callbacks must not prevent sibling deliveries from draining.
       failure = nil
+
       threads.each do |thread|
         next if thread == Thread.current
+
         begin
           thread.join(ResourceShutdown.remaining(deadline))
         rescue Exception => error # standard:disable Lint/RescueException
           failure ||= error
         end
       end
+
       if force && deadline && ResourceShutdown.remaining(deadline).zero?
         targets = @mutex.synchronize do
           threads.select do |thread|
@@ -207,8 +215,10 @@ module DecentJob
             interrupted_threads[thread] = true
           end
         end
+
         targets.each(&:kill)
       end
+
       raise failure if failure
       threads.none?(&:alive?)
     end
@@ -250,11 +260,13 @@ module DecentJob
     def run(entry, state, started_at)
       historical = safely { in_context { CronEntry.last_jobs_by_key([entry], before: started_at)[entry.key.to_s] } } if @graceful_restart_period
       occurrence = next_occurrence(entry)
+
       @mutex.synchronize do
         state[:historical] = historical
         state[:ready] = true
         @condition.broadcast
       end
+
       while occurrence && wait_until(occurrence)
         following = next_occurrence(entry, previously_at: occurrence)
         break unless submit(state, occurrence)
@@ -273,6 +285,7 @@ module DecentJob
         state[:pending] << occurrence
         @condition.broadcast
       end
+
       true
     end
 
@@ -283,6 +296,7 @@ module DecentJob
           break if @stopping
           state[:pending].shift.tap { @condition.broadcast }
         end
+
         break unless occurrence
         deliver(entry, occurrence) if wait_until(occurrence)
       end
@@ -293,6 +307,7 @@ module DecentJob
         @condition.wait(@mutex) until @stopping || state[:ready]
         !@stopping
       end
+
       catch_up(entry, started_at, state[:historical]) if ready
     end
 
@@ -301,9 +316,11 @@ module DecentJob
     def next_occurrence(entry, **options)
       safely do
         occurrence = in_context { entry.next_at(**options) }
+
         if occurrence && (!occurrence.is_a?(Time) || (options[:previously_at] && occurrence <= options[:previously_at]))
           raise ArgumentError, "cron entry #{entry.key} must return an advancing Time or nil"
         end
+
         occurrence
       end
     end
@@ -316,6 +333,7 @@ module DecentJob
       safely do
         last_at = historical && historical["cron_at"]
         beginning = [started_at - @graceful_restart_period, last_at].compact.max
+
         in_context do
           entry.each_within(beginning...started_at, previously_at: last_at) do |occurrence|
             break unless running?
@@ -333,10 +351,12 @@ module DecentJob
         in_context do
           loop do
             break unless running? && entry.enabled? && running?
+
             if !historical && occurrence > Time.now
               break unless wait_until(occurrence)
               next
             end
+
             entry.enqueue(occurrence)
             break
           end
@@ -358,6 +378,7 @@ module DecentJob
           @condition.wait(@mutex, remaining) if remaining.positive?
         end
       end
+
       false
     end
 

@@ -46,6 +46,7 @@ module DecentJob
       #   IDs, because ActiveSupport subscriptions are process-wide.
       def execute(payload, outcome)
         current_thread = Thread.current
+
         subscriber = lambda do |name, _start, _finish, _id, event|
           next unless Thread.current == current_thread && event[:job]&.job_id == payload["job_id"]
 
@@ -56,6 +57,7 @@ module DecentJob
           outcome.error = event[:error]
           outcome.error_event = ERROR_EVENTS.fetch(name.split(".").first)
         end
+
         ::ActiveSupport::Notifications.subscribed(subscriber, EVENTS) { ::ActiveJob::Base.execute(payload) }
       end
 

@@ -77,6 +77,7 @@ module DecentJob
       raise "native daemonization is unavailable on this platform" unless Process.respond_to?(:daemon)
       raise ArgumentError, "PID file directory does not exist: #{File.dirname(pidfile)}" unless Dir.exist?(File.dirname(pidfile))
       acquire_pidfile
+
       DecentJob.with_prepared_fork do
         Process.daemon(true)
         @owner_pid = Process.pid
@@ -84,6 +85,7 @@ module DecentJob
         at_exit { cleanup }
         DecentJob.after_supervisor_fork(@configuration)
       end
+
       self
     rescue NotImplementedError
       cleanup
@@ -103,6 +105,7 @@ module DecentJob
     #   after a shutdown timeout, and the at_exit handler calls it again.
     def cleanup
       return unless @file
+
       if @owner_pid == Process.pid && same_file? && read_pid == @owner_pid
         File.unlink(pidfile)
       end
@@ -132,12 +135,15 @@ module DecentJob
       flags |= File::NOFOLLOW if defined?(File::NOFOLLOW)
       @file = File.open(pidfile, flags, 0o644)
       stat = @file.stat
+
       unless stat.file? && stat.nlink == 1 && same_file?
         raise ArgumentError, "PID file must be a regular file with one link"
       end
+
       unless @file.flock(File::LOCK_EX | File::LOCK_NB)
         raise AlreadyRunning, "A daemon already owns PID file #{pidfile}"
       end
+
       raise ArgumentError, "PID file was replaced during startup" unless same_file?
       pid = read_pid
       raise AlreadyRunning, "A process is already running with PID #{pid}; check #{pidfile}" if pid && live_pid?(pid)

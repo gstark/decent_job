@@ -34,6 +34,7 @@ end
 
 class BatchFacadeUnlockedCallback < ActiveJob::Base
   class_attribute :member_id
+
   before_enqueue do
     connection = queue_adapter.database.connect
     connection.exec_params("SELECT id FROM decent_jobs WHERE id = $1 FOR UPDATE NOWAIT", [member_id])
@@ -50,6 +51,7 @@ class BatchFacadeBulkObserverJob < BatchFacadeJob
     counts = DecentJob::Current.execution.fetch(:database).with_connection do |connection|
       connection.exec("SELECT (SELECT count(*) FROM decent_job_batches) AS batches, (SELECT count(*) FROM decent_jobs) AS jobs").first
     end
+
     events << [value, counts]
   end
 end
@@ -130,6 +132,7 @@ describe DecentJob::Batch do
 
   it "flushes its members independently of an enclosing bulk capture" do
     batch = DecentJob::Batch.new(database: database)
+
     outer = DecentJob::Bulk.enqueue do
       batch.enqueue { BatchFacadeJob.perform_later("member") }
       _(batch.job_instances.size).must_equal 1
@@ -181,6 +184,7 @@ describe DecentJob::Batch do
 
   it "restores context before after-commit callbacks execute" do
     contexts = []
+
     DecentJob::Batch.within_thread(batch_id: "temporary", database: database) do
       _(DecentJob::Batch.context_for(database).fetch(:batch_id)).must_equal "temporary"
       database.after_commit { contexts << DecentJob::Batch.context_for(database) }
@@ -196,6 +200,7 @@ describe DecentJob::Batch do
     gid = batch.to_global_id
 
     _(gid.app).must_equal "decent-job"
+
     DecentJob::Current.with(database: database) do
       _(GlobalID::Locator.locate(gid).id).must_equal batch.id
       _(GlobalID::Locator.locate_many([gid], ignore_missing: true).map(&:id)).must_equal [batch.id]
@@ -216,7 +221,9 @@ describe DecentJob::Batch do
     pairs = 3.times.map do |index|
       [DecentJob::Batch.new(database: database, sequence: index), [BatchFacadeJob.new("member-#{index}")]]
     end
+
     inserts = []
+
     database.with_connection do |connection|
       recorder = Module.new do
         define_method(:exec_params) do |sql, *parameters, &block|
@@ -224,6 +231,7 @@ describe DecentJob::Batch do
           super(sql, *parameters, &block)
         end
       end
+
       connection.singleton_class.prepend(recorder)
       DecentJob::Batch.enqueue_all(pairs)
     end
@@ -247,9 +255,11 @@ describe DecentJob::Batch do
 
   it "persists all bulk members before the first inline execution" do
     BatchFacadeJob.queue_adapter = DecentJob::Adapter.new(database: database, execution_mode: :inline)
+
     pairs = 2.times.map do |index|
       [DecentJob::Batch.new(database: database), [BatchFacadeBulkObserverJob.new(index)]]
     end
+
     DecentJob::Batch.enqueue_all(pairs)
     observations = 2.times.map { BatchFacadeJob.events.pop }
 
@@ -322,6 +332,7 @@ describe DecentJob::Batch do
 
   it "rolls back members and new facade state when capture raises" do
     batch = DecentJob::Batch.new(database: database)
+
     _ {
       batch.enqueue do
         BatchFacadeJob.perform_later("captured")
@@ -357,6 +368,7 @@ describe DecentJob::Batch do
   it "keeps a durable reconciliation request when inline execution fails after commit" do
     BatchFacadeRetryJob.queue_adapter = DecentJob::Adapter.new(database: database, execution_mode: :inline)
     batch = DecentJob::Batch.new(database: database)
+
     error = _ {
       database.transaction do
         # An earlier after-commit failure prevents subsequent reconciliation callbacks.
@@ -367,6 +379,7 @@ describe DecentJob::Batch do
 
     _(error.message).must_equal "earlier callback failed"
     _(batch.persisted?).must_equal true
+
     database.with_connection do |connection|
       count = connection.exec_params("SELECT count(*) FROM decent_job_batch_updates WHERE batch_id = $1", [batch.id]).getvalue(0, 0).to_i
       _(count).must_be :positive?

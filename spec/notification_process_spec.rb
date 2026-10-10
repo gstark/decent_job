@@ -44,6 +44,7 @@ describe "notification controls across processes" do
 
   def run_worker
     command = [RbConfig.ruby, "-Ilib", "exe/decent_job", "start", "--require", "spec/support/notification_cli_app.rb", "--shutdown-timeout", "3"]
+
     Open3.popen3(@environment, *command, pgroup: true) do |input, output, error, process|
       input.close
       stdout = Thread.new { output.read }
@@ -57,6 +58,7 @@ describe "notification controls across processes" do
         Process.kill("KILL", -process.pid)
         process.join
       end
+
       stdout&.join
       stderr&.join
     end
@@ -85,6 +87,7 @@ describe "notification controls across processes" do
     _(payload.fetch("count")).must_equal 1
     _(payload.values).wont_include "silent"
     _(@listener.wait_for_notify(0.05)).must_be_nil
+
     run_worker do
       await { results.size == 2 }
       _(results.sort).must_equal %w[published silent]
@@ -94,6 +97,7 @@ describe "notification controls across processes" do
 
   it "preserves notification suppression through retry in a separate worker" do
     id = produce([{value: "retried", notify: false, retry: true}], action: "single").first
+
     run_worker do
       await { DecentJob::Store.new(database).find(id).fetch("state") == "succeeded" }
       _(results).must_equal ["retried"]

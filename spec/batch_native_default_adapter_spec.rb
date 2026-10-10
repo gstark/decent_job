@@ -28,6 +28,7 @@ describe "batches with native jobs on the default adapter" do
     batch = DecentJob::Batch.enqueue(on_finish: DefaultAdapterCallbackJob, description: "defaults") do
       DefaultAdapterMemberJob.perform_later("a")
     end
+
     _(batch.persisted?).must_equal true
     _(batch.job_instances.map(&:class)).must_equal [DefaultAdapterMemberJob]
   end

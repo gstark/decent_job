@@ -12,6 +12,7 @@ class ThreadControlsJob < ActiveJob::Base
   def perform
     loop do
       events << [DecentJob.current_thread_running?, DecentJob.current_thread_shutting_down?, Thread.current.priority]
+
       case commands.pop
       when :finish then break
       when :nested
@@ -133,6 +134,7 @@ describe "thread control configuration" do
     _(configuration.lower_thread_priority).must_equal false
     configuration.lower_thread_priority = true
     _(configuration.worker_options[:lower_thread_priority]).must_equal true
+
     [nil, "true", "false", 1].each do |value|
       _ { configuration.lower_thread_priority = value }.must_raise ArgumentError
       _ { DecentJob::Worker.new(database: Object.new, lower_thread_priority: value) }.must_raise ArgumentError
@@ -141,6 +143,7 @@ describe "thread control configuration" do
 
   it "reads true and false environment values" do
     previous = ENV["DECENT_JOB_LOWER_THREAD_PRIORITY"]
+
     %w[true false].each do |value|
       ENV["DECENT_JOB_LOWER_THREAD_PRIORITY"] = value
       _(DecentJob::Configuration.new.lower_thread_priority).must_equal(value == "true")
@@ -164,8 +167,10 @@ describe "isolated worker status scope" do
     original = ActiveSupport::IsolatedExecutionState.isolation_level
     running = Struct.new(:running?).new(true)
     stopping = Struct.new(:running?).new(false)
+
     %i[thread fiber].each do |level|
       ActiveSupport::IsolatedExecutionState.isolation_level = level
+
       DecentJob::ThreadStatus.with_worker(running) do
         _ {
           DecentJob::ThreadStatus.with_worker(stopping) do
@@ -173,17 +178,20 @@ describe "isolated worker status scope" do
             raise "nested failure"
           end
         }.must_raise RuntimeError
+
         _(DecentJob.current_thread_running?).must_equal true
         _(DecentJob.current_thread_shutting_down?).must_equal false
         other_thread = Thread.new { DecentJob.current_thread_shutting_down? }.value
         _(other_thread).must_be_nil
         other_fiber = Fiber.new { DecentJob.current_thread_shutting_down? }.resume
+
         if level == :thread
           _(other_fiber).must_equal false
         else
           _(other_fiber).must_be_nil
         end
       end
+
       _(DecentJob.current_thread_shutting_down?).must_be_nil
     end
   ensure
@@ -201,10 +209,12 @@ describe "runtime thread priority update ordering" do
     worker = DecentJob::Worker.new(database: Object.new)
     worker.define_singleton_method(:start) { |**| self }
     setter = worker.method(:lower_thread_priority=)
+
     worker.define_singleton_method(:lower_thread_priority=) do |value|
       DecentJob.with_prepared_fork do
         pid = fork do
           reader.close
+
           begin
             DecentJob.after_supervisor_fork(DecentJob.configuration.dup)
             DecentJob.lower_thread_priority = false
@@ -214,11 +224,14 @@ describe "runtime thread priority update ordering" do
           ensure
             writer.close
           end
+
           exit! 0
         end
       end
+
       setter.call(value)
     end
+
     DecentJob.start_worker(worker)
     DecentJob::ThreadStatus.with_worker(worker) { DecentJob.lower_thread_priority = true }
     writer.close
@@ -228,6 +241,7 @@ describe "runtime thread priority update ordering" do
   ensure
     reader&.close unless reader&.closed?
     writer&.close unless writer&.closed?
+
     if pid
       begin
         Process.kill("KILL", pid)
@@ -245,6 +259,7 @@ describe "runtime thread priority update ordering" do
     starter = updater = nil
     adapter = DecentJob::Adapter.new(database: Object.new, execution_mode: :async_all)
     constructor = DecentJob::Worker.method(:new)
+
     blocking_constructor = lambda do |**options|
       constructor.call(**options).tap do |worker|
         worker.define_singleton_method(:start) { |**| self }
@@ -252,13 +267,16 @@ describe "runtime thread priority update ordering" do
         release.pop
       end
     end
+
     DecentJob::Worker.stub(:new, blocking_constructor) do
       starter = Thread.new { adapter.start_async }
       worker = Timeout.timeout(2) { constructed.pop }
+
       updater = Thread.new do
         update_started << true
         DecentJob.lower_thread_priority = true
       end
+
       Timeout.timeout(2) do
         update_started.pop
         sleep 0.001 while updater.status == "run"
@@ -266,6 +284,7 @@ describe "runtime thread priority update ordering" do
         starter.value
         updater.value
       end
+
       _(DecentJob.configuration.lower_thread_priority).must_equal true
       _(worker.lower_thread_priority).must_equal true
     end
@@ -282,21 +301,27 @@ describe "runtime thread priority update ordering" do
     worker = DecentJob::Worker.new(database: Object.new)
     worker.define_singleton_method(:start) { |**| self }
     setter = worker.method(:lower_thread_priority=)
+
     worker.define_singleton_method(:lower_thread_priority=) do |value|
       DecentJob.stopping?
+
       if value
         entered << true
         release.pop
       end
+
       setter.call(value)
     end
+
     DecentJob.start_worker(worker)
     first = Thread.new { DecentJob.lower_thread_priority = true }
     Timeout.timeout(2) { entered.pop }
+
     second = Thread.new do
       second_started << true
       DecentJob.lower_thread_priority = false
     end
+
     Timeout.timeout(2) do
       second_started.pop
       sleep 0.001 while second.status == "run"
@@ -304,6 +329,7 @@ describe "runtime thread priority update ordering" do
       first.value
       second.value
     end
+
     _(DecentJob.configuration.lower_thread_priority).must_equal false
     _(worker.lower_thread_priority).must_equal false
   ensure

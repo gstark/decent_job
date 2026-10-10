@@ -35,6 +35,7 @@ describe "dequeue retry timestamps" do
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET created_at = '2020-01-01' WHERE id = $1", [job.provider_job_id])
     end
+
     @store.find(job.provider_job_id)
   end
 
@@ -51,16 +52,20 @@ describe "dequeue retry timestamps" do
         before = database_now
         events = []
         observer = ->(event) { events << event.payload[:job] }
+
         ActiveSupport::Notifications.subscribed(observer, "enqueue_job.decent_job") do
           _(@performer.perform_one.state).must_equal "retried"
         end
+
         current = @store.find(job.provider_job_id)
+
         if sort == :created_at
           _(current.fetch("created_at")).must_be :>=, before
           _(current.fetch("created_at")).must_be :<=, database_now
         else
           _(current.fetch("created_at")).must_equal original.fetch("created_at")
         end
+
         _(current.values_at("id", "active_job_id")).must_equal original.values_at("id", "active_job_id")
         _(current.fetch("payload").fetch("provider_job_id")).must_equal job.provider_job_id
         _(current.fetch("payload").fetch("executions")).must_equal 1
@@ -82,12 +87,14 @@ describe "dequeue retry timestamps" do
       events = []
       ActiveSupport::Notifications.subscribed(->(event) { events << event.payload[:job] }, "enqueue_job.decent_job") { facade.retry_job }
       current = facade.reload.attributes
+
       if sort == :created_at
         _(facade.created_at).must_be :>=, before
         _(facade.created_at).must_be :<=, database_now
       else
         _(facade.created_at).must_equal original.fetch("created_at")
       end
+
       keys = %w[id active_job_id labels concurrency_keys batch_id batch_callback_id cron_key cron_at]
       _(current.slice(*keys)).must_equal original.slice(*keys)
       _(facade.executions).must_equal []
@@ -119,6 +126,7 @@ describe "dequeue retry timestamps" do
     facade = DecentJob::Job.find(job.provider_job_id, database: database)
     facade.discard_job("discarded")
     original = facade.attributes
+
     _ do
       database.transaction do
         facade.retry_job
@@ -126,6 +134,7 @@ describe "dequeue retry timestamps" do
         raise "rollback"
       end
     end.must_raise RuntimeError
+
     _(facade.reload.attributes).must_equal original
   end
 
@@ -134,15 +143,19 @@ describe "dequeue retry timestamps" do
     job = DequeueLimitedJob.perform_later("wait")
     backdate(job)
     _(@performer.perform_one.state).must_equal "retried"
+
     first = database.with_connection do |connection|
       connection.exec_params("SELECT created_at FROM decent_job_concurrency_claims WHERE job_id = $1", [job.provider_job_id]).getvalue(0, 0)
     end
+
     creation = @store.find(job.provider_job_id).fetch("created_at")
     DecentJob::Job.find(job.provider_job_id, database: database).reschedule_job
     _(@performer.perform_one.state).must_equal "retried"
+
     second = database.with_connection do |connection|
       connection.exec_params("SELECT created_at FROM decent_job_concurrency_claims WHERE job_id = $1", [job.provider_job_id]).getvalue(0, 0)
     end
+
     _(second).must_equal first
     _(@store.find(job.provider_job_id).fetch("created_at")).must_be :>, creation
   end

@@ -34,6 +34,7 @@ describe "batch database isolation" do
 
   it "rejects a foreign-database child captured through perform_all_later before writing it" do
     _ { DecentJob::Batch.enqueue(database: database, on_finish: BatchIsolationCallbackJob) }.must_raise ArgumentError
+
     [database, @foreign_database].each do |pool|
       pool.with_connection { |connection| _(connection.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0)).must_equal "0" }
     end
@@ -44,6 +45,7 @@ describe "batch database isolation" do
     referenced.save
     parent = DecentJob::Batch.new(database: database, reference: referenced)
     parent.save
+
     DecentJob::Current.with(database: @foreign_database) do
       restored = DecentJob::Batch.find(parent.id, database: database)
       _(restored.properties.fetch(:reference).id).must_equal referenced.id

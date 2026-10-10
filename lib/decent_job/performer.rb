@@ -88,6 +88,7 @@ module DecentJob
     #   batch rows. Can delete the job row when the preservation policy allows.
     def perform_one(queues: "*", job_id: nil, raise_errors: false, stopping: -> { false })
       admitted = false
+
       Thread.handle_interrupt(Object => :never) do
         DecentJob.synchronize_resource_start(automatic: true, skip_during_fork: true) do
           @activity_mutex.synchronize do
@@ -96,10 +97,12 @@ module DecentJob
           end
         end
       end
+
       return unless admitted
 
       BatchStore.new(@database).reconcile_pending
       ConcurrencyClaims.new(@database).recover
+
       @claim.with_next(queues: queues, job_id: job_id, stopping: stopping) do |row|
         execute(row, raise_errors: raise_errors, stopping: stopping)
       end
@@ -124,6 +127,7 @@ module DecentJob
       else
         @on_execution_start&.call
       end
+
       outcome = Outcome.new(state: "succeeded")
       unhandled = false
       context = {database: @database, job_id: row.fetch("active_job_id"), id: row.fetch("id"), execution_id: row.fetch("execution_id"),
@@ -132,23 +136,28 @@ module DecentJob
       payload = {job: Job.from_attributes(row.slice(*Job::ATTRIBUTES), database: @database),
                  execution: Execution.new(row.fetch("execution_attributes"), database: @database),
                  process_id: Process.pid, thread_name: (Thread.current.name || Thread.current.object_id).to_s}
+
       Instrumentation.instrument("perform_job.decent_job", payload, database: @database) do
         completed = false
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
         begin
           Current.with(context) do
             value = wrap_execution do
               job_payload = row.fetch("payload")
               Integrations.for_payload(job_payload).execute(job_payload, outcome)
             end
+
             if value.is_a?(Exception)
               if outcome.error.nil?
                 outcome.error = value
                 outcome.error_event = "handled"
                 outcome.state = "discarded"
               end
+
               value = nil
             end
+
             unless Thread.current.status == "aborting"
               payload.merge!(value: value, error: outcome.error, handled_error: outcome.error,
                 retried: context.fetch(:reenqueues, 0).positive?, error_event: outcome.error_event&.to_sym)
@@ -163,9 +172,11 @@ module DecentJob
           else
             "unhandled"
           end
+
           outcome.error = exception
           outcome.state = "discarded"
           unhandled = true
+
           unless Thread.current.status == "aborting"
             payload.merge!(error: exception, unhandled_error: exception, error_event: outcome.error_event.to_sym)
             completed = true
@@ -179,6 +190,7 @@ module DecentJob
           payload[:interrupted] = true unless completed
         end
       end
+
       # User ensure blocks and Active Job handlers can swallow termination by
       # raising/rescuing another error. It remains an unfinished killed attempt.
       return if Thread.current.status == "aborting"
@@ -198,6 +210,7 @@ module DecentJob
     # the record is kept.
     def preserve_record?(job_instance, error, error_event, unhandled)
       policy = DecentJob.configuration.preserve_job_records
+
       if policy.respond_to?(:call)
         # Isolate application SQL failures so retaining a record remains possible.
         return @database.transaction { policy.call(job_instance, error, error_event&.to_sym) }
@@ -210,6 +223,7 @@ module DecentJob
       rescue
         nil
       end
+
       true
     end
 
@@ -232,6 +246,7 @@ module DecentJob
       details = error && JSON.generate("class" => error.class.name, "message" => error.message, "backtrace" => error.backtrace || [])
       batch_ids = []
       forced = false
+
       cleanup = lambda do |connection|
         next if forced || state == "retried" || row["cron_key"]
         next if preserve_record?(job_instance, error, error_event, unhandled)
@@ -241,7 +256,9 @@ module DecentJob
             AND state IN ('succeeded', 'discarded') AND finished_at IS NOT NULL AND cron_key IS NULL
         SQL
       end
+
       context = {id: row.fetch("id"), execution_id: row.fetch("execution_id")}
+
       ConcurrencyClaims.new(@database).finish(context, after_release: cleanup) do |connection|
         current = connection.exec_params("SELECT state, execution_id, batch_id, batch_callback_id, finished_at, error, error_event FROM decent_jobs WHERE id = $1 FOR UPDATE", [row.fetch("id")]).first
         raise "Execution ownership lost" unless current && current["execution_id"] == row.fetch("execution_id")
@@ -257,6 +274,7 @@ module DecentJob
         end
 
         state = "retried" if current["state"] == "ready" || (unhandled && DecentJob.configuration.retry_on_unhandled_error)
+
         if state == "retried"
           connection.exec_params(<<~SQL, [row.fetch("id"), details, error_event])
             UPDATE decent_jobs SET state = 'ready', error = $2, error_event = $3, performed_at = NULL, locked_by_id = NULL, locked_at = NULL, #{"lock_type = NULL," if row.key?("lock_type")}
@@ -268,6 +286,7 @@ module DecentJob
               updated_at = clock_timestamp(), error = $3, error_event = $4 WHERE id = $1
           SQL
         end
+
         connection.exec_params(<<~SQL, [row.fetch("execution_id"), state, details, current["batch_id"], error_event, duration])
           UPDATE decent_job_executions SET state = $2, finished_at = clock_timestamp(), error = $3,
             batch_id = $4, error_event = $5, duration = $6 WHERE id = $1
@@ -275,6 +294,7 @@ module DecentJob
         batch_ids = current.values_at("batch_id", "batch_callback_id").compact.uniq
         BatchStore.new(@database).request(connection, batch_ids, job_id: row.fetch("id"), discarded: state == "discarded")
       end
+
       batch_ids.sort.each { |id| BatchStore.new(@database).reconcile(id) }
       [state, error, error_event, forced]
     end

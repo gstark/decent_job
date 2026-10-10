@@ -54,6 +54,7 @@ cases = expressions.map { |expression| {"expression" => expression, "after" => "
 cases.each do |entry|
   cron = Fugit::Cron.parse(entry.fetch("expression")) || abort("Invalid fixture: #{entry}")
   cursor = Time.iso8601(entry.fetch("after"))
+
   entry["next"] = 5.times.map do
     cursor = cron.next_time(cursor)
     cursor.to_t.utc.iso8601

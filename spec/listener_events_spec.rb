@@ -50,22 +50,27 @@ describe "listener events" do
   it "wraps actual LISTEN and healthy UNLISTEN operations before closing the dedicated session" do
     operations = Queue.new
     listener = Queue.new
+
     decorate_connections do |connection|
       original = connection.method(:exec)
+
       connection.define_singleton_method(:exec) do |sql, *args|
         if ["LISTEN decent_job", "UNLISTEN decent_job"].include?(sql)
           operations << sql
           listener << connection if sql == "LISTEN decent_job"
         end
+
         original.call(sql, *args)
       end
     end
+
     %w[notifier_listen notifier_unlisten].each do |name|
       observer = Object.new
       observer.define_singleton_method(:start) { |*| operations << "#{name}:start" }
       observer.define_singleton_method(:finish) { |*| operations << "#{name}:finish" }
       subscribe(name, observer)
     end
+
     @worker.start
     await { @worker.connected? }
     connection = pop(listener)
@@ -78,10 +83,12 @@ describe "listener events" do
     listens = Queue.new
     subscribe("notifier_listen") { listens << true }
     subscribe("notifier_notify_error") { |event| @events << [:failure, event.payload] }
+
     subscribe("notifier_notified") do |event|
       @events << [:raw, event.payload[:payload]&.dup]
       event.payload[:payload]&.replace('{"queue_name":"other"}')
     end
+
     @worker.start
     await { @worker.connected? }
     pop(listens)
@@ -102,19 +109,24 @@ describe "listener events" do
   it "reports the original listener failure once and reconnects after LISTEN failure" do
     attempts = 0
     failed = Queue.new
+
     decorate_connections do |connection|
       original = connection.method(:exec)
+
       connection.define_singleton_method(:exec) do |sql, *args|
         if sql == "LISTEN decent_job"
           attempts += 1
+
           if attempts == 1
             failed << connection
             raise IOError, "listen failed"
           end
         end
+
         original.call(sql, *args)
       end
     end
+
     subscribe("notifier_notify_error") { |event| @events << event.payload.dup }
     @worker.start
     payload = pop
@@ -127,14 +139,17 @@ describe "listener events" do
 
   it "closes the dedicated session when UNLISTEN fails and reports that failure during shutdown" do
     connection_used = Queue.new
+
     decorate_connections do |connection|
       original = connection.method(:exec)
+
       connection.define_singleton_method(:exec) do |sql, *args|
         connection_used << connection if sql == "LISTEN decent_job"
         raise IOError, "unlisten failed" if sql == "UNLISTEN decent_job"
         original.call(sql, *args)
       end
     end
+
     subscribe("notifier_notify_error") { |event| @events << event.payload.dup }
     @worker.start
     await { @worker.connected? }
@@ -147,19 +162,23 @@ describe "listener events" do
 
   it "closes after killed UNLISTEN observers and permits callback shutdown without deadlocking" do
     connection_used = Queue.new
+
     decorate_connections do |connection|
       original = connection.method(:exec)
+
       connection.define_singleton_method(:exec) do |sql, *args|
         connection_used << connection if sql == "LISTEN decent_job"
         original.call(sql, *args)
       end
     end
+
     subscribe("notifier_unlisten") do |event|
       @worker.stats
       @worker.shutdown(timeout: 0)
       @events << Thread.current
       Queue.new.pop
     end
+
     @worker.start
     await { @worker.connected? }
     connection = pop(connection_used)
@@ -175,14 +194,18 @@ describe "listener events" do
     original_error = IOError.new("wait failed")
     failures = Queue.new
     subscribe("notifier_notify_error") { |event| failures << event.payload[:error] }
+
     decorate_connections do |connection|
       original_exec = connection.method(:exec)
+
       connection.define_singleton_method(:exec) do |sql, *args|
         raise IOError, "cleanup failed" if sql == "UNLISTEN decent_job"
         original_exec.call(sql, *args)
       end
+
       connection.define_singleton_method(:wait_for_notify) { |*| raise original_error }
     end
+
     @worker.start
     _(pop(failures)).must_be_same_as original_error
     _(pop(@errors)).must_be_same_as original_error
@@ -192,20 +215,25 @@ describe "listener events" do
   it "closes a session interrupted inside LISTEN start without inventing UNLISTEN or listener failure" do
     connection_used = Queue.new
     sql = Queue.new
+
     decorate_connections do |connection|
       connection_used << connection
       original = connection.method(:exec)
+
       connection.define_singleton_method(:exec) do |query, *args|
         sql << query if query.include?("LISTEN")
         original.call(query, *args)
       end
     end
+
     observer = Object.new
     entered = Queue.new
+
     observer.define_singleton_method(:start) { |*|
       entered << Thread.current
       Queue.new.pop
     }
+
     observer.define_singleton_method(:finish) { |*| }
     subscribe("notifier_listen", observer)
     subscribe("notifier_notify_error") { |event| @events << event }
@@ -227,11 +255,13 @@ describe "listener events" do
     subscribe("notifier_notify_error") { |event| failures << event }
     @worker.start
     await { @worker.connected? }
+
     ["[]", '{"count":0}'].each do |raw|
       notify(raw)
       _(pop).must_equal raw
       _(pop(@errors)).must_be_kind_of ArgumentError
     end
+
     @worker.shutdown(timeout: 5)
     _(failures).must_be_empty
   end

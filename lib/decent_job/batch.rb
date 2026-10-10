@@ -92,6 +92,7 @@ module DecentJob
     #   are skipped.
     def self.where(id:, database: nil)
       database ||= default_database
+
       Array(id).filter_map do |value|
         row = BatchStore.new(database).find(value)
         new(database: database, record: row) if row
@@ -155,6 +156,7 @@ module DecentJob
     # @api private
     def self.within_thread(batch_id: nil, batch_callback_id: nil, batch_ids: nil, database: nil)
       database ||= default_database
+
       database.transaction do
         with_context(batch_id: batch_id, batch_callback_id: batch_callback_id, batch_ids: batch_ids, database: database) { yield }
       end
@@ -195,12 +197,14 @@ module DecentJob
       member_batches(pairs)
       snapshots = batches.map { |batch| batch.instance_variable_get(:@row).dup }
       committed = false
+
       Bulk.with_buffer(nil) do
         database.transaction do
           database.after_commit { committed = true }
           store = BatchStore.new(database)
           rows = store.save_all(batches.map { |batch| batch.send(:serialized_attributes) })
           batches.zip(rows).each { |batch, row| batch.instance_variable_set(:@row, row) }
+
           store.locked(batches.map(&:id)) do
             buffers = pairs.map { |batch, jobs| batch.send(:prepare_members, jobs) }
             batch_ids = member_batches(batches.zip(buffers.map(&:jobs))).transform_values(&:id)
@@ -210,6 +214,7 @@ module DecentJob
             combined = Bulk::Buffer.new
             buffers.each { |buffer| combined.append(buffer) }
             within_thread(batch_ids: batch_ids, database: database) { combined.enqueue }
+
             batches.zip(existing_members).each do |batch, existing|
               store.attach(batch.id, existing) unless existing.empty?
               store.mark_enqueued(batch.id)
@@ -218,11 +223,13 @@ module DecentJob
           end
         end
       end
+
       batches.each(&:reload)
     rescue
       unless committed
         Array(batches).zip(snapshots || []).each { |batch, row| batch.instance_variable_set(:@row, row) if row }
       end
+
       raise
     end
 
@@ -255,10 +262,12 @@ module DecentJob
     # stored by name.
     ATTRIBUTES.each do |name|
       define_method(name) { @row[name.to_s] }
+
       define_method("#{name}=") do |value|
         @row[name.to_s] = (name.to_s.start_with?("on_") && value.is_a?(Class)) ? value.name : value
       end
     end
+
     TIMESTAMPS.each { |name| define_method(name) { @row[name.to_s] } }
 
     # @return [String, nil] the batch UUID, or nil before the first save
@@ -295,6 +304,7 @@ module DecentJob
         @properties = Current.with(database: database) { BatchProperties.load(@row.fetch("properties")) }
         @properties_loaded = true
       end
+
       @properties
     end
 
@@ -329,11 +339,13 @@ module DecentJob
     #   reconcile of the same batch.
     def save
       attributes = serialized_attributes
+
       if persisted?
         store.locked([id]) { @row = store.save(id: id, attributes: attributes) }
       else
         @row = store.save(id: nil, attributes: attributes)
       end
+
       true
     end
 
@@ -377,6 +389,7 @@ module DecentJob
     def enqueue(jobs = [], **properties, &block)
       assign_properties(properties)
       validate_members(Array(jobs).compact)
+
       accepted = transaction do
         save_and_lock do
           buffer = prepare_members(jobs, &block)
@@ -384,6 +397,7 @@ module DecentJob
           enqueue_buffer(buffer)
         end
       end
+
       reload
       accepted
     end
@@ -399,6 +413,7 @@ module DecentJob
     #   database
     def add(jobs = [], &block)
       validate_members(Array(jobs).compact)
+
       accepted = transaction do
         save_and_lock do
           buffer = prepare_members(jobs, &block)
@@ -406,6 +421,7 @@ module DecentJob
           flush_members(buffer)
         end
       end
+
       reload
       accepted
     end
@@ -435,11 +451,13 @@ module DecentJob
     def retry
       transaction do
         save unless persisted?
+
         store.locked([id]) do
           store.open(id)
           ids = store.retry_members(id)
           store.mark_enqueued(id)
           request_reconciliation
+
           # Each adapter runs inline members or wakes its async worker after
           # commit, as it does for a single job retry.
           store.members(id, ids: ids, deserialize_arguments: false).group_by(&:queue_adapter).each do |adapter, jobs|
@@ -447,6 +465,7 @@ module DecentJob
           end
         end
       end
+
       reload
     end
 
@@ -465,6 +484,7 @@ module DecentJob
     def transaction
       previous = @row.dup
       committed = false
+
       Bulk.with_buffer(nil) do
         database.transaction do
           database.after_commit { committed = true }
@@ -481,6 +501,7 @@ module DecentJob
     def save_and_lock
       existing = persisted?
       save unless existing
+
       store.locked([id]) do
         save if existing
         yield
@@ -500,10 +521,12 @@ module DecentJob
     def prepare_members(jobs, &block)
       buffer = Bulk::Buffer.new
       buffer.add(Array(jobs).compact)
+
       self.class.within_thread(batch_id: id, database: database) do
         buffer.capture(&block) if block
         buffer.prepare
       end
+
       validate_members(buffer.jobs)
       buffer
     end
@@ -527,10 +550,12 @@ module DecentJob
     # instead of inserted again.
     def flush_members(buffer)
       existing = buffer.jobs.select(&:provider_job_id)
+
       self.class.within_thread(batch_id: id, database: database) do
         Bulk.with_buffer(nil) { buffer.enqueue }
         store.attach(id, existing) unless existing.empty?
       end
+
       buffer.jobs
     end
   end

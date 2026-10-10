@@ -53,6 +53,7 @@ module DecentJob
         notification_payload = payload.dup
         handle = observe(database, on_error) { Notifications.build_handle(name, notification_payload) }
         completed = false
+
         begin
           observe(database, on_error) { handle.start } if handle
           value = Thread.handle_interrupt(Object => :immediate) { yield payload }
@@ -65,10 +66,12 @@ module DecentJob
           raise
         ensure
           interrupt(payload) unless completed
+
           begin
             synchronize_payload(notification_payload, payload, database, on_error)
           ensure
             finished = false
+
             begin
               observe(database, on_error) { handle.finish } if handle
               finished = true
@@ -123,6 +126,7 @@ module DecentJob
       begin
         IsolatedState[:decent_job_reporting_observer_error] = true
         callback = ->(*) { on_error&.call(error) }
+
         Thread.handle_interrupt(Object => :immediate) do
           database&.in_transaction? ? database.transaction(&callback) : callback.call
         end

@@ -186,12 +186,15 @@ module DecentJob
       $PROGRAM_NAME = "decent_job supervisor [#{@recipes.size} subprocesses]"
       install_signal_handlers
       instrument("cluster_start", subprocesses: @recipes.size)
+
       @recipes.each_with_index do |recipe, index|
         break if @stopped
         spawn_subprocess(recipe, index: index)
       end
+
       start_probe unless @stopped
       on_start&.call unless @stopped
+
       until @stopped
         reap_children
         spawn_pending unless @stopped
@@ -201,12 +204,14 @@ module DecentJob
       failure = $!
       @stopped = true
       deadline = self.class.monotonic + ((failure || @immediate) ? 0 : @configuration.shutdown_timeout)
+
       begin
         begin
           on_shutdown&.call
         rescue Exception => error # standard:disable Lint/RescueException
           report_error(error)
         end
+
         terminate_children(deadline)
       ensure
         begin
@@ -220,6 +225,7 @@ module DecentJob
           $PROGRAM_NAME = original_title if original_title
         end
       end
+
       instrument_cleanup("cluster_shutdown", pid: @supervisor_pid)
       raise cleanup_failure if cleanup_failure && !failure
     end
@@ -249,6 +255,7 @@ module DecentJob
         @previous_traps[signal] = Signal.trap(signal) do
           @stopped = true unless signal == "CHLD"
           @immediate = true if signal == "QUIT"
+
           begin
             @writer.write_nonblock(".", exception: false)
           rescue IOError, Errno::EPIPE
@@ -267,9 +274,11 @@ module DecentJob
     def spawn_subprocess(recipe, index:, restart_count: 0)
       reader, writer = IO.pipe
       pid = nil
+
       DecentJob.with_prepared_fork do
         pid = fork do
           status = 1
+
           begin
             # Reset traps before any application hook, and close descriptors owned
             # by the supervisor before starting child resources or application code.
@@ -302,6 +311,7 @@ module DecentJob
           end
         end
       end
+
       writer.close
       handle = SubprocessHandle.new(pid: pid, recipe: recipe, index: index,
         restart_count: restart_count, readiness_reader: reader)
@@ -323,6 +333,7 @@ module DecentJob
         rescue Errno::ECHILD
           [pid, nil]
         end
+
         next unless result
         @mutex.synchronize { @subprocesses.delete(pid) }
         handle.close_reader
@@ -339,6 +350,7 @@ module DecentJob
 
     def spawn_pending
       due, @pending = @pending.partition { |entry| entry[:at] <= self.class.monotonic }
+
       due.each do |entry|
         break if @stopped
         spawn_subprocess(entry[:recipe], index: entry[:index], restart_count: entry[:restart_count])
@@ -354,10 +366,12 @@ module DecentJob
       readers = handles.filter_map(&:readiness_reader)
       delay = timeout || [1, *@pending.map { |entry| [entry[:at] - self.class.monotonic, 0].max }].min
       ready = IO.select([@reader, *readers], nil, nil, delay)&.first || []
+
       ready.each do |reader|
         data = reader.read_nonblock(4096, exception: false)
         next if reader == @reader
         handle = handles.find { |candidate| candidate.readiness_reader == reader }
+
         if data.nil?
           handle&.close_reader
         elsif data.is_a?(String)
@@ -379,6 +393,7 @@ module DecentJob
     # immediate stop does one reap pass and then kills at once.
     def terminate_children(deadline)
       signal_children(@immediate ? "QUIT" : "TERM")
+
       until subprocesses.empty?
         reap_children
         break if subprocesses.empty?
@@ -386,9 +401,11 @@ module DecentJob
         break unless remaining.positive? && !@immediate
         wait_for_wakeup([remaining, 0.05].min)
       end
+
       return if subprocesses.empty?
       @shutdown_timed_out = true unless @immediate
       signal_children("KILL")
+
       subprocesses.each do |pid, handle|
         _, status = Process.wait2(pid)
         instrument_cleanup("cluster_reap", pid: pid, index: handle.index, status: status.exitstatus, signal: status.termsig)

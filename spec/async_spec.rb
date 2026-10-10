@@ -38,6 +38,7 @@ describe "async execution" do
       RecordingJob.perform_later("committed")
       _(RecordingJob.events).must_be_empty
     end
+
     _(Timeout.timeout(5) { RecordingJob.events.pop }).must_equal "committed"
   end
 

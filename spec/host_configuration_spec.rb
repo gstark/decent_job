@@ -69,18 +69,22 @@ describe "host configuration" do
   it "suppresses adapter startup throughout a CLI command and restores the caller context" do
     observed = nil
     output = StringIO.new
+
     DecentJob.stub(:install, -> { observed = DecentJob.async_ready? }) do
       _(DecentJob::CLI.new(stdout: output).run(["migrate"])).must_equal 0
     end
+
     _(observed).must_equal false
     _(DecentJob.async_ready?).must_equal true
   end
 
   it "allows validating cron classes to load an Active Job adapter during Rails configuration" do
     namespace = Module.new
+
     namespace.define_singleton_method(:const_missing) do |name|
       const_set(name, Class.new(ActiveJob::Base) { self.queue_adapter = :decent_job })
     end
+
     Object.const_set(:HostConfigurationCron, namespace)
     host = Module.new
     host.define_singleton_method(:env) { "test" }
@@ -98,10 +102,12 @@ describe "host configuration" do
 
   it "permits selecting adapters inside a configuration block" do
     job_class = Class.new(ActiveJob::Base)
+
     DecentJob.configure do |config|
       config.execution_mode = :external
       job_class.queue_adapter = :decent_job
     end
+
     _(job_class.queue_adapter.execute_external?).must_equal true
   end
 
@@ -131,12 +137,14 @@ describe "host configuration" do
     host.define_singleton_method(:logger) { nil }
     Object.const_set(:Rails, host)
     options = {max_threads: 2}
+
     options.define_singleton_method(:each) do |&block|
       DecentJob.stats
       entered << true
       release.pop
       super(&block)
     end
+
     application = Struct.new(:config).new(Struct.new(:decent_job).new(options))
     configuring = Thread.new { DecentJob.configure_rails(application) }
     Timeout.timeout(3) { entered.pop }

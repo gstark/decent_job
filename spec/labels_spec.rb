@@ -50,10 +50,12 @@ describe DecentJob::ActiveJobExtensions::Labels do
 
   it "resolves callable defaults in the instance context only on first read" do
     calls = 0
+
     dynamic_label = -> {
       calls += 1
       "user-#{arguments.first.fetch(:user_id)}"
     }
+
     LabelledJob.decent_job_labels = ["email", dynamic_label, -> {}]
     job = LabelledJob.new(user_id: 42)
 
@@ -168,6 +170,7 @@ describe DecentJob::ActiveJobExtensions::Labels do
   it "preserves labels added during execution across retries" do
     RetryingLabelledJob.set(decent_job_labels: ["original"]).perform_later
     adapter = RetryingLabelledJob.queue_adapter
+
     3.times do |attempt|
       payload = adapter.enqueued_jobs.shift
       _(payload.fetch("decent_job_labels")).must_equal(attempt.zero? ? ["original"] : ["original", "retried"])

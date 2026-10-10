@@ -141,12 +141,15 @@ module DecentJob
           raise ArgumentError, "configure before opening the database; call reset! to restart" if @database
           @configuration.dup
         end
+
         yield candidate
         candidate.validate!
+
         runtime_mutex.synchronize do
           @configuration = candidate
           @lifecycle_revision = (@lifecycle_revision || 0) + 1
         end
+
         candidate
       end
     end
@@ -173,8 +176,10 @@ module DecentJob
           raise LifecycleInProgress, "runtime is #{@runtime_transition}" if @runtime_transition && !@database
           @configuration
         end
+
         # Cron validation can autoload application job classes.
         candidate.validate!
+
         pool = runtime_mutex.synchronize do
           return if automatic && (@runtime_transition || @stopping || @forking)
           next unless candidate.equal?(@configuration)
@@ -183,6 +188,7 @@ module DecentJob
           raise ArgumentError, "set DECENT_JOB_DATABASE_URL or configure database_url" unless candidate.database_url
           @database ||= Database.new(url: candidate.database_url, pool_size: candidate.pool_size)
         end
+
         return pool if pool
       end
     end
@@ -255,7 +261,9 @@ module DecentJob
         return false if @stopping && (@workers + @cron_managers.values).any? { |resource| !resource.shutdown? }
         @lifecycle_revision ||= 0
       end
+
       connection_pool = database
+
       worker, started_revision = synchronize_resource_start do
         return false unless revision == @lifecycle_revision
         raise ForkInProgress, "runtime is preparing to fork" if @forking
@@ -268,6 +276,7 @@ module DecentJob
         @workers << @worker unless @workers.include?(@worker)
         [@worker.start, @lifecycle_revision]
       end
+
       start_cron(database: connection_pool, expected_revision: started_revision) if @configuration.enable_cron
       worker
     end
@@ -320,8 +329,10 @@ module DecentJob
           @configuration.lower_thread_priority = value
           @workers.dup
         end
+
         workers.each { |worker| worker.lower_thread_priority = value }
       end
+
       value
     end
 
@@ -361,28 +372,34 @@ module DecentJob
         return if automatic && (@stopping || @cron_stopping || @cron_stopped_databases[database])
         @lifecycle_revision ||= 0
       end
+
       return if revision.nil?
       connection_pool = database || self.database
       # Resolve configuration outside the registry lock: constant loading and
       # adapter lookup may call back into DecentJob.
       entries = @configuration.cron_entries(database: connection_pool)
+
       entries.each do |entry|
         klass = entry.job_class
         klass = Support.constantize(klass) if klass.is_a?(String)
         next unless Integrations.job_class?(klass)
         adapter = klass.queue_adapter
+
         unless adapter.is_a?(Adapter) && adapter.database.equal?(connection_pool)
           raise ArgumentError, "Cron jobs must use a DecentJob adapter with the cron entry database"
         end
       end
+
       synchronize_resource_start(automatic: automatic || !expected_revision.nil?) do
         return false unless revision == @lifecycle_revision
         raise ForkInProgress, "runtime is preparing to fork" if @forking
         return if automatic && (@stopping || @cron_stopping || @cron_stopped_databases[connection_pool])
+
         unless automatic
           @cron_stopping = false
           @cron_stopped_databases.delete(connection_pool)
         end
+
         register_exit_hook
         manager = @cron_managers[connection_pool] ||= CronManager.new(entries, **@configuration.cron_manager_options)
         # start only allocates owned threads; application callbacks run later on
@@ -420,6 +437,7 @@ module DecentJob
     def begin_cron_shutdown(database: nil)
       operation = lambda do
         @lifecycle_revision = (@lifecycle_revision || 0) + 1
+
         if database
           @cron_stopped_databases[database] = true
           managers = [@cron_managers[database]].compact
@@ -427,8 +445,10 @@ module DecentJob
           @cron_stopping = true
           managers = @cron_managers.values
         end
+
         ResourceShutdown.capture_all(managers)
       end
+
       runtime_mutex.owned? ? operation.call : runtime_mutex.synchronize(&operation)
     end
 
@@ -492,14 +512,17 @@ module DecentJob
           restart_handles.each { |handle| handle.restart_failed(:refused) }
           return false
         end
+
         @lifecycle_revision += 1
         @stopping = false
         @cron_stopping = false
         locally_stopped_cron = @cron_managers.filter_map { |pool, manager| manager if @cron_stopped_databases[pool] }
+
         restarted = restart_handles.map do |handle|
           next true if @locally_stopped_workers&.include?(handle.resource) || locally_stopped_cron.include?(handle.resource)
           handle.restart
         end.all?
+
         restarted ? self : false
       end
     end
@@ -518,12 +541,15 @@ module DecentJob
         @stopping = true
         @cron_stopping = true
         handles = ResourceShutdown.capture_all(@cron_managers.values + @workers)
+
         if restarting
           locally_stopped_cron = @cron_managers.filter_map { |pool, manager| manager if @cron_stopped_databases[pool] }
+
           restart_handles = handles.reject do |handle|
             @locally_stopped_workers&.include?(handle.resource) || locally_stopped_cron.include?(handle.resource)
           end
         end
+
         [@lifecycle_revision, handles, restart_handles]
       end
     end
@@ -586,22 +612,28 @@ module DecentJob
       with_runtime_transition(:resetting) do
         failure = nil
         stopped = false
+
         begin
           stopped = shutdown
         rescue Exception => error # standard:disable Lint/RescueException
           failure = error
           stopped = runtime_mutex.synchronize { (@workers + @cron_managers.values).all?(&:shutdown?) }
         end
+
         unless stopped
           raise failure if failure
           return false
         end
+
         pool = runtime_mutex.synchronize { @database }
+
         if pool && manually_owned_database?(pool)
           raise failure if failure
           return false
         end
+
         adapters = runtime_mutex.synchronize { @adapters&.keys || [] }
+
         adapters.each do |adapter|
           adapter.shutdown(timeout: 0)
         rescue Exception => error # standard:disable Lint/RescueException
@@ -609,7 +641,9 @@ module DecentJob
         ensure
           adapter.retire
         end
+
         pool&.close
+
         runtime_mutex.synchronize do
           @adapters = ObjectSpace::WeakMap.new
           @rails_ready = nil unless defined?(DecentJob::Railtie)
@@ -623,6 +657,7 @@ module DecentJob
           @database = nil
           @configuration = Configuration.new
         end
+
         # Adapter.new takes the runtime lock, so clear outside it.
         @default_adapter_mutex.synchronize { @default_adapter = nil }
         raise failure if failure
@@ -664,6 +699,7 @@ module DecentJob
       if !limit.nil? && (!limit.is_a?(Integer) || limit.negative?)
         raise ArgumentError, "limit must be a nonnegative integer or nil"
       end
+
       return 0 if limit == 0
 
       performer = Performer.new(database: database)

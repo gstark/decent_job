@@ -46,6 +46,7 @@ describe "inline execution" do
       RecordingJob.perform_later("committed")
       _(RecordingJob.events).must_be_empty
     end
+
     _(RecordingJob.events.pop).must_equal "committed"
   end
 
@@ -56,11 +57,13 @@ describe "inline execution" do
         raise "abort"
       end
     }.must_raise RuntimeError
+
     _(RecordingJob.events).must_be_empty
   end
 
   it "raises unhandled job errors after recording the attempt" do
     _ { FailingJob.perform_later }.must_raise RuntimeError
+
     database.with_connection do |connection|
       _(connection.exec("SELECT state FROM decent_job_executions").column_values(0)).must_equal ["discarded"]
     end
@@ -85,6 +88,7 @@ describe "inline execution" do
   it "buffers nested inline jobs without growing the Ruby call stack" do
     InlineChainJob.perform_later(200)
     _(RecordingJob.events.pop).must_equal "finished chain"
+
     database.with_connection do |connection|
       _(connection.exec("SELECT count(*) FROM decent_jobs WHERE state = 'succeeded'").getvalue(0, 0)).must_equal "201"
     end
