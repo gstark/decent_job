@@ -1,15 +1,17 @@
-name: CI
+# Depot CI Migration
+# Source: .github/workflows/ci.yml
+#
+# No changes were necessary.
 
+name: CI
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
-
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   lint:
     name: Lint and build
@@ -22,7 +24,6 @@ jobs:
           bundler-cache: true
       - run: bundle exec standardrb
       - run: gem build decent_job.gemspec
-
   specs:
     name: Specs (Ruby ${{ matrix.ruby }}, PostgreSQL ${{ matrix.postgres }})
     runs-on: depot-ubuntu-24.04-4
@@ -44,10 +45,7 @@ jobs:
           POSTGRES_DB: decent_job_test
         ports: ['5432:5432']
         options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       DECENT_JOB_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/decent_job_test
     steps:
@@ -57,7 +55,6 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
       - run: bundle exec rake spec
-
   pgbouncer:
     name: PgBouncer transaction pooling
     runs-on: depot-ubuntu-24.04
@@ -69,10 +66,7 @@ jobs:
           POSTGRES_DB: decent_job_test
         ports: ['5432:5432']
         options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       DECENT_JOB_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/decent_job_test
     steps:
@@ -83,7 +77,6 @@ jobs:
           bundler-cache: true
       - run: sudo apt-get update && sudo apt-get install -y pgbouncer
       - run: bundle exec rake spec:pgbouncer
-
   rails:
     name: Rails integration
     runs-on: depot-ubuntu-24.04
@@ -95,10 +88,7 @@ jobs:
           POSTGRES_DB: decent_job_test
         ports: ['5432:5432']
         options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       DECENT_JOB_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/decent_job_test
       BUNDLE_GEMFILE: gemfiles/rails.gemfile
