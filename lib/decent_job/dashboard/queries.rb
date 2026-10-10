@@ -164,6 +164,7 @@ module DecentJob
           #{"WHERE #{where.join(" AND ")}" unless where.empty?}
           ORDER BY decent_jobs.created_at DESC, decent_jobs.id DESC LIMIT $#{params.size}
         SQL
+
         page(rows, limit)
       end
 
@@ -171,6 +172,7 @@ module DecentJob
       # @return [Array<String>] ids of at most 10000 matching jobs, newest first
       def job_ids(filter)
         where, params = job_conditions(filter)
+
         query("SELECT id FROM decent_jobs #{"WHERE #{where.join(" AND ")}" unless where.empty?} ORDER BY created_at DESC, id DESC LIMIT 10000", params).map { |row| row.fetch("id") }
       end
 
@@ -178,6 +180,7 @@ module DecentJob
       # @return [Integer] number of matching jobs
       def job_count(filter)
         where, params = job_conditions(filter)
+
         query("SELECT count(*) AS count FROM decent_jobs #{"WHERE #{where.join(" AND ")}" unless where.empty?}", params).first.fetch("count").to_i
       end
 
@@ -237,6 +240,7 @@ module DecentJob
           #{where}
           ORDER BY b.created_at DESC, b.id DESC LIMIT $#{params.size}
         SQL
+
         page(rows, limit)
       end
 
@@ -244,7 +248,10 @@ module DecentJob
       # @return [Hash{String => Object}, nil] the decoded batch row, or nil
       def batch(id)
         row = query("SELECT * FROM decent_job_batches WHERE id = $1", [id]).first
-        decode_batch(row) if row
+
+        if row
+          decode_batch(row)
+        end
       end
 
       # @param id [String] batch UUID
@@ -445,6 +452,7 @@ module DecentJob
         more = rows.size > limit
         rows = rows.first(limit)
         cursor = more && rows.last && [rows.last.fetch("created_at").utc.iso8601(6), rows.last.fetch("id")]
+
         Page.new(rows: rows, next_cursor: cursor || nil)
       end
 
@@ -452,6 +460,7 @@ module DecentJob
       # break the schedules page.
       def safe_next_at(entry, last_job)
         previously = last_job && (last_job["cron_at"] || last_job["created_at"])
+
         entry.next_at(previously_at: previously)
       rescue => error
         error

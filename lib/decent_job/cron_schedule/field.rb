@@ -80,14 +80,30 @@ module DecentJob
         first = match[2] && number(match[2])
         last = match[3] && number(match[3])
         step = match[4]&.to_i
-        raise ArgumentError, "cron step must be positive" if step == 0
-        return weekday_values(first, last, step) if @kind == :weekdays
-        return [nil] if first.nil? && step.nil?
-        return [first] if first && last.nil? && step.nil?
+
+        if step == 0
+          raise ArgumentError, "cron step must be positive"
+        end
+
+        if @kind == :weekdays
+          return weekday_values(first, last, step)
+        end
+
+        if first.nil? && step.nil?
+          return [nil]
+        end
+
+        if first && last.nil? && step.nil?
+          return [first]
+        end
 
         first ||= @min
         last = @max if last.nil? || (last < 0 && first > 0)
-        return [nil] if first == @min && last == @max && (step || 1) == 1
+
+        if first == @min && last == @max && (step || 1) == 1
+          return [nil]
+        end
+
         raise ArgumentError, "mixed positive and negative bounds" if first < 0 && last > 0
 
         lower, upper = (first < 0) ? [-@max, -1] : [@min, @max]
@@ -129,9 +145,18 @@ module DecentJob
 
       def number(value)
         normalized = value.downcase
-        return -1 if %w[l last].include?(normalized)
-        return MONTHS.index(normalized) + 1 if @kind == :months && MONTHS.include?(normalized)
-        return WEEKDAYS.index(normalized) if @kind == :weekdays && WEEKDAYS.include?(normalized)
+
+        if %w[l last].include?(normalized)
+          return -1
+        end
+
+        if @kind == :months && MONTHS.include?(normalized)
+          return MONTHS.index(normalized) + 1
+        end
+
+        if @kind == :weekdays && WEEKDAYS.include?(normalized)
+          return WEEKDAYS.index(normalized)
+        end
 
         Integer(normalized, 10)
       end

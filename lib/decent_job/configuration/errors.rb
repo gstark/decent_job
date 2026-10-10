@@ -21,6 +21,7 @@ module DecentJob
       # original.
       def initialize_copy(original)
         super
+
         @messages = original.to_h
       end
 

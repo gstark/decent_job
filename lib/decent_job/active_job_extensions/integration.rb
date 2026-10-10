@@ -17,6 +17,7 @@ module DecentJob
     class Integration
       # Active Job events that report the outcome of one perform.
       EVENTS = /\A(?:perform|enqueue_retry|discard|retry_stopped)\.active_job\z/
+
       # Maps an Active Job event name to the decent_jobs.error_event value.
       ERROR_EVENTS = {"enqueue_retry" => "retried", "discard" => "discarded", "retry_stopped" => "retry_stopped"}.freeze
 

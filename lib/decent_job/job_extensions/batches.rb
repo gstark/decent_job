@@ -39,6 +39,7 @@ module DecentJob
 
         database = context.fetch(:database)
         row = Store.new(database).find(context.fetch(:id))
+
         Batch.find(row.fetch("batch_id"), database: database) if row && row["batch_id"]
       end
       alias_method :batch?, :batch

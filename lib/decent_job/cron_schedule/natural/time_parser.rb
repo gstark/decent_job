@@ -24,6 +24,7 @@ module DecentJob
 
         def meridian
           value = take(/[ \t]*(?:am|AM|pm|PM|[Nn]oon|[Mm]idday|[Mm]idnight)/)
+
           value&.strip&.downcase
         end
 
@@ -51,12 +52,16 @@ module DecentJob
           return unless value
 
           hour, minute = value.split(":").map(&:to_i)
+
           adjusted_time(hour, minute, meridian)
         end
 
         def simple_time
           value = take(/24|23|22|21|20|19|18|17|16|15|14|13|12|11|10|9|8|7|6|5|4|3|2|1|0/)
-          adjusted_time(value.to_i, 0, meridian) if value
+
+          if value
+            adjusted_time(value.to_i, 0, meridian)
+          end
         end
 
         def named_time
@@ -65,12 +70,14 @@ module DecentJob
 
           take(/[ \t]*dark/i)
           minute_name = attempt { take(/[ \t]+/) && take(Vocabulary::MINUTE_PATTERN) }
+
           # The reference recognizes names without regard to case, then looks
           # up their original spelling. A missing hour can still combine with
           # another time clause, so defer validation until cron compilation.
           hour = Vocabulary::HOUR_NAMES[name]
           minute = minute_name ? Vocabulary::MINUTE_NAMES.fetch(minute_name, minute_name) : 0
           suffix = meridian
+
           adjusted_time(hour, minute, suffix)
         end
 

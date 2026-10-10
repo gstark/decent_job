@@ -34,10 +34,13 @@ module DecentJob
         ORDINALS = begin
           suffixes = {1 => "st", 2 => "nd", 3 => "rd", 21 => "st", 22 => "nd", 23 => "rd", 31 => "st"}
           days = (1..31).to_h { |day| ["#{day}#{suffixes[day] || "th"}", day] }
+
           # The pinned grammar also accepts 21th, 22th, and 23th.
           days.merge!((4..30).to_h { |day| ["#{day}th", day] })
           days["last"] = "L"
+
           ORDINAL_NAMES.each_with_index { |name, index| days[name] = index + 1 }
+
           days.freeze
         end
 

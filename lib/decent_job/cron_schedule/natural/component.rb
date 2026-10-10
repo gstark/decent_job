@@ -48,6 +48,7 @@ module DecentJob
         # @api private
         def merge(other)
           combined = values.each_index.map { |index| combine(other, index) }
+
           self.class.new(key, *combined)
         end
 
@@ -61,11 +62,13 @@ module DecentJob
         def hour_range
           value = values[0]
           return unless key == :time && values[1] == 0
+
           # The reference cannot combine whole-hour points with a stronger
           # minute constraint. Reject it through the public parse contract.
           raise ArgumentError, "incompatible whole-hour point" unless value.is_a?(String)
 
           match = /\A(\d+)-(\d+)\z/.match(value)
+
           match&.captures&.map(&:to_i)
         end
 
@@ -90,11 +93,25 @@ module DecentJob
             return (first == last - 1) ? first : "#{first}-#{last - 1}"
           end
 
-          return left if strong == index || strong == true
-          return right if other.strong == index || other.strong == true
-          return left if other.weak == index || other.weak == true
-          return right if weak == index || weak == true
-          return ["*"] if left == "*" && right == "*"
+          if strong == index || strong == true
+            return left
+          end
+
+          if other.strong == index || other.strong == true
+            return right
+          end
+
+          if other.weak == index || other.weak == true
+            return left
+          end
+
+          if weak == index || weak == true
+            return right
+          end
+
+          if left == "*" && right == "*"
+            return ["*"]
+          end
 
           ((left == "*") ? [] : Array(left)) + ((right == "*") ? [] : Array(right))
         end

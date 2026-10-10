@@ -63,7 +63,10 @@ module DecentJob
       # @return [String] the queue name. A Proc from queue_as runs once, on
       #   first read, and its result replaces it.
       def queue_name
-        @queue_name = self.class.queue_name_from_part(instance_exec(&@queue_name)) if @queue_name.is_a?(Proc)
+        if @queue_name.is_a?(Proc)
+          @queue_name = self.class.queue_name_from_part(instance_exec(&@queue_name))
+        end
+
         @queue_name
       end
 
@@ -71,7 +74,10 @@ module DecentJob
       #   queue_with_priority runs once, on first read, and its result
       #   replaces it.
       def priority
-        @priority = instance_exec(&@priority) if @priority.is_a?(Proc)
+        if @priority.is_a?(Proc)
+          @priority = instance_exec(&@priority)
+        end
+
         @priority
       end
 
@@ -100,6 +106,7 @@ module DecentJob
         self.scheduled_at = options[:wait_until] if options[:wait_until]
         self.queue_name = self.class.queue_name_from_part(options[:queue]) if options[:queue]
         self.priority = options[:priority].to_i if options[:priority]
+
         self
       end
 
@@ -115,6 +122,7 @@ module DecentJob
       # @note A scheduled_at value goes to the adapter as epoch seconds.
       def enqueue(options = {})
         set(options)
+
         self.successfully_enqueued = false
         self.enqueue_error = nil
 
@@ -147,8 +155,11 @@ module DecentJob
       #   after_discard blocks run before it is raised.
       def perform_now
         @decent_job_outcome = nil
+
         self.executions = (executions || 0) + 1
+
         deserialize_arguments_if_needed
+
         run_callbacks(:perform) { perform(*arguments) }
       rescue Exception => exception # standard:disable Lint/RescueException
         handled = rescue_with_handler(exception)
@@ -203,6 +214,7 @@ module DecentJob
 
       # Runs after every enqueue callback, just before the adapter call.
       def before_adapter_enqueue
+        # Nothing to do here
       end
 
       # Called by extensions and {Job#job_instance} through send. On failure

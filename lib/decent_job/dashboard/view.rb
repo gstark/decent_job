@@ -52,6 +52,7 @@ module DecentJob
       # @raise [ArgumentError] when no template has this name
       def render(name, assigns = {})
         assigns.each { |key, value| instance_variable_set("@#{key}", value) }
+
         template(name).result(binding)
       end
 
@@ -63,6 +64,7 @@ module DecentJob
       def layout(name, assigns = {})
         @page_name = name
         content = render(name, assigns)
+
         render("layout", content: content)
       end
 

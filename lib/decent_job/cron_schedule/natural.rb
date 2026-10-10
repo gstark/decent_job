@@ -86,6 +86,7 @@ module DecentJob
         number = /(?:\d+\.\d*|(?:\d*\.)?\d+)/
         unit = /(?i:y(?:ears?)?|w(?:eeks?)?|d(?:ays?)?|h(?:ours?)?|s(?:ec(?:ond)?)?s?)|M|months?|m(?:in(?:ute)?s?)?/
         token = /[-+]?#{number} *(?:#{unit})/
+
         @source.match?(/\A(?:#{token}(?:[ \t,]+|(?i:and))*)*(?:#{token}|[-+]?#{number})\z/)
       end
 
@@ -96,6 +97,7 @@ module DecentJob
         return unless match && match.begin(0) == @position
 
         @position = match.end(0)
+
         match[0]
       end
 
@@ -103,13 +105,16 @@ module DecentJob
       def attempt(method = nil)
         start = @position
         result = method ? send(method) : yield
+
         @position = start unless result
+
         result
       end
 
       def choice(*methods)
         methods.each do |method|
           result = attempt(method)
+
           return result if result
         end
 
@@ -190,7 +195,10 @@ module DecentJob
 
       def ordinal
         value = take(ORDINAL_PATTERN)
-        ORDINALS[value.downcase] if value
+
+        if value
+          ORDINALS[value.downcase]
+        end
       end
 
       # "every 1st and 15th of the month" keeps only the first day, as the
@@ -253,7 +261,10 @@ module DecentJob
 
         keyword("the")
         last = attempt(:ordinal)
-        component(:monthday, "#{first}-#{last}") if last
+
+        if last
+          component(:monthday, "#{first}-#{last}")
+        end
       end
 
       def on
@@ -322,7 +333,10 @@ module DecentJob
       def timezone
         take(/(?:in|on)[ \t]+/i)
         value = take(/[A-Z][a-zA-Z0-9+-]+(?:\/[A-Z][a-zA-Z0-9+\-_]+){0,2}/) || take(/Z|UTC/) || take(/[-+](?:[01][0-9]|2[0-4])(?::?(?:00|15|30|45))?/)
-        component(:zone, value) if value
+
+        if value
+          component(:zone, value)
+        end
       end
     end
   end

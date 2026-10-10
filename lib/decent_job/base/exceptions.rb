@@ -28,6 +28,7 @@ module DecentJob
         def handles?(exception)
           classes.any? do |klass|
             klass = Support.constantize(klass) if klass.is_a?(String)
+
             exception.is_a?(klass)
           end
         end
@@ -121,7 +122,9 @@ module DecentJob
         def discard_on(*exceptions, &block)
           rescue_from(*exceptions) do |error|
             record_outcome(:discarded, error)
+
             block&.call(self, error)
+
             run_after_discard_procs(error)
           end
         end
@@ -173,8 +176,13 @@ module DecentJob
         return rescue_with_handler(exception.cause, visited) unless handler
 
         callback = handler.callback
-        callback = method(callback) if callback.is_a?(Symbol) || callback.is_a?(String)
+
+        if callback.is_a?(Symbol) || callback.is_a?(String)
+          callback = method(callback)
+        end
+
         callback.arity.zero? ? instance_exec(&callback) : instance_exec(exception, &callback)
+
         exception
       end
 

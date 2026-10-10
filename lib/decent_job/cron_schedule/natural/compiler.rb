@@ -49,8 +49,15 @@ module DecentJob
         def compile
           hours, minutes = first_time_group
           fields = [field(:second, "0"), minutes, hours, field(:monthday), field(:month), field(:weekday)]
-          fields << field(:zone) if @fields[:zone]
-          fields.shift if fields.first == ["0"]
+
+          if @fields[:zone]
+            fields << field(:zone)
+          end
+
+          if fields.first == ["0"]
+            fields.shift
+          end
+
           fields.map { |values| values.uniq.sort_by { |value| value.is_a?(Numeric) ? value : 999_999 }.join(",") }.join(" ")
         end
 

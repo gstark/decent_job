@@ -182,6 +182,7 @@ module DecentJob
         end
 
         run.call(0)
+
         halted ? false : value
       end
     end

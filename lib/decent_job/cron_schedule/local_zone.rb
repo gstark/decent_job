@@ -49,6 +49,7 @@ module DecentJob
         offsets = [-172_800, 0, 172_800].map { |delta| (native + delta).getlocal.utc_offset }.uniq
         matches = offsets.map { |offset| Time.at(wall.to_i - offset).utc }
           .select { |time| local_seconds(time) == wall.to_i }
+
         return matches.min unless matches.empty?
 
         # The wall time lies in a gap. Find its transition rather than retain

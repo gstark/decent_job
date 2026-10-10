@@ -39,7 +39,9 @@ module DecentJob
         # @note Rewrites _enqueue_callbacks on this class and every subclass.
         def set_callback(name, *filters, &block)
           result = super
+
           move_decent_job_enqueue_check_last if name.to_sym == :enqueue
+
           result
         end
 
