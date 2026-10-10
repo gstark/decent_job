@@ -1,0 +1,38 @@
+# Run `just` to set up and start everything. Ctrl-C stops all of it.
+
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+default: start
+
+# Install gems, create the database if needed, and run migrations. Safe to repeat.
+setup:
+    bundle install --quiet
+    bin/setup
+
+# Start the worker, the dashboard, and the looping seeder. Ctrl-C stops them all.
+start: setup
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pids=()
+    stopped=
+    stop() {
+      [[ -n "$stopped" ]] && return
+      stopped=1
+      trap - INT TERM
+      echo
+      echo "stopping"
+      kill -TERM "${pids[@]}" 2>/dev/null || true
+      wait "${pids[@]}" 2>/dev/null || true
+    }
+    trap 'stop; exit 0' INT TERM
+    bin/worker & pids+=($!)
+    bin/dashboard & pids+=($!)
+    bin/seed --loop & pids+=($!)
+    echo "worker, dashboard (http://127.0.0.1:${PORT:-7002}/), and seeder running. Ctrl-C to stop."
+    # Exit when any process dies, so a failed start does not sit there silently.
+    wait -n "${pids[@]}" || true
+    stop
+
+# Open an IRB session with the jobs loaded.
+console:
+    bin/console

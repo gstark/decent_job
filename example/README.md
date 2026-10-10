@@ -7,7 +7,18 @@ A small application that enqueues every kind of job DecentJob supports, so you c
 - Ruby 3.2 or newer
 - PostgreSQL with a role that can create a database
 
-## Set up
+## Quick start
+
+With [just](https://just.systems) installed, one command does the setup and starts everything:
+
+```sh
+cd example
+just
+```
+
+Ctrl-C stops the worker, the dashboard, and the seeder. `just setup` runs only the setup, and `just console` opens IRB with the jobs loaded.
+
+## Set up by hand
 
 ```sh
 cd example
@@ -44,7 +55,7 @@ Run `bin/seed` without `--loop` for a single round.
 | `ExactlyOnceJob` | `InterruptErrors` so a crashed attempt fails instead of rerunning |
 | `InvoiceJob` and `BatchSummaryJob` | Batches with finish, success, and discard callbacks |
 | `HeartbeatJob`, `DigestJob`, `CleanupJob` | Recurring schedules, including one disabled by default |
-| `LegacyNotificationJob` | The Active Job bridge with labels and retries |
+| `NotificationJob` | Fixed-wait retries and a label built from a keyword argument |
 
 ## Things to try
 

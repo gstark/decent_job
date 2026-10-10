@@ -3,12 +3,7 @@
 # Job classes that exercise every DecentJob feature. The worker and the
 # dashboard both load this file.
 require "decent_job"
-require "active_job"
-require "decent_job/active_job"
 require "net/http"
-
-ActiveJob::Base.queue_adapter = :decent_job
-ActiveJob::Base.logger = Logger.new(File::NULL)
 
 module Example
   class UpstreamTimeout < StandardError; end
@@ -151,17 +146,15 @@ class CleanupJob < DecentJob::Base
   end
 end
 
-# The Active Job bridge, with the same labels and concurrency extensions.
-class LegacyNotificationJob < ActiveJob::Base
-  include DecentJob::ActiveJobExtensions::Concurrency
-
+# Fixed-wait retries with a channel label.
+class NotificationJob < DecentJob::Base
   queue_as :mailers
-  self.decent_job_labels = ["legacy"]
+  self.decent_job_labels = [-> { "channel:#{arguments.last.fetch(:channel, "push")}" }]
   retry_on Example::UpstreamTimeout, wait: 10, attempts: 3
 
   def perform(user_id, channel: "push")
     Example.work(rand(0.05..0.2))
-    raise Example::UpstreamTimeout, "push gateway timed out" if rand < 0.2
+    raise Example::UpstreamTimeout, "#{channel} gateway timed out" if rand < 0.2
   end
 end
 

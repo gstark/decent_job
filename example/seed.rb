@@ -18,7 +18,7 @@ module Seed
     imports
     account_syncs
     batches
-    legacy
+    notifications
     exactly_once
     long_running if number == 1
     pauses if number == 1
@@ -63,8 +63,8 @@ module Seed
     end
   end
 
-  def legacy
-    5.times { |i| LegacyNotificationJob.perform_later(3000 + i, channel: i.even? ? "push" : "sms") }
+  def notifications
+    5.times { |i| NotificationJob.perform_later(3000 + i, channel: i.even? ? "push" : "sms") }
   end
 
   def exactly_once
@@ -90,9 +90,13 @@ end
 
 loop_mode = ARGV.include?("--loop")
 number = 1
-loop do
-  Seed.round(number)
-  break unless loop_mode
-  number += 1
-  sleep 20
+begin
+  loop do
+    Seed.round(number)
+    break unless loop_mode
+    number += 1
+    sleep 20
+  end
+rescue SignalException
+  nil
 end
