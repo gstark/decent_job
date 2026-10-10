@@ -68,7 +68,8 @@ describe DecentJob::Dashboard do
       status, headers, body = get("/")
       _(status).must_equal 200
       _(headers["content-type"]).must_include "text/html"
-      _(headers["content-security-policy"]).must_include "script-src 'self'"
+      _(headers["content-security-policy"]).must_include "script-src 'self';"
+      _(headers["content-security-policy"]).must_include "style-src 'self' 'unsafe-inline'"
       _(body).must_include "Right now"
       _(body).must_include 'data-count-for="queued">1<'
       _(body).must_include 'data-count-for="scheduled">1<'

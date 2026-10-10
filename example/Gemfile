@@ -1,0 +1,5 @@
+source "https://rubygems.org"
+
+gem "decent_job", path: ".."
+gem "activejob", "~> 8.1"
+gem "webrick", "~> 1.9"

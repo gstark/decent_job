@@ -3,3 +3,5 @@
 /pkg/
 /tmp/
 *.gem
+/example/Gemfile.lock
+/example/.bundle/

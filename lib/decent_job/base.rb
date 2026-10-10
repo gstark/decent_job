@@ -33,6 +33,15 @@ module DecentJob
     setting :after_discard_procs, [].freeze
     setting :queue_adapter, nil
 
+    class << self
+      alias_method :explicit_queue_adapter, :queue_adapter
+      # A class without its own adapter shares the default one, as its
+      # instances do, so batch and cron validation see the same adapter.
+      def queue_adapter
+        explicit_queue_adapter || DecentJob.default_adapter
+      end
+    end
+
     class ConfiguredJob
       def initialize(job_class, options)
         @job_class = job_class

@@ -300,7 +300,7 @@ module DecentJob
 
     def default_headers(request)
       {"x-content-type-options" => "nosniff", "x-frame-options" => "SAMEORIGIN", "referrer-policy" => "same-origin",
-       "content-security-policy" => "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'self'"}
+       "content-security-policy" => "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'self'"}
     end
 
     def cookie(name, value, request, expire: false, http_only: true)

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+exec bundle exec decent_job start --require ./jobs.rb \
+  --queues "mailers:2;reports,sync:2;webhooks,slow,default,paused:3" \
+  --enable-cron --probe-port 7001 --shutdown-timeout 25 "$@"

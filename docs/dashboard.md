@@ -57,7 +57,7 @@ The standalone server uses WEBrick, which is not a dependency of the gem. Add `g
 ## Security
 
 - Every state change is a POST with a form token. The token is a random value in a `SameSite=Lax; HttpOnly` cookie scoped to the mount path and repeated in each form. A mismatch returns 400.
-- Responses set a content security policy that allows only the dashboard's own stylesheet and script, `X-Content-Type-Options`, `X-Frame-Options`, and `Referrer-Policy`.
+- Responses set a content security policy that allows only the dashboard's own script and stylesheet plus inline `style` attributes, which the charts use for bar sizes. Scripts can never run inline. `X-Content-Type-Options`, `X-Frame-Options`, and `Referrer-Policy` are also set.
 - Only two asset paths are served, from an allowlist. Path traversal returns 404.
 - All job data is escaped before it reaches markup. Serialized arguments and errors never become executable content.
 - Redirects after actions stay inside the mount path. A foreign `Referer` falls back to the dashboard root.

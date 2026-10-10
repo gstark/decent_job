@@ -1,0 +1,3 @@
+worker: bin/worker
+dashboard: bin/dashboard
+seed: bin/seed --loop
