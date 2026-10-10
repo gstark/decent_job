@@ -40,10 +40,12 @@ describe "cron entries" do
   it "passes previous occurrence to callable schedules and handles expressions and times" do
     previous = Time.utc(2026, 1, 1)
     received = []
+
     entry = DecentJob::CronEntry.new(key: :daily, cron: ->(last) {
       received << last
       "@daily UTC"
     })
+
     _(entry.next_at(previously_at: previous, after: previous)).must_equal previous + 86400
     _(entry.within(previous..(previous + 172800), previously_at: previous)).must_equal [previous + 86400]
     _(received).must_equal [previous, previous]
@@ -66,11 +68,13 @@ describe "cron entries" do
     configuration.cron = []
     _ { configuration.validate! }.must_raise ArgumentError
   end
+
   it "does not accept static Time schedules" do
     entry = DecentJob::CronEntry.new(key: :invalid, cron: Time.now)
     _(entry.valid?).must_equal false
     _(entry.next_at).must_be_nil
   end
+
   it "uses global configuration when an explicit nil configuration is supplied" do
     _(DecentJob::CronEntry.all(configuration: nil)).must_equal []
     _ { DecentJob::CronEntry.find(:absent, configuration: nil) }.must_raise KeyError

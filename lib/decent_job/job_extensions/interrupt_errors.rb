@@ -12,9 +12,11 @@ module DecentJob
         base.around_perform do |job, block|
           context = Current.execution
           adapter = job.queue_adapter
+
           if context && context[:job_id] == job.job_id && adapter.is_a?(Adapter) && adapter.database.equal?(context[:database]) && context[:execution_interrupted]
             raise InterruptError, "Interrupted after starting perform at '#{context[:execution_interrupted]}'"
           end
+
           block.call
         end
       end

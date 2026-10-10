@@ -21,9 +21,11 @@ if ENV["DECENT_JOB_HEALTH_SPEC_CONNECTION"]
     configuration.cleanup_interval_seconds = false
     configuration.probe_port = Integer(ENV.fetch("DECENT_JOB_HEALTH_CONFIG_PORT")) if ENV["DECENT_JOB_HEALTH_CONFIG_PORT"]
     configuration.on_thread_error = ->(error) { File.open(ENV.fetch("DECENT_JOB_HEALTH_ERRORS"), "a") { |file| file.puts "#{error.class}: #{error.message}" } }
+
     if ENV["DECENT_JOB_HEALTH_CUSTOM_APP"]
       configuration.probe_app = ->(env) { [207, {"Content-Type" => "text/plain"}, ["#{env.fetch("REQUEST_METHOD")} #{env.fetch("PATH_INFO")}?#{env.fetch("QUERY_STRING")} café"]] }
     end
+
     if ENV["DECENT_JOB_HEALTH_BLOCKING_APP"]
       configuration.probe_app = lambda do |env|
         if env.fetch("PATH_INFO") == "/hold"
@@ -37,5 +39,6 @@ if ENV["DECENT_JOB_HEALTH_SPEC_CONNECTION"]
       end
     end
   end
+
   HealthServicesJob.queue_adapter = :decent_job
 end

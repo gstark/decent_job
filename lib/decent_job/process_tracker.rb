@@ -32,10 +32,12 @@ module DecentJob
     def register(stopping: -> { false }, wait_for_monitor: true)
       raise ForkedDatabase, "create a new process tracker after forking" if @pid != Process.pid
       registered = false
+
       loop do
         previous = DecentJob.synchronize_resource_start(skip_during_fork: true) do
           @mutex.synchronize do
             return nil if @stopped
+
             if @monitor&.alive? && @registrations.zero?
               @monitor
             else
@@ -44,24 +46,30 @@ module DecentJob
                 registered = true
                 @monitor = Thread.new { Thread.handle_interrupt(Object => :immediate) { monitor } } unless @monitor&.alive?
               end
+
               nil
             end
           end
         end
+
         break if registered
         return nil unless previous
         previous.join
       end
+
       loop do
         return nil if stopping.call
+
         ready, stopped, failure = @mutex.synchronize do
           @condition.wait(@mutex, 0.05) unless @ready || @stopped
           [@ready, @stopped, @failure]
         end
+
         raise failure if failure
         return nil if stopped
         break if ready
       end
+
       yield process_id
     ensure
       if registered
@@ -72,6 +80,7 @@ module DecentJob
             @registrations.zero? ? @monitor : nil
           end
         end
+
         # Workers drain the monitor under their shared shutdown deadline.
         # Standalone leases retain their synchronous cleanup guarantee.
         last&.join if wait_for_monitor && Thread.current.status != "aborting"
@@ -90,10 +99,12 @@ module DecentJob
 
     def stop
       return if @pid != Process.pid
+
       @mutex.synchronize do
         @stopped = true
         @condition.broadcast
       end
+
       self
     end
 
@@ -107,18 +118,23 @@ module DecentJob
 
     def monitor
       connection = nil
+
       loop do
         break unless registered?
+
         begin
           unless connection
             connection = @database.connect
+
             if @mode == "advisory"
               connection.exec_params("SELECT pg_advisory_lock(hashtextextended(current_schema() || '.decent_job_processes.' || $1, 0))", [process_id])
             end
           end
+
           # Registration may wait inside an application executor. A reloader
           # could wait for that parent; heartbeat work only needs its executor.
           DecentJob.wrap_execution(reload: false) { refresh(connection) }
+
           @mutex.synchronize do
             @ready = true
             @condition.broadcast
@@ -140,6 +156,7 @@ module DecentJob
         @stopped = true
         @condition.broadcast
       end
+
       raise
     ensure
       begin
@@ -150,6 +167,7 @@ module DecentJob
         report_error(error)
       ensure
         connection&.finish unless connection&.finished?
+
         @mutex.synchronize do
           @ready = false
           @condition.broadcast

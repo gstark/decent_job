@@ -14,6 +14,7 @@ module DecentJob
         raise LifecycleInProgress, "runtime is #{@runtime_transition}" if @runtime_transition
         block.call
       }
+
       LifecycleEvents.defer do
         runtime_mutex.owned? ? operation.call : runtime_mutex.synchronize(&operation)
       end
@@ -21,6 +22,7 @@ module DecentJob
 
     def with_runtime_transition(name)
       acquired = false
+
       Thread.handle_interrupt(Object => :never) do
         runtime_mutex.synchronize do
           raise LifecycleInProgress, "runtime is #{@runtime_transition}" if @runtime_transition
@@ -29,6 +31,7 @@ module DecentJob
           acquired = true
         end
       end
+
       yield
     ensure
       if acquired
@@ -41,6 +44,7 @@ module DecentJob
     def with_prepared_fork
       owner = Process.pid
       previous = nil
+
       Thread.handle_interrupt(Object => :never) do
         previous = runtime_mutex.synchronize do
           raise ForkInProgress, "runtime is already preparing to fork" if @forking
@@ -49,6 +53,7 @@ module DecentJob
           [@stopping, @cron_stopping]
         end
       end
+
       raise ForkInProgress, "workers or cron did not drain before fork" unless shutdown(timeout: configuration.shutdown_timeout)
       run_lifecycle_hooks(:before_supervisor_fork)
       live_worker = ObjectSpace.each_object(Worker).any? { |worker| !worker.shutdown? }
@@ -100,14 +105,18 @@ module DecentJob
         options.each { |name, value| candidate.public_send("#{name}=", value) }
         candidate.validate!
         resources = runtime_mutex.synchronize { !@workers.empty? || !@cron_managers.empty? }
+
         if resources && !shutdown(timeout: candidate.shutdown_timeout)
           raise ArgumentError, "workers or cron did not drain before CLI configuration"
         end
+
         if ObjectSpace.each_object(Performer).any?(&:active?)
           raise ArgumentError, "executions must drain before CLI configuration"
         end
+
         adapters = runtime_mutex.synchronize { @adapters&.keys || [] }
         adapters.each(&:reset_worker)
+
         runtime_mutex.synchronize do
           @configuration = candidate
           @database&.resize(candidate.pool_size)
@@ -118,6 +127,7 @@ module DecentJob
           @stopping = @cron_stopping = false
           @lifecycle_revision = (@lifecycle_revision || 0) + 1
         end
+
         candidate
       end
     end

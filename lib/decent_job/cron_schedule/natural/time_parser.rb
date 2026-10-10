@@ -22,6 +22,7 @@ module DecentJob
 
         def adjusted_time(hour, minute, suffix)
           raise ArgumentError, "invalid named afternoon hour" if hour.nil? && suffix == "pm"
+
           hour = if suffix == "midnight" && hour == 12
             24
           elsif suffix == "pm" && hour < 12
@@ -31,6 +32,7 @@ module DecentJob
           else
             hour
           end
+
           component(:time, hour, minute)
         end
 
@@ -69,6 +71,7 @@ module DecentJob
           return unless unit
           values = list(:count, Vocabulary::JOIN)
           return unless values
+
           case unit.downcase[0]
           when "m" then component(:time, "*", values, strong: 1)
           when "s" then component(:second, values)
@@ -86,9 +89,11 @@ module DecentJob
           return unless first && keyword("to")
           last = attempt(:time_object)
           return unless last
+
           unless first.is_a?(Component) && last.is_a?(Component) && first.values[1] == last.values[1]
             raise ArgumentError, "natural time range minutes must agree"
           end
+
           component(:time, "#{first.values[0]}-#{last.values[0]}", 0, strong: 0)
         end
       end

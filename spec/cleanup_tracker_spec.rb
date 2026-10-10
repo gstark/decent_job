@@ -32,6 +32,7 @@ describe "cleanup tracker" do
   it "accepts always and rejects invalid intervals" do
     %i[cleanup_interval_jobs cleanup_interval_seconds].each do |name|
       _(DecentJob::CleanupTracker.new(**{name => -1}).cleanup?).must_equal true
+
       [0, nil, true, "2", -2, Float::NAN, Float::INFINITY, Complex(1, 1)].each do |value|
         _ { DecentJob::CleanupTracker.new(**{name => value}) }.must_raise ArgumentError
       end
@@ -51,13 +52,16 @@ describe "cleanup configuration" do
 
   it "normalizes interval settings strictly" do
     config = DecentJob::Configuration.new
+
     {nil => 1000, "" => 1000, true => 1000, false => false, "false" => false, 0 => false, "0" => false, -1 => -1, "-1" => -1, "12" => 12}.each do |value, expected|
       config.cleanup_interval_jobs = value
       _(config.cleanup_interval_jobs).must_equal expected
     end
+
     ["invalid", -2, Float::NAN, Float::INFINITY, 0.5].each do |value|
       _ { config.cleanup_interval_jobs = value }.must_raise ArgumentError
     end
+
     config.cleanup_interval_seconds = 0.5
     _(config.cleanup_interval_seconds).must_equal 0.5
   end
@@ -65,6 +69,7 @@ describe "cleanup configuration" do
   it "reads environment settings and allows application overrides" do
     settings = {"DECENT_JOB_CLEANUP_INTERVAL_JOBS" => "23", "DECENT_JOB_CLEANUP_INTERVAL_SECONDS" => "false", "DECENT_JOB_CLEANUP_DISCARDED_JOBS" => "false", "DECENT_JOB_CLEANUP_PRESERVED_JOBS_BEFORE_SECONDS_AGO" => "7200"}
     previous = ENV.to_h.slice(*settings.keys)
+
     begin
       ENV.update(settings)
       config = DecentJob::Configuration.new

@@ -48,23 +48,30 @@ expressions = [
   "every day at noon Mars/Olympus", "tomorrow at noon", "every day at", "nonsense",
   "every day at noon and", "every day garbage", "every day " * 40
 ]
+
 [1, 2, 5, 15].each do |count|
   %w[seconds minutes hours days months sec min s m h d M].each { |unit| expressions << "every #{count} #{unit}" }
 end
+
 %w[first second third fourth fifth last].each do |ordinal|
   expressions << "every #{ordinal} of the month at noon"
 end
+
 expressions.uniq!
 
 after = Time.utc(2026, 1, 1)
+
 cases = expressions.map do |expression|
   record = {"expression" => expression, "after" => after.iso8601}
+
   begin
     reference = Fugit.parse(expression)
     record["valid"] = reference.instance_of?(Fugit::Cron)
+
     if record.fetch("valid")
       record["original"] = reference.original
       cursor = after
+
       record["next"] = 5.times.map do
         cursor = reference.next_time(cursor)
         cursor.to_t.utc.iso8601
@@ -74,6 +81,7 @@ cases = expressions.map do |expression|
     record["valid"] = false
     record["reference_error"] = error.class.name
   end
+
   record
 end
 

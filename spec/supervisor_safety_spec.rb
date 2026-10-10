@@ -21,6 +21,7 @@ describe "supervisor cleanup safety" do
     pids.each { |pid| _ { Process.waitpid(pid, Process::WNOHANG) }.must_raise Errno::ECHILD }
   ensure
     [subscriber, reaper].compact.each { |subscription| ActiveSupport::Notifications.unsubscribe(subscription) }
+
     pids&.each do |pid|
       Process.kill("KILL", pid)
       Process.waitpid(pid)
@@ -44,6 +45,7 @@ describe "supervisor cleanup safety" do
   ensure
     database&.close
   end
+
   it "turns inherited async adapters into external producers and preserves inline adapters" do
     async_adapter = DecentJob::Adapter.new(execution_mode: :async)
     inline_adapter = DecentJob::Adapter.new(execution_mode: :inline)
@@ -51,6 +53,7 @@ describe "supervisor cleanup safety" do
     config.execution_mode = :async
     reader, writer = IO.pipe
     pid = nil
+
     DecentJob.with_prepared_fork do
       pid = fork do
         reader.close
@@ -60,6 +63,7 @@ describe "supervisor cleanup safety" do
         exit! 0
       end
     end
+
     writer.close
     _(Marshal.load(reader.read)).must_equal [:external, :inline, :external]
     Process.waitpid(pid)
@@ -67,14 +71,17 @@ describe "supervisor cleanup safety" do
     reader&.close unless reader&.closed?
     writer&.close unless writer&.closed?
   end
+
   it "retires inherited registered adapters when the child runtime resets" do
     adapter = DecentJob::Adapter.new
     uninitialized_adapter = DecentJob::Adapter.allocate
     reader, writer = IO.pipe
     pid = nil
+
     DecentJob.with_prepared_fork do
       pid = fork do
         reader.close
+
         begin
           DecentJob.after_supervisor_fork(DecentJob.configuration.dup)
           DecentJob.reset!
@@ -84,9 +91,11 @@ describe "supervisor cleanup safety" do
         ensure
           writer.close
         end
+
         exit! 0
       end
     end
+
     writer.close
     _(Marshal.load(reader.read)).must_equal [:stopping, false]
     Process.waitpid(pid)

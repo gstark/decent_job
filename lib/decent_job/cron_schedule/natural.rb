@@ -61,6 +61,7 @@ module DecentJob
           result = attempt(method)
           return result if result
         end
+
         nil
       end
 
@@ -68,13 +69,16 @@ module DecentJob
         first = attempt(method)
         return unless first
         result = [first]
+
         loop do
           item = attempt do
             take(separator) && attempt(method)
           end
+
           break unless item
           result << item
         end
+
         result
       end
 
@@ -142,6 +146,7 @@ module DecentJob
         return unless unit
         unit = unit.strip
         value = (count == "1") ? "*" : "*/#{count}"
+
         case unit
         when /\A(?:M|mon)/ then component(:month, value)
         when /\Ad/ then component(:monthday, value, weak: true)
@@ -158,6 +163,7 @@ module DecentJob
       def single_interval
         name = take(/(?:1[ \t]+)?(?:week|year)/)
         return unless name
+
         if name.end_with?("year")
           [component(:month, 1, weak: true), component(:monthday, 1, weak: true)]
         else
@@ -208,6 +214,7 @@ module DecentJob
         minute = take(/[0-5]?[0-9]/)
         return unless minute
         minutes = [minute]
+
         loop do
           value = attempt do
             if take(JOIN)
@@ -215,9 +222,11 @@ module DecentJob
               take(/[0-5]?[0-9]/)
             end
           end
+
           break unless value
           minutes << value
         end
+
         component(:time, "*", minutes.join(","), strong: 1)
       end
 

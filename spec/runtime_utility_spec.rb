@@ -26,12 +26,14 @@ describe "runtime monitor utilities" do
     host = Module.new
     host.define_singleton_method(:application) { application }
     Object.const_set(:Rails, host)
+
     @tracker = DecentJob::ProcessTracker.new(database: database, process_heartbeat_interval: 0.02, state: -> {
       # Both calls would deadlock if host application code ran under the mutex.
       ready = @tracker.connected?
       calls << [executor.active?, ready]
       {host_executor: executor.active?}
     })
+
     executor.wrap do
       @tracker.register do |id|
         first = Timeout.timeout(2) { calls.pop }
@@ -48,6 +50,7 @@ describe "runtime monitor utilities" do
   it "recovers from a state callback failure even when the error reporter also raises" do
     reports = Queue.new
     attempts = 0
+
     @tracker = DecentJob::ProcessTracker.new(database: database, process_heartbeat_interval: 0.02,
       state: -> {
         attempts += 1
@@ -57,6 +60,7 @@ describe "runtime monitor utilities" do
         reports << error.message
         raise "reporter failed"
       })
+
     Timeout.timeout(2) do
       @tracker.register do |id|
         _(reports.pop).must_equal "state failed"
@@ -64,34 +68,44 @@ describe "runtime monitor utilities" do
         _(@tracker.connected?).must_equal true
       end
     end
+
     _(@tracker.shutdown?).must_equal true
   end
 
   it "confines every dedicated session operation to one monitor during nested and concurrent leases" do
     calls = Queue.new
     pool = database
+
     pool.define_singleton_method(:connect) do
       connection = super()
+
       [:exec_params, :finished?, :status, :finish].each do |name|
         original = connection.method(name)
+
         connection.define_singleton_method(name) do |*arguments|
           calls << [object_id, Thread.current, name]
           original.call(*arguments)
         end
       end
+
       connection
     end
+
     @tracker = DecentJob::ProcessTracker.new(database: pool, advisory_lock_heartbeat: true, process_heartbeat_interval: 0.02)
+
     @tracker.register do |id|
       @tracker.register { |nested_id| _(nested_id).must_equal id }
+
       Thread.new do
         @tracker.register do |concurrent_id|
           _(concurrent_id).must_equal id
           _(@tracker.connected?).must_equal true
         end
       end.value
+
       _(@tracker.connected?).must_equal true
     end
+
     operations = []
     operations << calls.pop until calls.empty?
     _(operations.map(&:first).uniq.size).must_equal 1

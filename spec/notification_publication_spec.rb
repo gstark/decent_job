@@ -58,8 +58,10 @@ describe "transactional notification publication" do
 
   def notifications
     messages = []
+
     while @listener.wait_for_notify(0.02) { |_channel, _pid, payload| messages << (payload.to_s.empty? ? nil : JSON.parse(payload)) }
     end
+
     messages
   end
 
@@ -81,13 +83,16 @@ describe "transactional notification publication" do
       PublicationJob.perform_later
       _(notifications).must_equal []
     end
+
     _(notifications).must_equal [{"queue_name" => "default", "count" => 1}]
+
     _ {
       database.transaction do
         PublicationJob.perform_later
         raise "rollback"
       end
     }.must_raise RuntimeError
+
     _(notifications).must_equal []
   end
 
@@ -136,11 +141,13 @@ describe "transactional notification publication" do
       DecentJob::Bulk.enqueue { PublicationJob.perform_later }
       ActiveJob.perform_all_later(new_job, new_job(notify: false))
     end
+
     _(notifications).must_equal Array.new(2) { {"queue_name" => "default", "count" => 1} }
   end
 
   it "counts accepted cron jobs and emits nothing for deduplicated occurrences" do
     context = {database: database, key: :notification_test, at: Time.now.utc}
+
     DecentJob::CronEntry.with_context(context) do
       _(@store.enqueue_all([new_job, new_job]).compact.size).must_equal 1
       _(notifications).must_equal [{"queue_name" => "default", "count" => 1}]
@@ -151,9 +158,11 @@ describe "transactional notification publication" do
 
   it "does not count a suppressed accepted cron job when enabled duplicates are rejected" do
     context = {database: database, key: :notification_test, at: Time.now.utc}
+
     DecentJob::CronEntry.with_context(context) do
       _(@store.enqueue_all([new_job(notify: false), new_job]).compact.size).must_equal 1
     end
+
     _(notifications).must_equal []
   end
 
@@ -203,9 +212,11 @@ describe "transactional notification publication" do
   it "never notifies a reschedule that has lost execution ownership" do
     job = PublicationJob.perform_later
     notifications
+
     _ {
       @store.reschedule(job, {id: job.provider_job_id, execution_id: SecureRandom.uuid})
     }.must_raise DecentJob::EnqueueError
+
     _(notifications).must_equal []
   end
 
@@ -225,6 +236,7 @@ describe "transactional notification publication" do
     jobs = 500.times.map { new_job } + [PublicationJob.new(Object.new)]
     _ { @adapter.enqueue_all(jobs) }.must_raise ActiveJob::SerializationError
     _(notifications).must_equal []
+
     database.with_connection do |connection|
       _(connection.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0)).must_equal "0"
     end
@@ -233,12 +245,14 @@ describe "transactional notification publication" do
   it "does not notify retries rolled back by their enclosing transaction" do
     job = PublicationJob.perform_later
     notifications
+
     _ {
       database.transaction do
         @store.reschedule(job, {id: job.provider_job_id, execution_id: nil})
         raise "rollback retry"
       end
     }.must_raise RuntimeError
+
     _(notifications).must_equal []
   end
 

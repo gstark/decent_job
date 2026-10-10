@@ -26,16 +26,20 @@ module DecentJob
         @watchdog_stop = false
         @generation
       end
+
       safely { SdNotify.ready }
       interval = SdNotify.watchdog_interval / 2
+
       if interval.positive?
         safely { Notifications.instrument("systemd_watchdog_start.decent_job", interval: interval) }
+
         @mutex.synchronize do
           if !@stopping && @active && @generation == generation
             @watchdog = Thread.new { run_watchdog(interval, generation) }
           end
         end
       end
+
       self
     ensure
       @mutex.synchronize do
@@ -52,6 +56,7 @@ module DecentJob
         next false if @stopping
         @stopping = true
       end
+
       safely { SdNotify.stopping } if notify
       self
     end
@@ -61,12 +66,14 @@ module DecentJob
         @drains += 1
         @generation
       }
+
       begin
         stopping
         yield if block_given?
       ensure
         thread, last = @mutex.synchronize do
           @drains -= 1
+
           if @drains.zero?
             @watchdog_stop = true
             @condition.broadcast
@@ -75,6 +82,7 @@ module DecentJob
             [nil, false]
           end
         end
+
         begin
           thread.join if thread && thread != Thread.current
         ensure
@@ -86,6 +94,7 @@ module DecentJob
           end
         end
       end
+
       self
     end
 
@@ -97,6 +106,7 @@ module DecentJob
 
     def run_watchdog(interval, generation)
       deadline = monotonic_time + interval
+
       loop do
         stopped = @mutex.synchronize do
           loop do
@@ -105,8 +115,10 @@ module DecentJob
             break unless remaining.positive?
             @condition.wait(@mutex, [remaining, 3600].min)
           end
+
           @watchdog_stop || @generation != generation
         end
+
         break if stopped
         safely { SdNotify.watchdog }
         deadline = monotonic_time + interval
@@ -121,6 +133,7 @@ module DecentJob
       rescue Exception # standard:disable Lint/RescueException
         # Subscribers are application callbacks too.
       end
+
       begin
         @on_thread_error&.call(error)
       rescue Exception # standard:disable Lint/RescueException

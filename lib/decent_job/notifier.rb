@@ -20,11 +20,13 @@ module DecentJob
       return unless DecentJob.configuration.enable_listen_notify
 
       now = Time.now
+
       groups = jobs.select { |job| enabled?(job) }.group_by do |job|
         state = {queue_name: job.queue_name}
         state[:scheduled_at] = job.scheduled_at.utc.iso8601(6) if job.scheduled_at && job.scheduled_at > now
         state
       end
+
       groups.each { |state, entries| notify(connection, state.merge(count: entries.size)) }
     end
 

@@ -9,6 +9,7 @@ describe "database pool resizing" do
   it "closes excess idle connections when shrinking" do
     ready = Queue.new
     release = Queue.new
+
     threads = 2.times.map do
       Thread.new {
         database.with_connection {
@@ -17,6 +18,7 @@ describe "database pool resizing" do
         }
       }
     end
+
     2.times { ready.pop }
     2.times { release << true }
     threads.each(&:join)
@@ -31,6 +33,7 @@ describe "database pool resizing" do
   it "retires surplus borrowed connections as their owners return them" do
     ready = Queue.new
     release = Queue.new
+
     threads = 2.times.map do
       Thread.new {
         database.with_connection {
@@ -39,6 +42,7 @@ describe "database pool resizing" do
         }
       }
     end
+
     2.times { ready.pop }
     database.resize(1)
     _(database.stats[:active]).must_equal 2
@@ -55,16 +59,19 @@ describe "database pool resizing" do
     entered = Queue.new
     acquired = Queue.new
     waiter = nil
+
     database.with_connection do
       waiter = Thread.new do
         entered << true
         database.with_connection { acquired << true }
       end
+
       entered.pop
       Timeout.timeout(2) { Thread.pass until waiter.status == "sleep" }
       database.resize(2)
       _(Timeout.timeout(2) { acquired.pop }).must_equal true
     end
+
     waiter.join
   ensure
     waiter&.join

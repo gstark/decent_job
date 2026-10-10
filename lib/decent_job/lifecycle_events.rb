@@ -16,6 +16,7 @@ module DecentJob
       return yield if owned_scope
 
       receipts = []
+
       begin
         ExecutionState.with(:lifecycle_events, Scope.new(pid: Process.pid, owner: IsolatedState.context, receipts: [].freeze)) do
           yield
@@ -33,6 +34,7 @@ module DecentJob
       receipt = Receipt.new(resource: resource, name: name,
         payload: detach(payload).merge(process_id: Process.pid, thread_name: (Thread.current.name || Thread.current.object_id).to_s),
         database: database, on_error: on_error)
+
       if (scope = owned_scope)
         ExecutionState[:lifecycle_events] = scope.with(receipts: (scope.receipts + [receipt]).freeze)
       else
@@ -50,6 +52,7 @@ module DecentJob
       scope = ExecutionState[:lifecycle_observers]
       resources = owned?(scope) ? scope.receipts : []
       current = Scope.new(pid: Process.pid, owner: IsolatedState.context, receipts: (resources + [receipt.resource]).freeze)
+
       ExecutionState.with(:lifecycle_observers, current) do
         Instrumentation.instrument("#{receipt.name}.decent_job", receipt.payload, database: receipt.database, on_error: receipt.on_error) {}
       end

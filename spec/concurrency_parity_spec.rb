@@ -34,14 +34,17 @@ describe "pinned concurrency behavior" do
   before do
     DecentJob::Schema.new(database).migrate
     @adapter = DecentJob::Adapter.new(database: database, execution_mode: :external)
+
     [ConcurrencyParityJob, CallbackConcurrencyParityJob, ConcurrencyKeyTargetJob, NestedConcurrencyParityJob].each do |job_class|
       job_class.queue_adapter = @adapter
     end
+
     [ConcurrencyParityJob, CallbackConcurrencyParityJob, ConcurrencyKeyTargetJob].each do |job_class|
       job_class.decent_job_concurrency_config = {}
       job_class.decent_job_concurrency_rules = []
       job_class.decent_job_labels = []
     end
+
     ConcurrencyParityJob.performed = []
     @performer = DecentJob::Performer.new(database: database)
     @previous_strategy = DecentJob.configuration.lock_strategy
@@ -82,6 +85,7 @@ describe "pinned concurrency behavior" do
         _(DecentJob::Job.find(job.provider_job_id, database: database).concurrency_keys).must_equal ["ConcurrencyParityJob"]
         _(@performer.perform_one(job_id: job.provider_job_id).state).must_equal "succeeded"
       end
+
       _(ConcurrencyParityJob.performed).must_equal [key, key]
     end
   end
@@ -95,6 +99,7 @@ describe "pinned concurrency behavior" do
       _(job).must_be_kind_of ConcurrencyParityJob
       _(@performer.perform_one(job_id: job.provider_job_id).state).must_equal "succeeded"
     end
+
     _(ConcurrencyParityJob.performed).must_equal ["legacy", "legacy"]
   end
 
@@ -104,6 +109,7 @@ describe "pinned concurrency behavior" do
     [ConcurrencyParityJob, CallbackConcurrencyParityJob].each do |job_class|
       job_class.decent_job_control_concurrency_with(key: -> { arguments.first }, total_limit: 1)
     end
+
     _(ConcurrencyParityJob.perform_later("after-callback")).must_be_kind_of ConcurrencyParityJob
     job = CallbackConcurrencyParityJob.new("before-callback")
 

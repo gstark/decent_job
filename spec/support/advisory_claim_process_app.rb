@@ -23,6 +23,7 @@ if ENV["ADVISORY_CLAIM_PROCESS_CONNECTION"]
     config.enable_listen_notify = false
     config.logger = Logger.new(File::NULL)
   end
+
   ActiveJob::Base.logger = Logger.new(File::NULL)
   AdvisoryClaimProcessJob.queue_adapter = DecentJob::Adapter.new(execution_mode: :external)
   result = DecentJob::Performer.new.perform_one(job_id: ENV.fetch("ADVISORY_CLAIM_PROCESS_JOB"))

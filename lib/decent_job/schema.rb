@@ -14,6 +14,7 @@ module DecentJob
       versions = @database.transaction do |connection|
         connection.exec("SELECT version FROM decent_job_schema_migrations").column_values(0).map(&:to_i)
       end
+
       Dir[File.join(MIGRATIONS_PATH, "*.sql")].all? do |path|
         versions.include?(File.basename(path).split("_").first.to_i)
       end
@@ -25,11 +26,14 @@ module DecentJob
       @database.transaction do |connection|
         # Serialize installation before even creating the migrations table.
         connection.exec("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || '.decent_job_schema', 0))")
+
         # Check first: CREATE TABLE IF NOT EXISTS raises a NOTICE on every rerun.
         unless connection.exec("SELECT to_regclass('decent_job_schema_migrations')").getvalue(0, 0)
           connection.exec("CREATE TABLE decent_job_schema_migrations (version integer PRIMARY KEY)")
         end
+
         versions = connection.exec("SELECT version FROM decent_job_schema_migrations").column_values(0).map(&:to_i)
+
         Dir[File.join(MIGRATIONS_PATH, "*.sql")].sort.each do |path|
           version = File.basename(path).split("_").first.to_i
           next if versions.include?(version)
@@ -38,6 +42,7 @@ module DecentJob
           connection.exec_params("INSERT INTO decent_job_schema_migrations VALUES ($1)", [version])
         end
       end
+
       self
     end
   end

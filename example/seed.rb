@@ -37,6 +37,7 @@ module Seed
       GenerateReportJob.perform_later(tenant, period: Time.now.utc.strftime("%Y-%m"))
       GenerateReportJob.set(wait: 300 + i * 120, priority: 20).perform_later(tenant, period: "2026-09", format: "csv")
     end
+
     GenerateReportJob.set(wait_until: Time.now + 3600 * 6).perform_later("acme", period: "2026-Q3")
   end
 
@@ -59,6 +60,7 @@ module Seed
     DecentJob::Batch.enqueue(description: "Monthly invoices", on_finish: BatchSummaryJob, on_discard: BatchSummaryJob, month: Time.now.utc.strftime("%Y-%m")) do
       (1..10).each { |customer| InvoiceJob.perform_later(customer) }
     end
+
     DecentJob::Batch.enqueue(description: "Reindex tenants", on_success: BatchSummaryJob, month: "n/a") do
       %w[acme globex].each { |tenant| GenerateReportJob.set(priority: 0).perform_later(tenant, period: "reindex") }
     end
@@ -85,12 +87,14 @@ module Seed
     DecentJob::Bulk.enqueue do
       5.times { |i| WelcomeEmailJob.perform_later(5000 + i) }
     end
+
     DecentJob.perform_all_later(*4.times.map { |i| DigestJob.new("bulk-#{i}") })
   end
 end
 
 loop_mode = ARGV.include?("--loop")
 number = 1
+
 begin
   loop do
     Seed.round(number)

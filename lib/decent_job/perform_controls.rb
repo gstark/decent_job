@@ -18,18 +18,22 @@ module DecentJob
       rules = job.decent_job_resolved_concurrency_rules(stage: :perform).select { |rule| rule.perform_limit || rule.total_limit || rule.perform_throttle }
       return if rules.empty?
       exceeded = nil
+
       @claims.synchronize(context.fetch(:id), scopes: rules.map(&:scope)) do |connection|
         current = connection.exec_params("SELECT finished_at, execution_id FROM decent_jobs WHERE id = $1", [context.fetch(:id)]).first
         next unless current && current["finished_at"].nil? && current["execution_id"] == context.fetch(:execution_id)
 
         rules.each do |rule|
           limit = rule.perform_limit || rule.total_limit
+
           if limit && running_count(connection, rule, context) >= limit
             @claims.wait(connection, rule.scope, context)
             exceeded = ConcurrencyExceededError
             break
           end
+
           @claims.grant(connection, rule.scope, context) if limit
+
           if rule.perform_throttle && throttled?(connection, rule, job)
             @claims.release(connection, context)
             exceeded = ThrottleExceededError
@@ -37,6 +41,7 @@ module DecentJob
           end
         end
       end
+
       raise exceeded if exceeded
     end
 

@@ -40,6 +40,7 @@ module DecentJob
 
     def in_webserver?
       return true if defined?(Rails::Server)
+
       caller.any? do |frame|
         frame.match?(%r{config\.ru|/puma/(?:request|response)\.rb|/puma/(?:cluster/worker|single)\.rb:\d+:|/rack/handler/}) ||
           (RUBY_ENGINE == "jruby" && frame.include?("jruby/rack/rails_booter"))
@@ -92,19 +93,23 @@ module DecentJob
       @enable_pauses = environment_boolean("DECENT_JOB_ENABLE_PAUSES", default: false)
       @shutdown_timeout = Float(ENV.fetch("DECENT_JOB_SHUTDOWN_TIMEOUT", "30"))
       @default_logger = Logging.tagged_logger($stdout)
+
       @baseline_options = GENERIC_OPTIONS.each_with_object({}) do |name, baseline|
         variable = "@#{name}"
         baseline[name] = copy_containers(instance_variable_get(variable)) if instance_variable_defined?(variable)
       end
+
       @explicit_options = {}
     end
 
     def initialize_copy(original)
       super
       copies = {}.compare_by_identity
+
       original.instance_variables.each do |variable|
         instance_variable_set(variable, copy_containers(original.instance_variable_get(variable), copies))
       end
+
       @errors = original.errors.dup
     end
 
@@ -142,13 +147,17 @@ module DecentJob
     def apply_rails_config(options, environment:, logger:)
       # Use the public iterator: host options can be lazy application objects.
       normalized = {}
+
       options.each do |name, value|
         key = name.to_sym if name.is_a?(String) || name.is_a?(Symbol)
+
         unless GENERIC_OPTIONS.include?(key) || SPECIAL_OPTIONS.include?(key)
           raise ArgumentError, "unknown configuration option: #{name.inspect}"
         end
+
         normalized[key] = value unless key == :cron && Support.blank?(value)
       end
+
       options = normalized
       @rails_environment = environment
       @rails_poll_interval = options[:poll_interval]
@@ -160,9 +169,11 @@ module DecentJob
       @rails_logger = options[:logger] || logger
       previous = @rails_options || {}
       @applying_rails_options = true
+
       begin
         GENERIC_OPTIONS.each do |name|
           next if @explicit_options.key?(name)
+
           if options.key?(name)
             # Preserve supported edits through mutable getters until the host value changes.
             next if previous.key?(name) && previous[name] == options[name]
@@ -175,10 +186,12 @@ module DecentJob
             end
           end
         end
+
         @rails_options = copy_containers(options)
       ensure
         @applying_rails_options = false
       end
+
       self
     end
 
@@ -247,9 +260,11 @@ module DecentJob
 
     def pidfile=(value)
       value = value.to_path if value.respond_to?(:to_path)
+
       unless value.is_a?(String) && !value.strip.empty? && !value.include?("\0")
         raise ArgumentError, "pidfile must be a nonempty path"
       end
+
       @pidfile = File.expand_path(value)
     end
 
@@ -276,9 +291,11 @@ module DecentJob
 
     def subprocess_configs
       groups = queue_groups
+
       if groups.size > 1 && @subprocesses.positive?
         logger.warn("Queue groups override subprocesses=#{@subprocesses} with #{groups.size}")
       end
+
       recipes = (groups.size > 1) ? groups : Array.new(subprocesses, groups.first)
       recipes.map { |queues| child_configuration(queues) }
     end
@@ -289,6 +306,7 @@ module DecentJob
 
     def self.validate_process_options!(advisory, interval)
       raise ArgumentError, "advisory_lock_heartbeat must be true or false" unless [true, false].include?(advisory)
+
       unless interval.is_a?(Numeric) && interval.real? && interval.finite? && interval.positive? && interval < 300
         raise ArgumentError, "process_heartbeat_interval must be finite, positive, and less than 300"
       end
@@ -298,6 +316,7 @@ module DecentJob
       if !value.nil? && (!value.is_a?(Integer) || !(0..65_535).cover?(value))
         raise ArgumentError, "probe_port must be nil or an integer between 0 and 65535"
       end
+
       @probe_port = value
     end
 
@@ -305,6 +324,7 @@ module DecentJob
       unless value.nil? || value.is_a?(String) || value.is_a?(Symbol)
         raise ArgumentError, "probe_handler must be nil, a string, or a symbol"
       end
+
       @probe_handler = value&.to_sym
     end
 
@@ -336,6 +356,7 @@ module DecentJob
       unless value.is_a?(Numeric) && value.real? && value.finite? && value >= 0
         raise ArgumentError, "cleanup_preserved_jobs_before_seconds_ago must be a finite nonnegative number"
       end
+
       @cleanup_preserved_jobs_before_seconds_ago = value
     end
 
@@ -387,6 +408,7 @@ module DecentJob
       else
         0
       end
+
       QueueSelection.pools(queue_groups.join(";"), default_threads: @max_threads).sum { |pool| pool.fetch(:threads) } + 2 + cron_connections
     end
 
@@ -416,6 +438,7 @@ module DecentJob
     def copy_containers(value, copies = {}.compare_by_identity)
       return value if value.respond_to?(:call)
       return copies[value] if copies.key?(value)
+
       case value
       when Hash
         copy = copies[value] = value.dup
@@ -436,27 +459,33 @@ module DecentJob
     def normalize_lock_strategy(value)
       return if value.nil?
       value = value.to_sym if value.is_a?(String)
+
       unless %i[advisory skiplocked hybrid].include?(value)
         raise ArgumentError, "lock_strategy must be advisory, skiplocked, or hybrid"
       end
+
       value
     end
 
     def normalize_dequeue_query_sort(value)
       return if value.nil?
       value = value.to_sym if value.is_a?(String)
+
       unless %i[created_at scheduled_at].include?(value)
         raise ArgumentError, "dequeue_query_sort must be created_at or scheduled_at"
       end
+
       value
     end
 
     def normalize_queue_select_limit(value)
       return if value.nil?
       value = Integer(value, 10) if value.is_a?(String) && value.match?(/\A[0-9]+\z/)
+
       unless value.is_a?(Integer) && value >= 0
         raise ArgumentError, "queue_select_limit must be a nonnegative integer"
       end
+
       value
     end
 
@@ -478,6 +507,7 @@ module DecentJob
       valid = @handled_exceptions.is_a?(Array) && @handled_exceptions.all? do |value|
         (value.is_a?(Class) && value <= Exception) || (value.is_a?(String) && !value.empty?)
       end
+
       raise ArgumentError, "handled_exceptions must be an Array of exception classes or class names" unless valid
     end
 

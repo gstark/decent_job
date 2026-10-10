@@ -43,6 +43,7 @@ module DecentJob
     module Tagged
       def tagged(*tags)
         pushed = formatter.push_tags(tags.flatten.compact.map(&:to_s).reject(&:empty?))
+
         begin
           yield self
         ensure

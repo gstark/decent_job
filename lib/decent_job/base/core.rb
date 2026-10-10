@@ -58,17 +58,21 @@ module DecentJob
         set(options)
         self.successfully_enqueued = false
         self.enqueue_error = nil
+
         run_callbacks(:enqueue) do
           before_adapter_enqueue
+
           if scheduled_at
             queue_adapter.enqueue_at(self, scheduled_at.to_f)
           else
             queue_adapter.enqueue(self)
           end
+
           self.successfully_enqueued = true
         rescue EnqueueError => error
           self.enqueue_error = error
         end
+
         successfully_enqueued? ? self : false
       end
 

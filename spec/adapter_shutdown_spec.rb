@@ -52,11 +52,13 @@ describe "adapter shutdown after fatal resource errors" do
     AdapterShutdownBlockingJob.release << true
     @cron_release << true
     @releaser&.join
+
     begin
       DecentJob.reset!
     rescue AdapterShutdownFailure
       nil
     end
+
     Thread.report_on_exception = @previous_reporting
   end
 
@@ -67,17 +69,21 @@ describe "adapter shutdown after fatal resource errors" do
   it "signals and drains its async worker even when the cron stop raises" do
     AdapterShutdownBlockingJob.perform_later
     worker_thread = pop(AdapterShutdownBlockingJob.started)
+
     DecentJob.configuration.cron = {fatal: {class: -> {}, cron: ->(_) {
       @cron_started << Thread.current
       raise @fatal_error
     }}}
+
     manager = DecentJob.start_cron(database: database)
     cron_thread = pop(@cron_started)
     Timeout.timeout(5) { sleep 0.001 while cron_thread.alive? }
+
     @releaser = Thread.new do
       sleep 0.05
       AdapterShutdownBlockingJob.release << true
     end
+
     error = _ { @adapter.shutdown(timeout: 5) }.must_raise AdapterShutdownFailure
     _(error).must_be_same_as @fatal_error
     _(AdapterShutdownBlockingJob.completed.size).must_equal 1
@@ -91,6 +97,7 @@ describe "adapter shutdown after fatal resource errors" do
       @cron_release.pop
       @cron_completed << true
     }, cron: ->(previous) { previous ? previous + 60 : Time.now }}}
+
     manager = DecentJob.start_cron(database: database)
     cron_thread = pop(@cron_started)
     AdapterShutdownFatalJob.perform_later
@@ -100,10 +107,12 @@ describe "adapter shutdown after fatal resource errors" do
     _(first).must_be_same_as @fatal_error
     _(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).must_be :<, 0.5
     _(manager.shutdown?).must_equal false
+
     @releaser = Thread.new do
       sleep 0.05
       @cron_release << true
     end
+
     error = _ { @adapter.shutdown(timeout: 5) }.must_raise AdapterShutdownFailure
     _(error).must_be_same_as @fatal_error
     _(@cron_completed.size).must_equal 1

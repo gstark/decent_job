@@ -17,6 +17,7 @@ module DecentJob
         raise ArgumentError, "invalid response status" unless status.is_a?(Integer) && (200..599).cover?(status)
         result = {}
         bytes = 0
+
         headers.each do |key, value|
           key, value = String(key), String(value)
           raise ArgumentError, "invalid response header" unless TOKEN.match?(key) && !value.match?(/[\x00-\x1f\x7f]/)
@@ -25,12 +26,15 @@ module DecentJob
           next if %w[content-length connection transfer-encoding].include?(key.downcase)
           result[key] = value
         end
+
         content = +"".b
+
         body.each do |part|
           part = String(part)
           raise ArgumentError, "response body too large" if content.bytesize + part.bytesize > MAX_BODY_BYTES
           content << part.b
         end
+
         content.clear if [204, 304].include?(status)
         result["Content-Length"] = content.bytesize.to_s
         result["Connection"] = "close"

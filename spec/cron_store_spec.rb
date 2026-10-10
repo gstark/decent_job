@@ -44,12 +44,14 @@ describe "durable cron entries" do
 
   it "deduplicates occurrences without poisoning an outer transaction" do
     first = @entry.enqueue(@at)
+
     database.transaction do |connection|
       duplicate = @entry.enqueue(@at)
       _(duplicate).must_equal false
       _(connection.exec("SELECT 42").getvalue(0, 0)).must_equal "42"
       _(@entry.enqueue(@at + Rational(1, 1_000_000))).must_be_kind_of CronStoreJob
     end
+
     _(@entry.jobs.size).must_equal 2
     _(first.provider_job_id).wont_be_nil
   end
@@ -86,10 +88,12 @@ describe "durable cron entries" do
 
   it "captures callable multi-job and bulk enqueues with one winner and accurate flags" do
     captured = []
+
     entry = DecentJob::CronEntry.new(key: :bulk, cron: "@daily", class: -> {
       captured.concat([CronStoreJob.new(1), CronStoreJob.new(2)])
       ActiveJob.perform_all_later(captured)
     }, database: database)
+
     accepted = entry.enqueue(@at)
     _(accepted).must_equal [captured.first]
     _(captured.map(&:successfully_enqueued?)).must_equal [true, false]
@@ -99,10 +103,12 @@ describe "durable cron entries" do
 
   it "flushes cron enqueues inside an outer Bulk without losing their context" do
     ordinary = nil
+
     DecentJob::Bulk.enqueue do
       @entry.enqueue(@at)
       ordinary = CronStoreJob.perform_later
     end
+
     _(@entry.jobs.size).must_equal 1
     _(DecentJob::Store.new(database).find(ordinary.provider_job_id).fetch("cron_key")).must_be_nil
   end

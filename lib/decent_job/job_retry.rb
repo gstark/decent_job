@@ -14,12 +14,14 @@ module DecentJob
                  execution_id: @record.execution_id, manual_retry: true,
                  batch_id: @record.batch_id, batch_callback_id: @record.batch_callback_id}
       rollback_jobs = {}
+
       @database.after_rollback do
         rollback_jobs.each do |entry, previous_id|
           entry.provider_job_id = previous_id
           entry.successfully_enqueued = false
         end
       end
+
       payload = nil
       job = @record.job_instance(ignore_deserialization_errors: true)
       raise Job::DeserializationError, "Cannot deserialize #{@record.job_class}" unless job
@@ -29,6 +31,7 @@ module DecentJob
       # retry_job restores the scheduled time, queue and priority after it
       # enqueues, so record the payload when the adapter accepts the job.
       buffer = Bulk::Buffer.new(on_capture: ->(captured) { payload = serialize(captured, integration) if captured.equal?(job) })
+
       Current.with(context) do
         CronEntry.with_context(nil) do
           Batch.within_thread(database: @database) do
@@ -37,6 +40,7 @@ module DecentJob
           end
         end
       end
+
       buffer.jobs.each { |child| validate_adapter(child) }
       retried_job = integration.deserialize(payload) if payload && buffer.jobs.include?(job)
       {context: context, buffer: buffer, job: retried_job, payload: payload}

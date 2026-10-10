@@ -26,6 +26,7 @@ module DecentJob
 
     def resolve(job, stage: nil)
       label = normalize_label(evaluate(job, @label))
+
       if label
         labels = job.respond_to?(:decent_job_labels) ? Array(job.decent_job_labels) : []
         return nil unless labels.any? { |value| normalize_label(value) == label }
@@ -33,9 +34,11 @@ module DecentJob
         kind, value = "label", label
       else
         key = evaluate(job, @key)
+
         if !key.nil? && KEY_TYPES.none? { |type| key.is_a?(type) }
           raise TypeError, "Concurrency key must be a scalar; was a #{key.class}"
         end
+
         blank_key = key.nil? || key == false || (key.is_a?(String) && key.strip.empty?)
         return nil if blank_key && @key.respond_to?(:call)
 
@@ -84,6 +87,7 @@ module DecentJob
 
       if value.is_a?(Array) && value.size == 2
         count, seconds = value
+
         if count.is_a?(Integer) && count >= 0 && seconds.is_a?(Numeric) && seconds.real? && seconds.finite? && seconds.positive?
           return [count, seconds].freeze
         end

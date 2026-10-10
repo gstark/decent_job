@@ -72,11 +72,13 @@ describe DecentJob::CLI do
   it "restores caller signal handlers even if startup and shutdown fail" do
     handler = proc {}
     previous = Signal.trap("TERM", handler)
+
     DecentJob.stub(:start, -> { raise "startup failed" }) do
       DecentJob.stub(:shutdown, ->(**) { raise "shutdown failed" }) do
         _(@cli.run(["start"])).must_equal 1
       end
     end
+
     _(Signal.trap("TERM", previous)).must_equal handler
   ensure
     Signal.trap("TERM", previous)
@@ -101,6 +103,7 @@ describe "decent_job executable" do
         process.join
       end
     end
+
     FileUtils.remove_entry(@directory)
   end
 
@@ -131,6 +134,7 @@ describe "decent_job executable" do
     _(status.exitstatus).must_equal 0
     _(output).must_include "schema installed"
     _(error).wont_include "Error:"
+
     database.with_connection do |connection|
       _(connection.exec("SELECT version FROM decent_job_schema_migrations ORDER BY version").column_values(0)).must_equal ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]
     end
@@ -138,6 +142,7 @@ describe "decent_job executable" do
 
   it "defaults to start, loads jobs, and applies CLI settings after application configuration" do
     enqueue_cli_job
+
     run_worker("--queues", "default", "--max-threads", "1", "--poll-interval", "0.02", "--shutdown-timeout", "2", "--no-listen-notify") do |process, output, error|
       wait_for_file("#{@marker}.finished")
       Process.kill("TERM", process.pid)
@@ -153,6 +158,7 @@ describe "decent_job executable" do
 
   it "drains a running job after SIGINT" do
     enqueue_cli_job(0.3)
+
     run_worker("start", "--queues", "*", "--poll-interval", "0.02", "--shutdown-timeout", "2", "--listen-notify") do |process, _output, error|
       wait_for_file(@marker)
       Process.kill("INT", process.pid)
@@ -165,6 +171,7 @@ describe "decent_job executable" do
 
   it "exits nonzero within the shutdown deadline when a job does not finish" do
     enqueue_cli_job(60)
+
     run_worker("start", "--queues", "*", "--shutdown-timeout", "0.05", "--no-listen-notify") do |process, _output, error|
       wait_for_file(@marker)
       Process.kill("TERM", process.pid)

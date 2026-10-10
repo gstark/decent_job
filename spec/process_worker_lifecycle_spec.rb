@@ -34,6 +34,7 @@ describe "worker live execution capacity" do
     rescue ProcessWorkerFatalError
       nil
     end
+
     Thread.report_on_exception = @reporting
   end
 
@@ -68,11 +69,13 @@ describe "worker live execution capacity" do
     @worker = DecentJob::Worker.new(database: database, max_threads: 2, poll_interval: 0.01,
       enable_listen_notify: false, on_thread_error: ->(error) { @errors << error })
     @worker.define_singleton_method(:monotonic_time) { Process.clock_gettime(Process::CLOCK_MONOTONIC) + offset }
+
     cleanup = lambda do |**options|
       calls << options
       release.pop
       raise "cleanup unavailable"
     end
+
     DecentJob::ProcessRecord.stub(:cleanup, cleanup) do
       @worker.start
       first = Timeout.timeout(5) { calls.pop }
@@ -95,9 +98,11 @@ describe "worker live execution capacity" do
   it "closes its listener after the last fatal execution and can restart after draining" do
     connections = Queue.new
     original_connect = database.method(:connect)
+
     database.define_singleton_method(:connect) do
       original_connect.call.tap { |connection| connections << connection }
     end
+
     job = ProcessWorkerFatalJob.perform_later
     @worker = DecentJob::Worker.new(database: database, max_threads: 1, poll_interval: 0.01,
       on_thread_error: ->(error) { @errors << error })

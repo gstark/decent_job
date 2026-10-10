@@ -34,9 +34,11 @@ module DecentJob
 
       def status_counts
         counts = STATUSES.to_h { |status| [status, 0] }
+
         query("SELECT (#{STATUS_SQL}) AS status, count(*) AS count FROM decent_jobs GROUP BY 1").each do |row|
           counts[row.fetch("status")] = row.fetch("count").to_i
         end
+
         counts
       end
 
@@ -94,11 +96,13 @@ module DecentJob
       def jobs(filter, cursor: nil, limit: PAGE_SIZE)
         limit = limit.clamp(1, MAX_PAGE_SIZE)
         where, params = job_conditions(filter)
+
         if cursor
           created_at, id = cursor
           params.push(created_at, id)
           where << "(decent_jobs.created_at, decent_jobs.id) < ($#{params.size - 1}::timestamptz, $#{params.size}::uuid)"
         end
+
         params << limit + 1
         rows = query(<<~SQL, params).map { |row| @store.decode(row).merge("status" => row.fetch("status")) }
           SELECT decent_jobs.*, (#{STATUS_SQL}) AS status FROM decent_jobs
@@ -140,10 +144,12 @@ module DecentJob
         limit = limit.clamp(1, MAX_PAGE_SIZE)
         params = []
         where = +""
+
         if cursor
           params.push(*cursor)
           where = "WHERE (b.created_at, b.id) < ($1::timestamptz, $2::uuid)"
         end
+
         params << limit + 1
         rows = query(<<~SQL, params).map { |row| decode_batch(row) }
           SELECT b.*, counts.* FROM decent_job_batches b
@@ -167,6 +173,7 @@ module DecentJob
 
       def batch_jobs(id, callbacks: false)
         column = callbacks ? "batch_callback_id" : "batch_id"
+
         query("SELECT decent_jobs.*, (#{STATUS_SQL}) AS status FROM decent_jobs WHERE #{column} = $1 ORDER BY created_at, id LIMIT 500", [id]).map do |row|
           @store.decode(row).merge("status" => row.fetch("status"))
         end
@@ -177,6 +184,7 @@ module DecentJob
       def schedules(configuration = DecentJob.configuration)
         entries = configuration.cron_entries(database: @database)
         last = CronEntry.last_jobs_by_key(entries)
+
         entries.map do |entry|
           last_job = last[entry.key.to_s]
           {entry: entry, enabled: entry.enabled?, last_job: last_job,
@@ -247,12 +255,15 @@ module DecentJob
         when "total" then "EXTRACT(EPOCH FROM started_at - scheduled_at) + duration"
         else "duration"
         end
+
         params = [from.iso8601(6), to.iso8601(6), buckets]
         class_filter = ""
+
         if job_class
           params << job_class
           class_filter = "AND job_class = $4"
         end
+
         query(<<~SQL, params).map { |row| {"bucket" => row.fetch("bucket").to_i, "count" => row.fetch("count").to_i, "upper" => row.fetch("upper").to_f} }
           WITH values AS (
             SELECT GREATEST(#{expression}, 0.0005) AS v FROM decent_job_executions
@@ -273,10 +284,12 @@ module DecentJob
       def job_conditions(filter)
         where = []
         params = []
+
         add = lambda do |sql, value|
           params << value
           where << sql.gsub("?", "$#{params.size}")
         end
+
         statuses = Array(filter["status"]).map(&:to_s) & STATUSES
         add.call("(#{STATUS_SQL}) = ANY(?::text[])", encode_array(statuses)) unless statuses.empty?
         add.call("decent_jobs.queue_name = ?", filter["queue"]) if present?(filter["queue"])
@@ -286,8 +299,10 @@ module DecentJob
         add.call("decent_jobs.batch_id = ?::uuid", filter["batch_id"]) if uuid?(filter["batch_id"])
         add.call("decent_jobs.finished_at >= ?::timestamptz", filter["finished_after"]) if time?(filter["finished_after"])
         add.call("decent_jobs.finished_at < ?::timestamptz", filter["finished_before"]) if time?(filter["finished_before"])
+
         if present?(filter["q"])
           term = filter["q"].to_s.strip[0, 200]
+
           if uuid?(term)
             add.call("(decent_jobs.id = ?::uuid OR decent_jobs.active_job_id = ?::uuid OR decent_jobs.batch_id = ?::uuid)", term)
           else
@@ -299,6 +314,7 @@ module DecentJob
             SQL
           end
         end
+
         [where, params]
       end
 
@@ -324,6 +340,7 @@ module DecentJob
           elsif %w[total succeeded discarded pending generation callback_priority].include?(key) then value.to_i
           else value
           end
+
           [key, decoded]
         end
       end

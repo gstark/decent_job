@@ -35,10 +35,12 @@ describe "worker cleanup" do
 
   def events(&callback)
     queue = Queue.new
+
     @subscribers << ActiveSupport::Notifications.subscribe("cleanup_preserved_jobs.decent_job") do |event|
       queue << event.payload
       callback&.call(event)
     end
+
     queue
   end
 
@@ -104,6 +106,7 @@ describe "worker cleanup" do
         CREATE TRIGGER reject_cleanup BEFORE DELETE ON decent_jobs FOR EACH ROW EXECUTE FUNCTION reject_cleanup();
       SQL
     end
+
     errors = Queue.new
     notifications = events
     DecentJob.configuration.on_thread_error = ->(error) { errors << error }
@@ -125,10 +128,12 @@ describe "worker cleanup" do
     _(Thread.list - before_threads).must_be_empty
     _(notifications.size).must_equal 0
   end
+
   it "rejects invalid cleanup settings before starting threads" do
     [-1, Float::INFINITY, Float::NAN, Complex(1, 1), false, "1"].each do |value|
       _ { DecentJob::Worker.new(database: database, cleanup_preserved_jobs_before_seconds_ago: value) }.must_raise ArgumentError
     end
+
     [nil, "false", 1].each do |value|
       _ { DecentJob::Worker.new(database: database, cleanup_discarded_jobs: value) }.must_raise ArgumentError
     end

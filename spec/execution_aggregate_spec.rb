@@ -22,12 +22,14 @@ describe "execution aggregates" do
   def snapshot(job: nil, scheduled_at: @origin, queue: 2, duration: 3, job_class: "FirstJob", queue_name: "default", state: "succeeded")
     job ||= RecordingJob.perform_later("fixture")
     id = SecureRandom.uuid
+
     database.with_connection do |connection|
       connection.exec_params(<<~SQL, [id, job.provider_job_id, (@origin + queue).iso8601(6), scheduled_at&.iso8601(6), duration, job_class, queue_name, state])
         INSERT INTO decent_job_executions (id, job_id, started_at, scheduled_at, duration, job_class, queue_name, state, process_id)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1)
       SQL
     end
+
     [job, id]
   end
 
@@ -62,10 +64,12 @@ describe "execution aggregates" do
 
   it "uses monotonic durations and retained snapshots without deserializing job payloads" do
     job, = snapshot(queue: 2, duration: 3)
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET queue_name = 'moved', job_class = 'MissingJob', payload = '{}' WHERE id = $1", [job.provider_job_id])
       connection.exec("UPDATE decent_job_executions SET payload = '{\"job_class\":\"MissingJob\"}', finished_at = started_at + interval '1 hour'")
     end
+
     _(metrics.summary).must_equal empty_summary.merge(jobs_count: 1, executions_count: 1,
       avg_queue: 2.0, min_queue: 2.0, max_queue: 2.0,
       avg_execution: 3.0, min_execution: 3.0, max_execution: 3.0,
@@ -156,6 +160,7 @@ describe "execution aggregates" do
     def coercible.to_s = "job_class"
     def coercible.to_str = "job_class"
     def coercible.==(other) = true
+
     [nil, 1, [], coercible, :duration, "JOB_CLASS", "job_class; DROP TABLE decent_job_executions"].each do |group|
       _ { metrics.grouped_by(group) }.must_raise ArgumentError
     end
@@ -175,11 +180,14 @@ describe "execution aggregates" do
     explicit = nil
     current = nil
     global = nil
+
     DecentJob.stub(:database, -> { raise "global database should not be used" }) do
       DecentJob::Current.with(database: Object.new) { explicit = DecentJob::ExecutionMetrics.new(database: database) }
       DecentJob::Current.with(database: database) { current = DecentJob::ExecutionMetrics.new }
     end
+
     DecentJob.stub(:database, database) { global = DecentJob::ExecutionMetrics.new }
+
     DecentJob.stub(:database, -> { raise "database should have been captured" }) do
       [explicit, current, global].each { |reader| _(reader.summary.fetch(:executions_count)).must_equal 1 }
     end
@@ -205,9 +213,11 @@ describe "execution aggregates" do
 
   it "aggregates in one SELECT per call" do
     snapshot
+
     database.with_connection do |connection|
       original = connection.method(:exec_params)
       calls = []
+
       connection.stub(:exec_params, ->(sql, binds) {
         calls << [sql, binds]
         original.call(sql, binds)
@@ -232,6 +242,7 @@ describe "execution aggregates" do
     result = metrics.summary
     _(result.fetch(:jobs_count)).must_equal 1
     _(result.fetch(:executions_count)).must_equal 2
+
     {queue: :queue_latency, execution: :runtime_latency, total: :total_latency}.each do |metric, method|
       values = attempts.map(&method)
       _(result.fetch(:"avg_#{metric}")).must_be_close_to values.sum / values.length, 0.000001
@@ -242,6 +253,7 @@ describe "execution aggregates" do
 
   it "includes a live claim's queue latency without estimating its runtime" do
     RecordingJob.perform_later("running")
+
     DecentJob::Claim.new(database).with_next do |row|
       execution = DecentJob::Execution.find(row.fetch("execution_id"), database: database)
       result = metrics.summary

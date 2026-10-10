@@ -67,6 +67,7 @@ module DecentJob
 
       warn(tags: [process_id]) do
         active_job_ids = event.payload.fetch(:active_job_ids, [])
+
         if active_job_ids.any?
           "DecentJob scheduler has been killed. The following Active Jobs were interrupted: #{active_job_ids.join(" ")}"
         else
@@ -110,6 +111,7 @@ module DecentJob
         else
           "exit status: #{status.inspect}"
         end
+
         "DecentJob supervisor reaped subprocess (PID: #{pid}, #{exit_description})."
       end
     end
@@ -278,12 +280,15 @@ module DecentJob
           @loggers = [@default_logger]
           @explicit_loggers = false
         end
+
         @explicit_loggers ||= @loggers != [@default_logger]
+
         unless @explicit_loggers || @default_logger.equal?(DecentJob.logger)
           @default_logger = DecentJob.logger
           @loggers.replace([@default_logger])
           reset_logger
         end
+
         @loggers
       end
 
@@ -307,8 +312,10 @@ module DecentJob
 
     def tag_logger(*tags, &block)
       tags = ["DecentJob", *tags].compact
+
       leaf_loggers(self.class.loggers).inject(block) do |inner, destination|
         formatter = destination.formatter if destination.respond_to?(:formatter)
+
         if destination.respond_to?(:tagged) && formatter.respond_to?(:current_tags)
           destination_tags = formatter.current_tags.include?("ActiveJob") ? ["ActiveJob", *tags] : tags
           proc { destination.tagged(*destination_tags, &inner) }

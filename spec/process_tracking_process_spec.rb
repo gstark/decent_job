@@ -28,8 +28,10 @@ describe "process tracking across workers" do
       rescue Errno::ESRCH
         nil
       end
+
       @process.join
     end
+
     [@input, @output, @stderr].compact.each { |io| io.close unless io.closed? }
     FileUtils.remove_entry(@directory)
     DecentJob.reset!
@@ -150,6 +152,7 @@ describe "process tracking across workers" do
     _(DecentJob.const_defined?(:ProcessRecord)).must_equal true
     job = start_worker("hold")
     record = record_for_worker
+
     database.with_connection do |connection|
       backend = connection.exec_params(<<~SQL, [record.id]).first.fetch("pid")
         SELECT pg_locks.pid FROM pg_locks, decent_job_processes
@@ -160,15 +163,19 @@ describe "process tracking across workers" do
       SQL
       _(connection.exec_params("SELECT pg_terminate_backend($1)", [backend]).getvalue(0, 0)).must_equal "t"
     end
+
     _(DecentJob::ProcessRecord.cleanup(database: database)).must_equal 0
     _(job.reload.locked_by_id).must_equal record.id
+
     database.with_connection do |connection|
       _(connection.exec_params("SELECT count(*) FROM decent_job_concurrency_claims WHERE job_id = $1 AND state = 'granted'", [job.id]).getvalue(0, 0)).must_equal "1"
     end
+
     await do
       record_for_worker.updated_at > record.updated_at &&
         DecentJob::ProcessRecord.active(database: database).any? { |item| item.id == record.id }
     end
+
     File.write(@release, "continue")
     await { job.reload.finished? }
     _(job.succeeded?).must_equal true

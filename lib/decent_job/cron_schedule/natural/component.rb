@@ -41,6 +41,7 @@ module DecentJob
           right = other.values[index]
           return left if right.nil?
           return right if left.nil?
+
           range = if index == 0
             if other.strong == 1
               hour_range
@@ -48,10 +49,12 @@ module DecentJob
               other.hour_range
             end
           end
+
           if range
             first, last = range
             return (first == last - 1) ? first : "#{first}-#{last - 1}"
           end
+
           return left if strong == index || strong == true
           return right if other.strong == index || other.strong == true
           return left if other.weak == index || other.weak == true

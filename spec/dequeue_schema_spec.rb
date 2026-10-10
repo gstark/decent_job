@@ -17,6 +17,7 @@ describe "dequeue creation indexes" do
   it "installs global and queue creation indexes while retaining deadline indexes" do
     DecentJob::Schema.new(database).migrate
     indexes = index_definitions
+
     {"decent_jobs_creation_available" => "(priority, created_at, id)",
      "decent_jobs_queue_creation_available" => "(queue_name, priority, created_at, id)",
      "decent_jobs_available" => "(priority, scheduled_at, id)",
@@ -25,6 +26,7 @@ describe "dequeue creation indexes" do
       _(indexes.fetch(name)).must_include columns
       _(indexes.fetch(name)).must_include "WHERE (state = ANY (ARRAY['ready'::text, 'running'::text]))"
     end
+
     DecentJob::Schema.new(database).migrate
     _(index_definitions).must_equal indexes
   end
@@ -32,11 +34,13 @@ describe "dequeue creation indexes" do
   it "executes against version nine before upgrading without changing jobs or existing indexes" do
     database.with_connection do |connection|
       connection.exec("CREATE TABLE decent_job_schema_migrations (version integer PRIMARY KEY)")
+
       Dir[File.join(DecentJob::Schema::MIGRATIONS_PATH, "*.sql")].sort.first(9).each_with_index do |path, index|
         connection.exec(File.read(path))
         connection.exec_params("INSERT INTO decent_job_schema_migrations VALUES ($1)", [index + 1])
       end
     end
+
     RecordingJob.queue_adapter = DecentJob::Adapter.new(database: database)
     RecordingJob.events = Queue.new
     first = RecordingJob.perform_later("before migration")
@@ -45,6 +49,7 @@ describe "dequeue creation indexes" do
     DecentJob.configuration.lock_strategy = :skiplocked
     DecentJob.configuration.queue_select_limit = 1
     ownership = []
+
     observe = lambda do |active_job_id|
       database.with_connection do |connection|
         ownership << connection.exec_params(<<~SQL, [active_job_id]).first
@@ -54,6 +59,7 @@ describe "dequeue creation indexes" do
         SQL
       end
     end
+
     performer = DecentJob::Performer.new(database: database, on_execution_start: observe)
     _(performer.perform_one.job_id).must_equal first.provider_job_id
     _(RecordingJob.events.pop(true)).must_equal "before migration"
@@ -67,6 +73,7 @@ describe "dequeue creation indexes" do
     _(RecordingJob.events.pop(true)).must_equal "after migration"
     _(ownership.last).must_equal({"lock_type" => "skiplocked", "advisory_locked" => "f"})
     DecentJob::Schema.new(database).migrate
+
     database.with_connection do |connection|
       _(connection.exec("SELECT max(version) FROM decent_job_schema_migrations").getvalue(0, 0)).must_equal "11"
     end

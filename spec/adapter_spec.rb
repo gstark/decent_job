@@ -45,24 +45,28 @@ describe "Active Job adapter" do
 
   it "shares explicit database transactions" do
     id = nil
+
     _ {
       database.transaction do
         id = ExampleJob.perform_later.provider_job_id
         raise "rollback application transaction"
       end
     }.must_raise RuntimeError
+
     _(@store.find(id)).must_be_nil
   end
 
   it "does not publish a notification for rolled back jobs" do
     listener = PG.connect(@connection_options)
     listener.exec("LISTEN decent_job")
+
     _ {
       database.transaction do
         ExampleJob.perform_later
         raise "rollback"
       end
     }.must_raise RuntimeError
+
     _(listener.wait_for_notify(0.02)).must_be_nil
   ensure
     listener&.finish

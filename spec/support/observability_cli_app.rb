@@ -25,6 +25,7 @@ if ENV["OBSERVABILITY_DATABASE"]
     config.lower_thread_priority = true
     config.process_heartbeat_interval = 0.05
   end
+
   ObservabilityProcessJob.queue_adapter = :decent_job
   ActiveJob::Base.logger = Logger.new(File::NULL)
 end

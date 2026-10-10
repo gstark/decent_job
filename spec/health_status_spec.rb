@@ -19,6 +19,7 @@ describe "worker health status" do
     rescue Exception # standard:disable Lint/RescueException
       nil
     end
+
     DecentJob.reset!
   end
 
@@ -65,12 +66,14 @@ describe "worker health status" do
 
   it "clears listener readiness on connection loss and restores it after LISTEN" do
     connections = Queue.new
+
     database.define_singleton_method(:connect) do
       super().tap { |connection|
         connection.set_notice_processor {}
         connections << connection.backend_pid
       }
     end
+
     instance = worker
     instance.start
     eventually { instance.connected? }
@@ -87,19 +90,24 @@ describe "worker health status" do
   it "clears heartbeat readiness without issuing SQL from readers and recovers" do
     release = Queue.new
     errors = Queue.new
+
     tracker = DecentJob::ProcessTracker.new(database: database, process_heartbeat_interval: 0.03,
       on_thread_error: ->(error) {
         errors << error
         release.pop
       })
+
     connection_pid = Queue.new
+
     database.define_singleton_method(:connect) do
       super().tap { |connection|
         connection.set_notice_processor {}
         connection_pid << connection.backend_pid
       }
     end
+
     _(tracker.connected?).must_equal false
+
     tracker.register do
       _(tracker.connected?).must_equal true
       @admin.exec_params("SELECT pg_terminate_backend($1)", [connection_pid.pop])
@@ -110,6 +118,7 @@ describe "worker health status" do
       tracker.stop
       _(tracker.connected?).must_equal false
     end
+
     _(tracker.connected?).must_equal false
   ensure
     release << true

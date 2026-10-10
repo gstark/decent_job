@@ -21,6 +21,7 @@ if $PROGRAM_NAME == __FILE__
   ActiveSupport::IsolatedExecutionState.isolation_level = ENV.fetch("UTILITY_ISOLATION").to_sym
   directory = ENV.fetch("UTILITY_DIRECTORY")
   write = ->(name, data) { File.write(File.join(directory, "#{name}.json"), JSON.generate(data)) }
+
   DecentJob.configure do |config|
     config.database_url = JSON.parse(ENV.fetch("UTILITY_DATABASE"))
     config.execution_mode = :async_all
@@ -41,18 +42,22 @@ if $PROGRAM_NAME == __FILE__
       }
     }}
   end
+
   pool = DecentJob.database
   pool.resize(2)
   adapter = DecentJob::Adapter.new(database: pool, execution_mode: :async_all)
   RuntimeUtilitiesJob.queue_adapter = adapter
   worker = adapter.start_async
   wake = worker.method(:wake)
+
   worker.define_singleton_method(:wake) do |state = nil|
     if state.is_a?(Hash) && state["queue_name"] == "utility-probe"
       File.write(File.join(directory, "notified"), "true")
     end
+
     wake.call(state)
   end
+
   Timeout.timeout(12) { sleep 0.01 until worker.connected? && pool.stats.fetch(:active) == 2 }
   write.call("ready", process_id: worker.process_id, pool: pool.stats)
   Timeout.timeout(12) { sleep 0.01 until File.exist?(File.join(directory, "stop")) }

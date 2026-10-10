@@ -28,8 +28,10 @@ describe "job management across processes" do
       rescue Errno::ESRCH
         nil
       end
+
       @process.join
     end
+
     [@input, @output, @stderr].compact.each { |io| io.close unless io.closed? }
     FileUtils.remove_entry(@directory)
   end

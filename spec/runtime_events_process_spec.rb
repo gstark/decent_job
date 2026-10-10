@@ -26,11 +26,13 @@ describe "worker runtime events across CLI processes" do
 
   def events(name = nil)
     return [] unless File.exist?(@events_path)
+
     rows = File.readlines(@events_path).filter_map do |line|
       JSON.parse(line)
     rescue JSON::ParserError
       nil
     end
+
     name ? rows.select { |row| row.fetch("name") == name } : rows
   end
 
@@ -50,14 +52,17 @@ describe "worker runtime events across CLI processes" do
                    "NOTIFY_SOCKET" => nil, "WATCHDOG_USEC" => nil}
     command = [RbConfig.ruby, "-Ilib", "exe/decent_job", "start", "--require", "spec/support/runtime_events_cli_app.rb",
       "--queues", "events:1", "--poll-interval", poll_interval, "--shutdown-timeout", "3"]
+
     Open3.popen3(environment, *command, pgroup: true) do |input, output, error, process|
       input.close
       stdout = Thread.new { output.read }
       stderr = Thread.new { error.read }
+
       await do
         raise "Worker stopped: #{stderr.value}\n#{stdout.value}" unless process.alive?
         !events("notifier_listen.decent_job").empty? && !events("finished_job_task.decent_job").empty?
       end
+
       yield process.pid
       Process.kill("TERM", process.pid)
       status = Timeout.timeout(6) { process.value }
@@ -67,6 +72,7 @@ describe "worker runtime events across CLI processes" do
         Process.kill("KILL", -process.pid)
         process.join
       end
+
       stdout&.join
       stderr&.join
     end
@@ -104,6 +110,7 @@ describe "worker runtime events across CLI processes" do
       await { events("notifier_listen.decent_job").size == 2 }
       _(events("notifier_notify_error.decent_job").any? { |row| row.fetch("error").start_with?("PG::") }).must_equal true
     end
+
     _(events("notifier_unlisten.decent_job").size).must_equal 1
     _(DecentJob::ProcessRecord.all(database: database)).must_be_empty
   end
@@ -116,6 +123,7 @@ describe "worker runtime events across CLI processes" do
       await { events("notifier_notified.decent_job").any? { |row| row["raw"].nil? || row["raw"] == "" } }
       _(events("finished_timer_task.decent_job")).must_be_empty
     end
+
     _(events("notifier_unlisten.decent_job").size).must_equal 1
     _(events("error_callback")).must_be_empty
   end

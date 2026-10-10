@@ -36,6 +36,7 @@ module DecentJob
     # own value, like ActiveSupport's class_attribute without instance access.
     def class_setting(klass, name, default)
       variable = :"@#{name}"
+
       klass.define_singleton_method(name) do
         if instance_variable_defined?(variable)
           instance_variable_get(variable)
@@ -45,6 +46,7 @@ module DecentJob
           default
         end
       end
+
       klass.define_singleton_method(:"#{name}=") { |value| instance_variable_set(variable, value) }
     end
 

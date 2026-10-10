@@ -78,6 +78,7 @@ describe "adapter parity with the pinned GoodJob contract" do
       original_zone = Time.zone
       available = I18n.available_locales
       I18n.available_locales = (available + [:fr]).uniq
+
       job = I18n.with_locale(:fr) do
         Time.use_zone("Pacific/Honolulu") do
           if kind == :single
@@ -87,8 +88,10 @@ describe "adapter parity with the pinned GoodJob contract" do
           end
         end
       end
+
       payload = @store.find(job.provider_job_id).fetch("payload")
       _(payload.values_at("locale", "timezone", "job_id", "provider_job_id")).must_equal ["fr", "Pacific/Honolulu", job.job_id, job.provider_job_id]
+
       I18n.with_locale(:en) do
         Time.use_zone("UTC") do
           _(DecentJob::Performer.new(database: database).perform_one.state).must_equal "succeeded"
@@ -96,6 +99,7 @@ describe "adapter parity with the pinned GoodJob contract" do
           _(Time.zone.name).must_equal "UTC"
         end
       end
+
       _(AdapterParityJob.events).must_equal [["localized", "fr", "Pacific/Honolulu", :fr, "Pacific/Honolulu", job.job_id, job.provider_job_id]]
       _(I18n.locale).must_equal original_locale
       _(Time.zone).must_be_same_as original_zone

@@ -26,6 +26,7 @@ describe "job latency" do
 
   it "reports increasing queue time and no runtime before a queued job starts" do
     job = DecentJob::Job.find(RecordingJob.perform_later("queued").provider_job_id, database: database)
+
     Time.stub(:now, job.scheduled_at + 10) do
       _(job.queue_latency).must_equal 10.0
       _(job.runtime_latency).must_be_nil
@@ -35,16 +36,20 @@ describe "job latency" do
 
   it "reports running and completed wall latencies from the shared performed timestamp" do
     job = DecentJob::Job.find(RecordingJob.perform_later("running").provider_job_id, database: database)
+
     DecentJob::Claim.new(database).with_next do
       job.reload
+
       Time.stub(:now, job.performed_at + 10) do
         _(job.queue_latency).must_equal job.performed_at - job.scheduled_at
         _(job.runtime_latency).must_equal 10.0
         _(job.total_latency).must_equal job.queue_latency + 10
       end
     end
+
     @performer.perform_one
     job.reload
+
     Time.stub(:now, job.finished_at + 100) do
       _(job.queue_latency).must_equal job.performed_at - job.scheduled_at
       _(job.runtime_latency).must_equal job.finished_at - job.performed_at
@@ -57,6 +62,7 @@ describe "job latency" do
     @performer.perform_one
     job.reload
     _(job.performed_at).must_be_nil
+
     Time.stub(:now, job.scheduled_at + 10) do
       _(job.queue_latency).must_equal 10.0
       _(job.runtime_latency).must_be_nil
@@ -67,6 +73,7 @@ describe "job latency" do
   it "uses the discard timestamp for a job discarded before it started" do
     job = DecentJob::Job.find(RecordingJob.perform_later("discard").provider_job_id, database: database)
     job.discard_job("cancelled")
+
     Time.stub(:now, job.finished_at + 100) do
       _(job.queue_latency).must_equal job.finished_at - job.scheduled_at
       _(job.runtime_latency).must_be_nil
@@ -77,10 +84,13 @@ describe "job latency" do
   it "preserves signed wall clock intervals rather than hiding clock skew" do
     job = DecentJob::Job.find(RecordingJob.perform_later("done").provider_job_id, database: database)
     @performer.perform_one
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET performed_at = scheduled_at - interval '5 seconds', finished_at = scheduled_at - interval '10 seconds' WHERE id = $1", [job.id])
     end
+
     job.reload
+
     Time.stub(:now, job.scheduled_at + 1) do
       _(job.queue_latency).must_equal(-5.0)
       _(job.runtime_latency).must_equal(-5.0)

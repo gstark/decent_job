@@ -41,6 +41,7 @@ class WorkflowRecursiveJob < WorkflowCallbackJob
         2.times { WorkflowMemberJob.perform_later("stage member") }
       end
     end
+
     super
   end
 end
@@ -50,6 +51,7 @@ class WorkflowAttachingJob < WorkflowMemberJob
     created = DecentJob::Batch.enqueue([self], database: DecentJob::Current.execution.fetch(:database), on_finish: WorkflowCallbackJob) do
       WorkflowMemberJob.perform_later("child")
     end
+
     self.class.events << [value, created.id, batch.id]
   end
 end
@@ -75,20 +77,24 @@ class WorkflowControlledBulkChildJob < WorkflowMemberJob
   include DecentJob::ActiveJobExtensions::Concurrency
 
   class_attribute :enqueue_events, default: []
+
   before_enqueue do
     enqueue_events << [:before, job_id]
     self.queue_name = "callback-child"
     self.decent_job_labels = ["callback-child"]
   end
+
   after_enqueue { enqueue_events << [:after, job_id] }
 end
 
 class WorkflowBulkChildrenCallbackJob < WorkflowCallbackJob
   class_attribute :enqueue_events, default: []
+
   before_enqueue do
     enqueue_events << :before
     ActiveJob.perform_all_later(WorkflowControlledBulkChildJob.new("first child"), WorkflowControlledBulkChildJob.new("second child"))
   end
+
   after_enqueue { enqueue_events << :after }
 end
 
@@ -141,10 +147,12 @@ describe "batch workflows" do
 
   def drain
     count = 0
+
     while @performer.perform_one
       count += 1
       raise "batch execution loop" if count > 100
     end
+
     count
   end
 
@@ -159,14 +167,17 @@ describe "batch workflows" do
     release = Queue.new
     registry = DecentJob::BatchStore.new(database)
     first_read = true
+
     registry.define_singleton_method(:find) do |id|
       if first_read
         first_read = false
         entered << true
         release.pop
       end
+
       super(id)
     end
+
     @threads << Thread.new { registry.reconcile(batch.id) }
     Timeout.timeout(5) { entered.pop }
     @threads << Thread.new { @performer.perform_one(job_id: job.provider_job_id) }
@@ -261,12 +272,15 @@ describe "batch workflows" do
     inline = DecentJob::Adapter.new(database: database, execution_mode: :inline)
     @classes.each { |klass| klass.queue_adapter = inline }
     batch = nil
+
     outer = DecentJob::Bulk.enqueue do
       batch = DecentJob::Batch.enqueue([WorkflowChildJob.new], database: database)
       _(WorkflowMemberJob.events.size).must_equal 1
     end
+
     _(outer).must_be_empty
     _(batch.job_instances.size).must_equal 1
+
     database.with_connection do |connection|
       _(connection.exec("SELECT batch_id FROM decent_jobs WHERE job_class = 'WorkflowMemberJob'").getvalue(0, 0)).must_be_nil
     end
@@ -275,9 +289,11 @@ describe "batch workflows" do
   it "deduplicates callbacks when final members finish concurrently" do
     jobs = 2.times.map { WorkflowBlockingJob.new }
     batch = DecentJob::Batch.enqueue(jobs, database: database, on_finish: WorkflowCallbackJob, on_success: WorkflowCallbackJob)
+
     jobs.each do |job|
       @threads << Thread.new { @performer.perform_one(job_id: job.provider_job_id) }
     end
+
     2.times { Timeout.timeout(5) { WorkflowBlockingJob.started.pop } }
     2.times { WorkflowBlockingJob.release << true }
     @threads.each(&:value)
@@ -378,12 +394,14 @@ describe "batch workflows" do
   it "serializes opposing callback scope orders without deadlocking" do
     gate = Queue.new
     orders = [{finish: "A", success: "B"}, {finish: "B", success: "A"}]
+
     @threads = orders.map do |keys|
       Thread.new do
         gate.pop
         DecentJob::Batch.enqueue(database: database, on_finish: WorkflowKeyCallbackJob, on_success: WorkflowKeyCallbackJob, keys: keys)
       end
     end
+
     2.times { gate << true }
     batches = Timeout.timeout(10) { @threads.map(&:value) }
     _(batches.map { |batch| batch.callback_job_instances.size }).must_equal [2, 2]

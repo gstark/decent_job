@@ -5,6 +5,7 @@ module DecentJob
   # notifications when the host loads them, so Rails subscribers keep working.
   module Notifications
     Event = Data.define(:name, :payload, :duration)
+
     Subscription = Data.define(:pattern, :callback) do
       def match?(name)
         pattern.is_a?(Regexp) ? pattern.match?(name) : pattern == name
@@ -36,6 +37,7 @@ module DecentJob
       # Run every subscriber before raising, as ActiveSupport does.
       def finish
         errors = []
+
         begin
           @external&.finish
         rescue ActiveSupport::Notifications::InstrumentationSubscriberError => error
@@ -43,15 +45,18 @@ module DecentJob
         rescue => error
           errors << error
         end
+
         unless @subscriptions.empty?
           duration = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - (@started || 0)) * 1000.0
           event = Event.new(name: @name, payload: @payload, duration: duration)
+
           @subscriptions.each do |subscription|
             subscription.callback.call(event)
           rescue => error
             errors << error
           end
         end
+
         raise errors.first if errors.size == 1
         raise SubscriberError, errors unless errors.empty?
       end
@@ -87,6 +92,7 @@ module DecentJob
       def instrument(name, payload = {})
         handle = build_handle(name, payload)
         handle.start
+
         begin
           yield payload if block_given?
         rescue Exception => error # standard:disable Lint/RescueException

@@ -33,10 +33,13 @@ describe "cron manager processes" do
         rescue Errno::ESRCH
           # The child can exit before Open3's waiter records its status.
         end
+
         process.join
       end
+
       [input, output, error].each { |io| io.close unless io.closed? }
     end
+
     FileUtils.remove_entry(@directory)
   end
 

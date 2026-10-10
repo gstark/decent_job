@@ -27,6 +27,7 @@ describe "daemon and idle CLI lifecycle" do
     events = []
     instance = fake_daemon(events)
     command = cli
+
     DecentJob::Daemon.stub(:new, instance) do
       DecentJob.stub(:start, -> {
         events << :start
@@ -40,6 +41,7 @@ describe "daemon and idle CLI lifecycle" do
         end
       end
     end
+
     _(events).must_equal [:detach, :start, :drain, :pid_cleanup]
     _(@output.string).must_include "startup failed"
   end
@@ -48,11 +50,13 @@ describe "daemon and idle CLI lifecycle" do
     events = []
     instance = fake_daemon(events, cleanup: -> { raise "secondary PID cleanup failure" })
     command = cli
+
     DecentJob::Daemon.stub(:new, instance) do
       DecentJob.stub(:start, -> { raise "original startup failure" }) do
         _(command.run(%w[--daemonize])).must_equal 1
       end
     end
+
     _(@output.string).must_include "original startup failure"
     _(@output.string).wont_include "secondary PID cleanup failure"
   end
@@ -63,6 +67,7 @@ describe "daemon and idle CLI lifecycle" do
     worker = Object.new
     worker.define_singleton_method(:shutdown?) { true }
     command = cli
+
     DecentJob::Daemon.stub(:new, instance) do
       DecentJob.stub(:start, worker) do
         DecentJob.stub(:shutdown, ->(**) {
@@ -73,6 +78,7 @@ describe "daemon and idle CLI lifecycle" do
         end
       end
     end
+
     _(command.shutdown_timed_out).must_equal true
     _(events).must_equal [:detach, :drain, :pid_cleanup]
   end
@@ -81,16 +87,20 @@ describe "daemon and idle CLI lifecycle" do
     durations = []
     worker = Object.new
     worker.define_singleton_method(:shutdown?) { false }
+
     worker.define_singleton_method(:idle?) { |duration|
       durations << duration
       true
     }
+
     command = cli
+
     DecentJob::Daemon.stub(:new, ->(**) { flunk "foreground must not claim a PID file" }) do
       DecentJob.stub(:start, worker) do
         Timeout.timeout(2) { _(command.run(%w[--idle-timeout 0.25])).must_equal 0 }
       end
     end
+
     _(durations).must_equal [0.25]
   end
 
@@ -98,9 +108,11 @@ describe "daemon and idle CLI lifecycle" do
     logs = StringIO.new
     DecentJob.configure { |config| config.logger = Logger.new(logs) }
     command = cli
+
     DecentJob::Supervisor.stub(:new, -> { raise "cluster chosen" }) do
       _(command.run(%w[--subprocesses 2 --idle-timeout 1])).must_equal 1
     end
+
     _(logs.string).must_match(/idle_timeout.*ignor/i)
   end
 
@@ -110,6 +122,7 @@ describe "daemon and idle CLI lifecycle" do
     worker.define_singleton_method(:idle?) { |duration| duration == 0 }
     responds = Process.method(:respond_to?)
     command = cli
+
     Process.stub(:respond_to?, ->(name, *args) { (name == :fork) ? false : responds.call(name, *args) }) do
       DecentJob.stub(:start, worker) do
         Timeout.timeout(2) { _(command.run(%w[--subprocesses 2 --idle-timeout 0])).must_equal 0 }

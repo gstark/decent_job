@@ -18,14 +18,17 @@ describe "natural cron reference conformance" do
   fixture.fetch("cases").each do |entry|
     it "matches reference scheduling for #{entry.fetch("expression").inspect}" do
       schedule = DecentJob::CronSchedule.parse(entry.fetch("expression"))
+
       if entry.fetch("valid")
         _(schedule).wont_be_nil
         _(schedule.original).must_equal entry.fetch("original")
         cursor = Time.iso8601(entry.fetch("after"))
+
         actual = entry.fetch("next").map do
           cursor = schedule.next_at(after: cursor)
           cursor.utc.iso8601
         end
+
         _(actual).must_equal entry.fetch("next")
       else
         _(schedule).must_be_nil

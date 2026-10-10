@@ -37,6 +37,7 @@ describe "process tracking" do
       tracker.register { |nested| _(nested).must_equal id }
       _(DecentJob::ProcessRecord.all(database: database).map(&:id)).must_equal [id]
     end
+
     _(DecentJob::ProcessRecord.all(database: database)).must_be_empty
     _(tracker.join(0)).must_equal true
   end
@@ -101,6 +102,7 @@ describe "worker process state" do
     database.with_connection do |connection|
       connection.exec_params("INSERT INTO decent_job_processes (id, heartbeat_mode, updated_at) VALUES ($1, 'heartbeat', clock_timestamp() - interval '1 hour')", [SecureRandom.uuid])
     end
+
     @worker.start
     eventually { DecentJob::ProcessRecord.inactive(database: database).empty? }
     _(DecentJob::ProcessRecord.all(database: database).map(&:id)).must_equal [@worker.process_id]
@@ -151,9 +153,11 @@ describe "process tracking recovery" do
 
   def insert_process(mode: "heartbeat", age: 301)
     id = SecureRandom.uuid
+
     database.with_connection do |connection|
       connection.exec_params("INSERT INTO decent_job_processes (id, heartbeat_mode, updated_at) VALUES ($1, $2, clock_timestamp() - $3 * interval '1 second')", [id, mode, age])
     end
+
     id
   end
 
@@ -172,6 +176,7 @@ describe "process tracking recovery" do
   it "shares concurrent leases and drains after stop without prematurely removing presence" do
     @tracker = DecentJob::ProcessTracker.new(database: database, process_heartbeat_interval: 0.02)
     started = Queue.new
+
     @threads = 2.times.map {
       Thread.new {
         @tracker.register { |id|
@@ -180,6 +185,7 @@ describe "process tracking recovery" do
         }
       }
     }
+
     ids = 2.times.map { Timeout.timeout(5) { started.pop } }
     _(ids.uniq).must_equal [@tracker.process_id]
     @tracker.stop
@@ -197,8 +203,10 @@ describe "process tracking recovery" do
     errors = Queue.new
     @tracker = DecentJob::ProcessTracker.new(database: database, advisory_lock_heartbeat: true,
       process_heartbeat_interval: 0.02, on_thread_error: ->(error) { errors << error })
+
     @tracker.register do |id|
       record = DecentJob::ProcessRecord.find(id, database: database)
+
       database.with_connection do |connection|
         connection.exec(<<~SQL)
           SELECT pg_terminate_backend(pid) FROM pg_locks WHERE locktype = 'advisory' AND granted
@@ -207,6 +215,7 @@ describe "process tracking recovery" do
             AND objid = (hashtextextended(current_schema() || '.decent_job_processes.#{id}', 0) & 4294967295)::oid
         SQL
       end
+
       eventually { !errors.empty? }
       eventually { DecentJob::ProcessRecord.find(id, database: database).updated_at > record.updated_at }
       _(DecentJob::ProcessRecord.active(database: database).map(&:id)).must_equal [id]
@@ -216,9 +225,11 @@ describe "process tracking recovery" do
   it "skips expired ownership while any session holds its job lock, including this checkout" do
     owner = insert_process
     job = RecordingJob.perform_later("owned")
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET locked_by_id = $2 WHERE id = $1", [job.provider_job_id, owner])
       connection.exec_params("SELECT pg_advisory_lock(hashtextextended(current_schema() || '.decent_jobs.' || $1, 0))", [job.provider_job_id])
+
       begin
         _(DecentJob::ProcessRecord.cleanup(database: database)).must_equal 0
         _(DecentJob::Job.find(job.provider_job_id, database: database).locked_by_id).must_equal owner
@@ -226,6 +237,7 @@ describe "process tracking recovery" do
         connection.exec_params("SELECT pg_advisory_unlock(hashtextextended(current_schema() || '.decent_jobs.' || $1, 0))", [job.provider_job_id])
       end
     end
+
     _(DecentJob::ProcessRecord.cleanup(database: database)).must_equal 1
     _(DecentJob::Job.find(job.provider_job_id, database: database).locked_by_id).must_be_nil
   end
@@ -234,20 +246,24 @@ describe "process tracking recovery" do
     owner = insert_process
     job = RecordingJob.perform_later("abandoned")
     execution_id = SecureRandom.uuid
+
     database.with_connection do |connection|
       connection.exec_params("INSERT INTO decent_job_executions (id, job_id, process_id, process_uuid) VALUES ($1, $2, $3, $4)", [execution_id, job.provider_job_id, Process.pid, owner])
       connection.exec_params("UPDATE decent_jobs SET locked_by_id = $2, execution_id = $3 WHERE id = $1", [job.provider_job_id, owner, execution_id])
       connection.exec_params("INSERT INTO decent_job_concurrency_claims (scope, job_id, execution_id, state) VALUES ('busy', $1, $2, 'granted'), ('waiting', $1, $2, 'waiting')", [job.provider_job_id, execution_id])
     end
+
     separate = database.connect
     separate.exec("SELECT pg_advisory_lock(hashtextextended(current_schema() || '.decent_job.concurrency.busy', 0))")
     _(DecentJob::ProcessRecord.cleanup(database: database)).must_equal 0
     _(DecentJob::Job.find(job.provider_job_id, database: database).locked_by_id).must_equal owner
     separate.finish
     _(DecentJob::ProcessRecord.cleanup(database: database)).must_equal 1
+
     database.with_connection do |connection|
       _(connection.exec("SELECT state FROM decent_job_concurrency_claims").column_values(0)).must_equal ["waiting"]
     end
+
     _(DecentJob::Execution.find(execution_id, database: database).process_uuid).must_equal owner
   ensure
     separate&.finish unless separate&.finished?
@@ -257,6 +273,7 @@ describe "process tracking recovery" do
     busy = insert_process
     free = insert_process
     acquired = Queue.new
+
     @threads << Thread.new do
       database.transaction do |connection|
         connection.exec_params("SELECT id FROM decent_job_processes WHERE id = $1 FOR UPDATE", [busy])
@@ -264,6 +281,7 @@ describe "process tracking recovery" do
         @release.pop
       end
     end
+
     Timeout.timeout(5) { acquired.pop }
     _(DecentJob::ProcessRecord.cleanup(database: database)).must_equal 1
     _(DecentJob::ProcessRecord.all(database: database).map(&:id)).must_equal [busy]
@@ -356,11 +374,13 @@ describe "process resource boundaries" do
     _(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).must_be :<, 1
   ensure
     tracker&.stop
+
     begin
       tracker&.join(2)
     rescue NotImplementedError
       nil
     end
+
     Thread.report_on_exception = previous
   end
 end
@@ -396,8 +416,10 @@ describe "process tracking configuration and startup" do
   it "rejects independently opening an inherited database after fork" do
     inherited = database
     reader, writer = IO.pipe
+
     pid = fork do
       reader.close
+
       begin
         inherited.connect.finish
         writer.write("opened")
@@ -408,6 +430,7 @@ describe "process tracking configuration and startup" do
         exit! 0
       end
     end
+
     writer.close
     _(reader.read).must_equal "rejected"
     Process.wait(pid)

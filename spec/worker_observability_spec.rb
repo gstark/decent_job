@@ -87,10 +87,12 @@ describe "worker observability" do
   it "records completion before a blocking error reporter returns" do
     reports = Queue.new
     reporter_release = Queue.new
+
     instance = worker(on_thread_error: ->(_error) {
       reports << true
       reporter_release.pop
     })
+
     ObservabilityBlockingFailureJob.perform_later
     instance.start
     pop(BlockingJob.started)
@@ -108,18 +110,23 @@ describe "worker observability" do
     reports = Queue.new
     reporter_release = Queue.new
     clock = [100.0]
+
     instance = worker(on_thread_error: ->(error) {
       reports << error
       reporter_release.pop
     })
+
     instance.define_singleton_method(:monotonic_time) { clock.first }
     constructor = DecentJob::Performer.method(:new)
+
     failing_finish = lambda do |**options|
       constructor.call(**options).tap do |performer|
         performer.define_singleton_method(:finish) { |*| raise IOError, "failed to persist completion" }
       end
     end
+
     BlockingJob.perform_later
+
     DecentJob::Performer.stub(:new, failing_finish) do
       instance.start
       pop(BlockingJob.started)
@@ -148,6 +155,7 @@ describe "worker observability" do
     instance = worker(on_thread_error: ->(error) { errors << error })
     performer = DecentJob::Performer.new(database: database)
     performer.define_singleton_method(:perform_one) { |**| raise IOError, "database unavailable" }
+
     DecentJob::Performer.stub(:new, performer) do
       instance.start
       _(pop(errors)).must_be_kind_of IOError
@@ -197,10 +205,12 @@ describe "worker observability" do
     pop(BlockingJob.started)
     wait_until { slow.stats[:empty_executions_count].to_i.positive? }
     original = fast.method(:stats)
+
     fast.define_singleton_method(:stats) do
       DecentJob.stopping?
       original.call
     end
+
     stats = Timeout.timeout(1) { DecentJob.stats }
     _(stats[:schedulers].size).must_equal 2
     _(stats[:active_execution_thread_count]).must_equal 1
@@ -217,17 +227,21 @@ describe "inactive runtime inspection" do
 
   it "reports empty aggregate statistics without opening a database" do
     DecentJob.reset!
+
     DecentJob.stub(:database, -> { raise "must not open a database" }) do
       _(DecentJob.idle?).must_equal true
       _(DecentJob.idle?(10)).must_equal true
       stats = DecentJob.stats
       _(stats[:schedulers]).must_equal []
+
       %i[empty_executions_count errored_executions_count succeeded_executions_count total_executions_count active_execution_thread_count].each do |key|
         _(stats.fetch(key)).must_equal 0
       end
+
       _(stats.fetch(:execution_at)).must_be_nil
       _(stats.fetch(:check_queue_at)).must_be_nil
     end
+
     _ { DecentJob.idle?(-1) }.must_raise ArgumentError
   end
 end

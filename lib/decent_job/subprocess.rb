@@ -22,10 +22,12 @@ module DecentJob
       DecentJob.run_lifecycle_hooks(:before_subprocess_boot)
       @reader, @writer = IO.pipe
       @previous_traps = {}
+
       %w[INT TERM QUIT].each do |signal|
         @previous_traps[signal] = Signal.trap(signal) do
           @stopped = true
           @immediate = true if signal == "QUIT"
+
           begin
             @writer.write_nonblock(".", exception: false)
           rescue IOError, Errno::EPIPE
@@ -33,13 +35,16 @@ module DecentJob
           end
         end
       end
+
       DecentJob.start unless @stopped
       Notifications.instrument("subprocess_start.decent_job", pid: Process.pid, index: @index)
+
       until @stopped || Process.ppid != @supervisor_pid || !DecentJob.started?
         report_readiness
         IO.select([@reader], nil, nil, CHECK_INTERVAL)
         @reader.read_nonblock(4096, exception: false)
       end
+
       true
     ensure
       begin
@@ -47,8 +52,10 @@ module DecentJob
       rescue Exception => error # standard:disable Lint/RescueException
         DecentJob.report_thread_error(error)
       end
+
       begin
         @drained = DecentJob.shutdown(timeout: @immediate ? 0 : @configuration.shutdown_timeout)
+
         begin
           Notifications.instrument("subprocess_shutdown.decent_job", pid: Process.pid, index: @index)
         rescue Exception => error # standard:disable Lint/RescueException

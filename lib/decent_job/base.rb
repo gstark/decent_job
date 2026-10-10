@@ -91,11 +91,13 @@ module DecentJob
 
       def deserialize(job_data)
         name = job_data.fetch("job_class")
+
         job_class = begin
           Support.constantize(name)
         rescue NameError
           raise UnknownJobClassError, name
         end
+
         raise ArgumentError, "#{name} is not a DecentJob::Base job" unless job_class.is_a?(Class) && job_class <= Base
 
         job_class.new.tap { |job| job.deserialize(job_data) }

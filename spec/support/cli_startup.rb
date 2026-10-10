@@ -6,11 +6,13 @@ require "timeout"
 module CliStartupSpec
   def await_started(output, error)
     lines = []
+
     Timeout.timeout(8) do
       while (line = output.gets)
         lines << line
         return lines.join if line.include?("DecentJob started. Send SIGINT or SIGTERM to stop.")
       end
+
       flunk "CLI failed to boot. stdout: #{lines.join.inspect}; stderr: #{error.read}"
     end
   rescue Timeout::Error

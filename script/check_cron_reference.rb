@@ -27,14 +27,17 @@ count = Integer(ENV.fetch("CRON_CASES", "1000"))
 abort "CRON_CASES must be positive" unless count.positive?
 random = Random.new(seed)
 failures = []
+
 count.times do
   expression = fields.map { |choices| choices.sample(random: random) }.join(" ") + " UTC"
   reference = Fugit::Cron.parse(expression)
   schedule = DecentJob::CronSchedule.parse(expression)
+
   if !!reference != !!schedule
     failures << ["parse", expression, !!reference, !!schedule]
     next
   end
+
   next unless reference
   after = Time.utc(2026, random.rand(1..12), random.rand(1..28), random.rand(0..23), random.rand(0..59), random.rand(0..59))
   expected = reference.next_time(after).to_i
@@ -43,6 +46,7 @@ count.times do
 rescue => error
   failures << ["error", expression, error.class, error.message]
 end
+
 failures.each { |failure| warn failure.inspect }
 abort "#{failures.size} differences in #{count} cases (seed #{seed})" unless failures.empty?
 puts "#{count} cron cases match the pinned reference (seed #{seed})"

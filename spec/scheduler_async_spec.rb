@@ -52,16 +52,20 @@ describe "local async scheduling" do
       sleep 0.15
       _(SchedulerLocalJob.events.size).must_equal 0
     end
+
     _(Timeout.timeout(3) { SchedulerLocalJob.events.pop }).must_equal "committed"
+
     _ {
       database.transaction do
         SchedulerLocalJob.set(wait: 0.05).perform_later("rolled back")
         raise "rollback"
       end
     }.must_raise RuntimeError
+
     sleep 0.1
     _(SchedulerLocalJob.events.size).must_equal 0
   end
+
   it "rearms a future retry without PostgreSQL notifications or startup discovery" do
     SchedulerFutureRetryJob.perform_later("retried locally")
     _(Timeout.timeout(3) { SchedulerLocalJob.events.pop }).must_equal "retried locally"

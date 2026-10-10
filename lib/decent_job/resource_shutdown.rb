@@ -12,6 +12,7 @@ module DecentJob
       if !timeout.nil? && (!timeout.is_a?(Numeric) || !timeout.real? || !timeout.finite? || timeout.negative?)
         raise ArgumentError, "timeout must be a finite nonnegative number"
       end
+
       Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout if timeout
     end
 
@@ -29,12 +30,14 @@ module DecentJob
 
     def self.wait_all(handles, deadline:, force: false, timeout: nil)
       failure = nil
+
       stopped = handles.map do |handle|
         handle.wait(deadline: deadline, force: force, timeout: timeout)
       rescue Exception => error # standard:disable Lint/RescueException
         failure ||= error
         false
       end.all?
+
       raise failure if failure
       stopped
     end
@@ -61,10 +64,12 @@ module DecentJob
       raise @failure if @failure
       began = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       payload = {timeout: timeout, force: force}
+
       if @observe_shutdown
         stopped = resource.send(:shutdown_snapshot_stopped?, @snapshot)
         observe("scheduler_shutdown_start", payload.merge(stopped: stopped, draining: !stopped))
       end
+
       resource.send(:drain_shutdown, @snapshot, deadline: deadline, force: force)
     rescue Exception => error # standard:disable Lint/RescueException
       payload[:error] = error if payload
@@ -80,12 +85,14 @@ module DecentJob
     def restart
       LifecycleEvents.defer do
         began = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
         if @lifecycle_pools.empty?
           result = resource.start(expected_revision: revision)
         else
           result, new_run_id = resource.send(:start_run, expected_revision: revision)
           result = false unless new_run_id
         end
+
         observe_restart(result ? :restarted : :refused, new_run_id: new_run_id,
           operation_duration: Process.clock_gettime(Process::CLOCK_MONOTONIC) - began)
         result

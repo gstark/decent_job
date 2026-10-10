@@ -32,11 +32,13 @@ describe DecentJob::BatchStore do
 
   it "finishes an empty enqueued batch" do
     id = @batches.save(id: nil, attributes: {}).fetch("id")
+
     @batches.locked([id]) do
       @batches.open(id)
       @batches.mark_enqueued(id)
       @batches.reconcile(id)
     end
+
     row = @batches.find(id)
     _(row.fetch("generation")).must_equal 1
     _(row.fetch("jobs_finished_at")).must_be_kind_of Time

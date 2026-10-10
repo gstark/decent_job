@@ -16,6 +16,7 @@ class LockStrategyProcessJob < ActiveJob::Base
   def perform(value, gate = nil)
     database = self.class.queue_adapter.database
     record = DecentJob::Store.new(database).find(provider_job_id)
+
     advisory = database.with_connection do |connection|
       connection.exec_params(<<~SQL, [provider_job_id]).getvalue(0, 0) == "t"
         SELECT EXISTS (
@@ -25,6 +26,7 @@ class LockStrategyProcessJob < ActiveJob::Base
         )
       SQL
     end
+
     LockStrategyProcessLog.write(type: "started", value: value, job_id: provider_job_id,
       lock_type: record.fetch("lock_type"), owner: record.fetch("locked_by_id"), advisory: advisory)
     sleep 0.01 while gate && !File.exist?(gate)
@@ -47,10 +49,12 @@ if ENV["LOCK_STRATEGY_PROCESS_CONNECTION"]
     config.logger = Logger.new(File::NULL)
     config.on_thread_error = ->(error) { LockStrategyProcessLog.write(type: "error", error: error.class.name, message: error.message) }
   end
+
   ActiveJob::Base.logger = Logger.new(File::NULL)
   adapter = DecentJob::Adapter.new(execution_mode: :external)
   LockStrategyProcessJob.queue_adapter = adapter
   LockStrategyLimitedProcessJob.queue_adapter = adapter
+
   ActiveSupport::Notifications.subscribe("finished_job_task.decent_job") do |event|
     result = event.payload[:result]
     LockStrategyProcessLog.write(type: result ? "completed" : "empty", job_id: result&.job_id, state: result&.state)

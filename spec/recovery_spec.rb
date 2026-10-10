@@ -57,6 +57,7 @@ describe "process failure recovery" do
         nil
       end
     end
+
     reader&.close
     writer&.close unless writer&.closed?
   end
@@ -106,6 +107,7 @@ describe "process failure recovery" do
         nil
       end
     end
+
     reader&.close
     writer&.close unless writer&.closed?
   end

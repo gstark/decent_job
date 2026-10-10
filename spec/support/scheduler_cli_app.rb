@@ -26,6 +26,7 @@ if ENV["SCHEDULER_DATABASE"]
     config.process_heartbeat_interval = 0.05
     config.on_thread_error = ->(error) { File.open(ENV.fetch("SCHEDULER_ERRORS"), "a") { |file| file.puts("#{error.class}: #{error.message}") } }
   end
+
   SchedulerProcessJob.queue_adapter = :decent_job
   ActiveJob::Base.logger = Logger.new(File::NULL)
 end

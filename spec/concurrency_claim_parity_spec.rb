@@ -54,6 +54,7 @@ describe "durable concurrency claim parity" do
     registry = DecentJob::ConcurrencyClaims.new(database)
     first_context = nil
     original = nil
+
     claimer.with_next(job_id: job.provider_job_id) do |row|
       first_context = {id: row.fetch("id"), execution_id: row.fetch("execution_id")}
       controls.check(job, first_context)
@@ -89,20 +90,24 @@ describe "durable concurrency claim parity" do
     waiters = %w[finished oldest newest].map { |name| ClaimParityJob.perform_later(name) }
     @worker = Thread.new { @performer.perform_one(job_id: holder.provider_job_id) }
     Timeout.timeout(5) { ClaimParityJob.started.pop }
+
     waiters.each do |job|
       _(@performer.perform_one(job_id: job.provider_job_id).state).must_equal "retried"
       _(claim_row(job).fetch("state")).must_equal "waiting"
     end
+
     database.with_connection do |connection|
       waiters.each_with_index do |job, index|
         timestamp = Time.utc(2020, 1, 1) + index
         connection.exec_params("UPDATE decent_job_concurrency_claims SET created_at = $2, updated_at = $2 WHERE job_id = $1", [job.provider_job_id, timestamp.iso8601(6)])
         connection.exec_params("UPDATE decent_jobs SET scheduled_at = clock_timestamp() + interval '1 hour' WHERE id = $1", [job.provider_job_id])
       end
+
       # Preserve a stale claim like the reference fixture's direct model update.
       # Public discard eagerly cleans claims and would not exercise this case.
       connection.exec_params("UPDATE decent_jobs SET state = 'succeeded', finished_at = clock_timestamp() WHERE id = $1", [waiters.first.provider_job_id])
     end
+
     oldest = waiters[1]
     newest = waiters[2]
     before_claim = claim_row(oldest)
@@ -124,9 +129,11 @@ describe "durable concurrency claim parity" do
     _(claim_row(newest).fetch("state")).must_equal "waiting"
     _(@store.find(newest.provider_job_id).fetch("scheduled_at")).must_be :>, Time.now
     removed = [holder.provider_job_id, waiters.first.provider_job_id]
+
     database.with_connection do |connection|
       _(connection.exec_params("SELECT count(*) FROM decent_job_concurrency_claims WHERE job_id = ANY($1::uuid[])", [PG::TextEncoder::Array.new.encode(removed)]).getvalue(0, 0)).must_equal "0"
     end
+
     _(@listener.wait_for_notify(5)).must_equal "decent_job"
   end
 end

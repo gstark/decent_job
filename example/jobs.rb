@@ -13,10 +13,12 @@ module Example
   # Sleeps in small steps so a shutdown or force-discard can interrupt it.
   def self.work(seconds, job: nil)
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + seconds
+
     while Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
       return :stopped if job && job.class.queue_adapter.stopping?(job)
       sleep 0.2
     end
+
     :done
   end
 end

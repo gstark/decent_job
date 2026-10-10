@@ -35,6 +35,7 @@ describe "worker idle duration" do
     _(@worker.idle?).must_equal true
     _(@worker.idle?(nil)).must_equal true
     _(@worker.idle?(0)).must_equal true
+
     [-1, Float::INFINITY, Float::NAN, "1", false, Complex(1, 1)].each do |duration|
       _ { @worker.idle?(duration) }.must_raise ArgumentError
     end

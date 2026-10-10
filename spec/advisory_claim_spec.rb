@@ -35,12 +35,15 @@ describe "advisory claim ownership" do
     second = RecordingJob.perform_later("available")
     key = lock_key(first)
     claimed = []
+
     database.with_connection do |connection|
       2.times { connection.exec_params("SELECT pg_advisory_lock($1::bigint)", [key]) }
+
       result = DecentJob::Claim.new(database).with_next do |row|
         claimed << row.fetch("id")
         :claimed
       end
+
       _(result).must_equal :claimed
       _(claimed).must_equal [second.provider_job_id]
       _(DecentJob::Store.new(database).executions(first.provider_job_id)).must_be_empty
@@ -59,11 +62,13 @@ describe "advisory claim ownership" do
     outer_id = nil
     nested = nil
     held = nil
+
     claim.with_next(job_id: first.provider_job_id) do |outer|
       outer_id = outer.fetch("execution_id")
       nested = claim.with_next { |inner| inner.fetch("id") }
       held = !lock_available?(lock_key(first))
     end
+
     _(nested).must_equal second.provider_job_id
     _(held).must_equal true
     executions = DecentJob::Store.new(database).executions(first.provider_job_id)
@@ -74,13 +79,16 @@ describe "advisory claim ownership" do
   it "rechecks completion after candidate selection before creating an attempt" do
     job = RecordingJob.perform_later("finished")
     selected = false
+
     stopping = lambda do
       unless selected
         @observer.exec_params("UPDATE decent_jobs SET finished_at = clock_timestamp() WHERE id = $1", [job.provider_job_id])
         selected = true
       end
+
       false
     end
+
     yielded = []
     result = DecentJob::Claim.new(database).with_next(stopping: stopping) { |row| yielded << row }
     _(result).must_be_nil
@@ -94,25 +102,32 @@ describe "advisory claim ownership" do
     acquired = Queue.new
     error = Class.new(StandardError).new("interrupted acquisition")
     original_pid = nil
+
     database.with_connection do |connection|
       original_pid = connection.backend_pid
       connection.singleton_class.alias_method :original_exec_params, :exec_params
+
       connection.define_singleton_method(:exec_params) do |sql, *arguments|
         result = original_exec_params(sql, *arguments)
+
         if sql.include?("pg_try_advisory_lock")
           acquired << true
           Queue.new.pop
         end
+
         result
       end
     end
+
     pool = database
     caught = nil
+
     @thread = Thread.new do
       DecentJob::Claim.new(pool).with_next { :unexpected }
     rescue => exception
       caught = exception
     end
+
     Timeout.timeout(5) { acquired.pop }
     @thread.raise(error)
     _(@thread.join(2)).must_equal @thread
@@ -129,6 +144,7 @@ describe "advisory claim ownership" do
     configuration = DecentJob.configuration
     previous = configuration.queue_select_limit
     configuration.queue_select_limit = 1
+
     database.with_connection do |connection|
       connection.exec_params("SELECT pg_advisory_lock($1::bigint)", [key])
       yielded = []
@@ -148,11 +164,14 @@ describe "advisory claim ownership" do
   it "releases only its acquired lock after a nonlocal exit" do
     job = RecordingJob.perform_later("exit")
     unrelated = lock_key(RecordingJob.perform_later("caller lock"))
+
     database.with_connection do |connection|
       connection.exec_params("SELECT pg_advisory_lock($1::bigint)", [unrelated])
+
       value = catch(:leave) do
         DecentJob::Claim.new(database).with_next(job_id: job.provider_job_id) { throw :leave, :escaped }
       end
+
       _(value).must_equal :escaped
       _(lock_available?(lock_key(job))).must_equal true
       _(lock_available?(unrelated)).must_equal false
@@ -174,9 +193,11 @@ describe "advisory claim ownership" do
 
   it "rolls back a failed start and releases its lock" do
     job = RecordingJob.perform_later("start failure")
+
     database.with_connection do |connection|
       connection.exec("ALTER TABLE decent_job_executions ADD CONSTRAINT reject_attempt CHECK (false)")
     end
+
     _ { DecentJob::Claim.new(database).with_next { :unexpected } }.must_raise PG::CheckViolation
     _(lock_available?(lock_key(job))).must_equal true
     _(DecentJob::Store.new(database).find(job.provider_job_id).fetch("state")).must_equal "ready"
@@ -187,13 +208,16 @@ describe "advisory claim ownership" do
     first = RecordingJob.perform_later("deleted")
     second = RecordingJob.perform_later("available")
     selected = false
+
     stopping = lambda do
       unless selected
         @observer.exec_params("DELETE FROM decent_jobs WHERE id = $1", [first.provider_job_id])
         selected = true
       end
+
       false
     end
+
     ids = []
     DecentJob::Claim.new(database).with_next(stopping: stopping) { |row| ids << row.fetch("id") }
     _(ids).must_equal [second.provider_job_id]
@@ -205,15 +229,18 @@ describe "advisory claim ownership" do
     job = RecordingJob.perform_later("connection lost")
     original_pid = nil
     error = Class.new(StandardError).new("original failure")
+
     caught = _ do
       DecentJob::Claim.new(database).with_next do
         database.with_connection do |connection|
           original_pid = connection.backend_pid
           @observer.exec_params("SELECT pg_terminate_backend($1)", [original_pid])
         end
+
         raise error
       end
     end.must_raise error.class
+
     _(caught).must_equal error
     _(lock_available?(lock_key(job))).must_equal true
     database.with_connection { |connection| _(connection.backend_pid).wont_equal original_pid }
@@ -227,6 +254,7 @@ describe "advisory claim ownership" do
   it "propagates unlock failure when a successful claim runs inside an outer rescue" do
     job = RecordingJob.perform_later("connection lost after success")
     original_pid = nil
+
     begin
       raise "previously handled failure"
     rescue RuntimeError
@@ -236,10 +264,12 @@ describe "advisory claim ownership" do
             original_pid = connection.backend_pid
             @observer.exec_params("SELECT pg_terminate_backend($1)", [original_pid])
           end
+
           :completed
         end
       end.must_raise PG::ConnectionBad
     end
+
     _(lock_available?(lock_key(job))).must_equal true
     database.with_connection { |connection| _(connection.backend_pid).wont_equal original_pid }
   end

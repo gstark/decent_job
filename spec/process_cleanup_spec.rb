@@ -16,14 +16,17 @@ describe "bounded process cleanup" do
     database.with_connection do |connection|
       connection.exec_params("INSERT INTO decent_job_processes (id, heartbeat_mode, updated_at) VALUES ($1, 'heartbeat', clock_timestamp() - interval '1 hour')", [id])
     end
+
     id
   end
 
   def job(owner_id = nil)
     queued = RecordingJob.perform_later("cleanup")
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET locked_by_id = $2 WHERE id = $1", [queued.provider_job_id, owner_id])
     end
+
     queued.provider_job_id
   end
 
@@ -31,6 +34,7 @@ describe "bounded process cleanup" do
     process_id = owner
     abandoned = job(process_id)
     waiter = job
+
     database.with_connection do |connection|
       [abandoned, waiter].each do |id|
         execution = SecureRandom.uuid
@@ -39,9 +43,11 @@ describe "bounded process cleanup" do
         connection.exec_params("INSERT INTO decent_job_concurrency_claims (scope, job_id, execution_id, state) VALUES ('shared', $1, $2, $3)", [id, execution, (id == abandoned) ? "granted" : "waiting"])
       end
     end
+
     separate = database.connect
     separate.exec("BEGIN")
     separate.exec_params("SELECT id FROM decent_jobs WHERE id = $1 FOR UPDATE", [waiter])
+
     database.transaction do |connection|
       connection.exec("SET LOCAL statement_timeout = '500ms'")
       connection.exec("SET LOCAL lock_timeout = '0'")
@@ -53,12 +59,15 @@ describe "bounded process cleanup" do
       _(DecentJob::ProcessRecord.cleanup(database: database)).must_equal 0
       _(connection.exec("SHOW lock_timeout").getvalue(0, 0)).must_equal "17ms"
     end
+
     separate.exec("ROLLBACK")
     _(DecentJob::ProcessRecord.cleanup(database: database)).must_equal 1
+
     database.with_connection do |connection|
       _(connection.exec("SELECT state FROM decent_job_concurrency_claims").column_values(0)).must_equal ["promoted"]
       _(connection.exec("SHOW lock_timeout").getvalue(0, 0)).must_equal "0"
     end
+
     _(DecentJob::Job.find(waiter, database: database).scheduled_at).must_be :<=, Time.now
   ensure
     separate&.finish unless separate&.finished?

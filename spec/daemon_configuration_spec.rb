@@ -17,9 +17,11 @@ describe "daemon and idle configuration" do
   it "validates booleans, nonempty paths, and finite nonnegative idle durations" do
     config = DecentJob::Configuration.new
     _(config.respond_to?(:idle_timeout=)).must_equal true
+
     [-1, Float::INFINITY, Float::NAN, "2", true, Complex(1, 1)].each do |value|
       _ { config.idle_timeout = value }.must_raise ArgumentError
     end
+
     [nil, 0, 0.5, 2].each { |value| config.idle_timeout = value }
     [nil, "yes", 1].each { |value| _ { config.daemonize = value }.must_raise ArgumentError }
     [nil, "", "  ", 1, "bad\0path"].each { |value| _ { config.pidfile = value }.must_raise ArgumentError }
@@ -36,11 +38,13 @@ describe "daemon and idle configuration" do
     _(DecentJob.configuration.daemonize).must_equal true
     _(DecentJob.configuration.pidfile).must_equal File.expand_path("env.pid")
     _(DecentJob.configuration.idle_timeout).must_equal 2.5
+
     DecentJob.configure do |config|
       config.daemonize = true
       config.pidfile = "app.pid"
       config.idle_timeout = 3
     end
+
     output = StringIO.new
     cli = DecentJob::CLI.new(stdout: output, stderr: output)
     cli.stub(:start, 0) { _(cli.run(%w[--no-daemonize --pidfile cli.pid --idle-timeout 4])).must_equal 0 }

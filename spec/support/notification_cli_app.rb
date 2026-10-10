@@ -28,6 +28,7 @@ if ENV["NOTIFICATION_DATABASE"]
     config.enable_listen_notify = ENV.fetch("NOTIFICATION_ENABLED", "true") == "true"
     config.process_heartbeat_interval = 0.1
   end
+
   NotificationProcessJob.queue_adapter = :decent_job
   ActiveJob::Base.logger = Logger.new(File::NULL)
 end
@@ -40,6 +41,7 @@ if $PROGRAM_NAME == __FILE__
     job.decent_job_notify = attributes["notify"] if attributes.key?("notify")
     job
   end
+
   case ENV.fetch("NOTIFICATION_ACTION", "bulk")
   when "bulk"
     ActiveJob.perform_all_later(jobs)
@@ -55,5 +57,6 @@ if $PROGRAM_NAME == __FILE__
       raise unless error.message == "roll back enqueue"
     end
   end
+
   puts JSON.generate(ids: jobs.map(&:provider_job_id))
 end

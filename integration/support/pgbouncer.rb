@@ -55,12 +55,14 @@ class PgBouncerFixture
     CONFIG
     @log_path = File.join(@directory, "pgbouncer.log")
     @pid = Process.spawn(@executable, config_path, out: @log_path, err: [:child, :out], pgroup: true)
+
     Timeout.timeout(10) do
       loop do
         if Process.waitpid(@pid, Process::WNOHANG)
           @pid = nil
           raise "PgBouncer exited during startup: #{diagnostics}"
         end
+
         begin
           PG.connect(@connection_options) { |connection| connection.exec("SELECT 1") }
           break
@@ -75,6 +77,7 @@ class PgBouncerFixture
     rescue => cleanup_error
       warn "PgBouncer startup cleanup failed (#{cleanup_error.class})"
     end
+
     raise error
   end
 

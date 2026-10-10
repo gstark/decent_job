@@ -34,6 +34,7 @@ module DecentJob
 
       def parse_part(part)
         token = TOKENS.fetch(@kind)
+
         if @kind == :weekdays && (match = /\A(#{token})(?:#(-?[1-5]|last|l)|%(\d+)(?:\+(\d+))?)\z/i.match(part))
           day = number(match[1]) % 7
           return [[day, number(match[2])]] if match[2]
@@ -41,6 +42,7 @@ module DecentJob
           raise ArgumentError, "weekday modulo must be positive" if modulo.zero?
           return [[day, [modulo, match[4].to_i]]]
         end
+
         match = /\A(?:(\*)|(#{token})(?:-(#{token}))?)?(?:\/(\d{1,2}))?\z/i.match(part)
         raise ArgumentError, "invalid cron field #{part.inspect}" unless match && !part.empty?
         first = match[2] && number(match[2])
@@ -57,15 +59,18 @@ module DecentJob
         lower, upper = (first < 0) ? [-@max, -1] : [@min, @max]
         expanded = []
         current = first
+
         (2 * @max + 1).times do
           expanded << current
           break if current == last
           current += 1
+
           if current > upper
             current = lower
             last -= upper + 1 if last > upper
           end
         end
+
         raise ArgumentError, "invalid cron range" unless expanded.last == last
         expanded.each_with_index.filter_map { |value, index| value if index % (step || 1) == 0 }
       end
@@ -80,6 +85,7 @@ module DecentJob
         else
           []
         end
+
         values.map { |value| [value % 7] }
       end
 

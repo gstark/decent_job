@@ -32,6 +32,7 @@ module DecentJob
       unless max_cache.is_a?(Integer) && max_cache >= 0
         raise ArgumentError, "max_cache must be a nonnegative integer"
       end
+
       @max_cache = max_cache
       Configuration.validate_process_options!(advisory_lock_heartbeat, process_heartbeat_interval)
       @process_options = {advisory_lock_heartbeat: advisory_lock_heartbeat, process_heartbeat_interval: process_heartbeat_interval}
@@ -86,6 +87,7 @@ module DecentJob
           @execution_threads = []
           @threads = []
           allocated = false
+
           begin
             Thread.handle_interrupt(Object => :never) do
               @pools.each_with_index do |pool, index|
@@ -96,13 +98,16 @@ module DecentJob
                       run(pool, index)
                     end
                   end
+
                   @threads << thread
                   @execution_threads << thread
                   @execution_pool_indexes[thread] = index
                 end
               end
+
               if @enable_listen_notify
                 @listener_reader, @listener_writer = IO.pipe
+
                 @threads << Thread.new do
                   Thread.handle_interrupt(Object => :immediate) do
                     @mutex.synchronize {}
@@ -111,6 +116,7 @@ module DecentJob
                 end
               end
             end
+
             allocated = true
           ensure
             unless allocated
@@ -123,12 +129,15 @@ module DecentJob
               reset_stats
             end
           end
+
           lifecycle_pools.each do |payload|
             observe_lifecycle("scheduler_create_pool", payload.merge(operation_duration: monotonic_time - began))
           end
+
           [self, @run_id]
         end
       end
+
       result || [self, nil]
     end
 
@@ -153,17 +162,20 @@ module DecentJob
 
     def wake(state = nil)
       state = normalize_hint(state)
+
       @mutex.synchronize do
         return self if @stopping
         remaining = state.fetch(:count, 1)
         broad = state.empty?
         future = state[:scheduled_at] && state[:scheduled_at] > Time.now
+
         @pools.each_with_index do |pool, index|
           next if state[:queue_name] && !pool.fetch(:selection).include?(state[:queue_name])
 
           cache = @caches.fetch(index)
           cache.notify_at(state.fetch(:scheduled_at)) if state[:scheduled_at]
           next if future
+
           if broad || state[:fanout]
             cache.request(pool.fetch(:threads))
           else
@@ -171,8 +183,10 @@ module DecentJob
             break unless remaining.positive?
           end
         end
+
         @condition.broadcast
       end
+
       self
     rescue ArgumentError => error
       report_error(error)
@@ -230,23 +244,28 @@ module DecentJob
     private def drain_shutdown(snapshot, deadline:, force:)
       threads, tracker, interruption, failure = snapshot
       tracker&.stop
+
       # A fatal task can make join raise; finish draining every owned thread.
       threads.each do |thread|
         next if thread == Thread.current
 
         remaining = ResourceShutdown.remaining(deadline)
+
         begin
           thread.join(remaining)
         rescue Exception => error # standard:disable Lint/RescueException
           failure ||= error
         end
       end
+
       remaining = ResourceShutdown.remaining(deadline)
+
       begin
         monitor_stopped = tracker.nil? || (!threads.include?(Thread.current) && tracker.join(remaining))
       rescue Exception => error # standard:disable Lint/RescueException
         failure ||= error
       end
+
       interrupt_executions(**interruption) if force && deadline && ResourceShutdown.remaining(deadline).zero?
       failure = @mutex.synchronize { @failure if @process_tracker.equal?(tracker) } || failure
       raise failure if failure
@@ -280,6 +299,7 @@ module DecentJob
 
     def idle?(duration = nil)
       Configuration.validate_idle_timeout!(duration)
+
       @mutex.synchronize do
         @scheduler_stats.all? { |pool| pool.fetch(:active_threads).zero? } &&
           (duration.nil? || @idle_since.nil? || monotonic_time - @idle_since >= duration)
@@ -293,14 +313,18 @@ module DecentJob
         targets = threads.select do |thread|
           thread != Thread.current && thread.alive? && !interrupted_threads.key?(thread)
         end
+
         targets.each { |thread| interrupted_threads[thread] = true }
         ids = targets.filter_map { |thread| job_ids[thread] }.uniq
         interrupted_job_ids.concat(ids.map(&:dup)).uniq!
+
         reports = targets.group_by { |thread| pool_indexes.fetch(thread) }.map do |index, pool_threads|
           pools.fetch(index).merge(active_job_ids: pool_threads.filter_map { |thread| job_ids[thread]&.dup }.uniq)
         end
+
         [targets, reports]
       end
+
       return if targets.empty?
 
       # Request every interruption before invoking observers, which may reenter
@@ -315,20 +339,26 @@ module DecentJob
       return {} if state.nil?
       raise ArgumentError, "notification must be an object" unless state.is_a?(Hash)
       state = state.transform_keys { |key| key.is_a?(String) ? key.to_sym : key }
+
       unless (state.keys - %i[queue_name count fanout scheduled_at]).empty?
         raise ArgumentError, "unknown notification fields"
       end
+
       if state.key?(:queue_name) && !(state[:queue_name].is_a?(String) && !state[:queue_name].empty?)
         raise ArgumentError, "notification queue_name must be a nonempty string"
       end
+
       if state.key?(:count) && !(state[:count].is_a?(Integer) && state[:count].positive?)
         raise ArgumentError, "notification count must be a positive integer"
       end
+
       if state.key?(:fanout) && ![true, false].include?(state[:fanout])
         raise ArgumentError, "notification fanout must be true or false"
       end
+
       if state.key?(:scheduled_at)
         value = state[:scheduled_at]
+
         state[:scheduled_at] = case value
         when Time then value
         when String
@@ -341,6 +371,7 @@ module DecentJob
           raise ArgumentError, "notification scheduled_at must be a time"
         end
       end
+
       state
     rescue JSON::ParserError, RangeError, TypeError => error
       raise ArgumentError, error.message
@@ -353,8 +384,10 @@ module DecentJob
 
     def reset_stats(running: false)
       @caches = @pools.map { |pool| SchedulerCache.new(max_cache: @max_cache, threads: pool.fetch(:threads)) }
+
       @scheduler_stats = @pools.map do |pool|
         selection = pool.fetch(:selection)
+
         prefix = if selection.exclude?
           "-"
         elsif selection.ordered?
@@ -362,6 +395,7 @@ module DecentJob
         else
           ""
         end
+
         queues = selection.queues.empty? ? "*" : prefix + selection.queues.join(",")
         live_threads = running ? pool.fetch(:threads) : 0
         {queues: queues, live_threads: live_threads, max_threads: pool.fetch(:threads), active_threads: 0,
@@ -386,6 +420,7 @@ module DecentJob
 
     def run(pool, index)
       original_priority = Thread.current.priority
+
       @process_tracker.register(stopping: method(:stopping?), wait_for_monitor: false) do
         ThreadStatus.with_worker(self) { run_registered(pool, index, original_priority) }
       end
@@ -398,6 +433,7 @@ module DecentJob
           counters = @scheduler_stats.fetch(index)
           counters[:live_threads] -= 1
           counters[:available_threads] -= 1
+
           if @scheduler_stats.all? { |pool_stats| pool_stats.fetch(:live_threads).zero? }
             @stopping = true
             @caches.each(&:clear)
@@ -407,6 +443,7 @@ module DecentJob
           end
         end
       end
+
       @process_tracker.stop if last
     end
 
@@ -415,6 +452,7 @@ module DecentJob
       execution_error = nil
       executing = false
       lowered_priority = false
+
       performer = Performer.new(database: @database, process_tracker: @process_tracker,
         on_execution_start: lambda { |active_job_id|
           Thread.handle_interrupt(Object => :never) do
@@ -429,19 +467,23 @@ module DecentJob
             end
           end
         }, on_unhandled_exception: ->(error) { execution_error = error })
+
       loop do
         revision = poll = task_error = nil
+
         begin
           reported_error = nil
           result = retry_job_id = nil
           retry_attempt = false
           Thread.handle_interrupt(Object => :on_blocking) { revision, poll = await_work(index) }
+
           if poll
             reported_error = poll[:error]
             report_error(reported_error) if reported_error
             instrument_pool("finished_timer_task", index, **poll)
             raise reported_error if reported_error
           end
+
           break unless revision
 
           execution_error = nil
@@ -450,14 +492,17 @@ module DecentJob
           cleanup_processes
           @mutex.synchronize { @scheduler_stats.fetch(index)[:check_queue_at] = Time.now.iso8601(6) }
           task_error = nil
+
           begin
             result = performer.perform_one(queues: selection, stopping: method(:stopping?))
           rescue Exception => error # standard:disable Lint/RescueException
             task_error = error
           end
+
           break if Thread.current.status == "aborting"
 
           completed_at = Time.now
+
           if result
             record_attempt(index, error: result.error)
             execution_finished = true
@@ -470,6 +515,7 @@ module DecentJob
                 @idle_since = monotonic_time
                 @scheduler_stats.fetch(index)[:execution_at] = Time.now.iso8601(6)
               end
+
               execution_finished = true
             end
           else
@@ -479,6 +525,7 @@ module DecentJob
               counters[:last_empty_at] = Time.now.iso8601(6)
             end
           end
+
           retry_job_id = result.job_id.dup if result&.state == "retried"
           reported_error = task_error || result&.unhandled_error
           report_error(reported_error) if reported_error
@@ -490,6 +537,7 @@ module DecentJob
             if retry_job_id
               Store.new(@database).scheduling_hints([retry_job_id]).each { |state| wake(state) }
             end
+
             cleanup_after_attempt
           else
             refresh_cache(pool, index)
@@ -508,16 +556,20 @@ module DecentJob
                 cache.wake(1) if result || retry_attempt || cache.revision != revision
               end
             end
+
             if executing
               @mutex.synchronize do
                 counters = @scheduler_stats.fetch(index)
+
                 unless execution_finished
                   @idle_since = monotonic_time
                   counters[:execution_at] = Time.now.iso8601(6)
                 end
+
                 counters[:active_threads] -= 1
                 counters[:available_threads] += 1
               end
+
               @mutex.synchronize { @executing_job_ids.delete(Thread.current) }
               executing = false
             end
@@ -533,6 +585,7 @@ module DecentJob
 
     def instrument(name, payload = {}, &block)
       payload = payload.merge(process_id: Process.pid, thread_name: (Thread.current.name || Thread.current.object_id).to_s)
+
       Instrumentation.instrument("#{name}.decent_job", payload, database: @database, on_error: @on_thread_error) do
         block&.call
       end
@@ -549,15 +602,19 @@ module DecentJob
 
     def await_work(index)
       poll_at = monotonic_time + @poll_interval if @poll_interval.positive?
+
       @mutex.synchronize do
         cache = @caches.fetch(index)
+
         loop do
           return false if @stopping
           now = Time.now
+
           if cache.due?(now) && monotonic_time >= cache.due_retry_at
             cache.expire(now)
             cache.request(@pools.fetch(index).fetch(:threads))
           end
+
           if poll_at && monotonic_time >= poll_at
             begin
               poll = {result: cache.wake(1), error: nil, time: Time.now}
@@ -565,11 +622,13 @@ module DecentJob
               return [nil, {result: nil, error: error, time: Time.now}]
             end
           end
+
           if cache.permits.positive?
             cache.permits -= 1
             cache.busy += 1
             return [cache.revision, poll]
           end
+
           waits = [0.5]
           waits << poll_at - monotonic_time if poll_at
           waits << [cache.next_at - now, cache.due_retry_at - monotonic_time].max if cache.next_at
@@ -585,11 +644,13 @@ module DecentJob
         cache.refreshing = true
         cache.revision
       end
+
       return unless revision
 
       begin
         cache = @caches.fetch(index)
         times = Claim.new(@database, enable_pauses: DecentJob.configuration.enable_pauses).next_scheduled_at(queues: pool.fetch(:selection), limit: cache.limit, now_limit: pool.fetch(:threads))
+
         @mutex.synchronize do
           unless @stopping
             cache.replace(times, revision: revision)
@@ -597,6 +658,7 @@ module DecentJob
             # Back off a rejected deadline instead of repeatedly querying it.
             cache.due_retry_at = monotonic_time + 0.5 if cache.due?(Time.now)
           end
+
           @condition.broadcast
         end
       ensure
@@ -612,6 +674,7 @@ module DecentJob
         @process_cleanup_at = now + ProcessRecord::STALE_INTERVAL
         true
       end
+
       return unless due
 
       begin
@@ -630,6 +693,7 @@ module DecentJob
         @cleanup_tracker.reset
         true
       end
+
       return unless acquired
 
       begin
@@ -646,31 +710,38 @@ module DecentJob
         connection = nil
         listening = false
         task_error = nil
+
         begin
           Thread.handle_interrupt(Object => :on_blocking) { connection = @database.connect }
+
           instrument("notifier_listen") do
             Thread.handle_interrupt(Object => :on_blocking) do
               connection.exec("LISTEN decent_job")
               listening = true
             end
           end
+
           @mutex.synchronize { @listener_connected = true }
           wake
           keepalive_at = monotonic_time + 10
+
           until stopping?
             if monotonic_time >= keepalive_at
               connection.exec("SELECT 1")
               keepalive_at = monotonic_time + 10
             end
+
             # pg can buffer several notifications after draining the socket.
             # Drain those before selecting again, with bounded batches so a
             # busy publisher cannot starve shutdown checks or keepalives.
             pending = false
+
             100.times do
               break if stopping?
               pending = connection.wait_for_notify(0) { |_channel, _pid, payload| receive_notification(payload) }
               break unless pending
             end
+
             break if stopping?
             next if pending
 
@@ -682,6 +753,7 @@ module DecentJob
         ensure
           Thread.handle_interrupt(Object => :never) do
             @mutex.synchronize { @listener_connected = false }
+
             begin
               # A disconnected or unfinished LISTEN session cannot UNLISTEN.
               if listening && !connection.finished? && connection.status == PG::CONNECTION_OK
@@ -698,11 +770,13 @@ module DecentJob
             end
           end
         end
+
         if task_error
           instrument("notifier_notify_error", error: task_error)
           report_error(task_error)
           raise task_error unless task_error.is_a?(StandardError)
         end
+
         wait(retry_interval) unless stopping?
       end
     ensure
@@ -721,6 +795,7 @@ module DecentJob
       state = payload.empty? ? nil : JSON.parse(payload, max_nesting: 4)
       raise ArgumentError, "notification must be an object" if !payload.empty? && !state.is_a?(Hash)
       application = Rails.application if defined?(Rails) && Rails.respond_to?(:application)
+
       if application&.respond_to?(:executor)
         application.executor.wrap { wake(state) }
       else
@@ -736,6 +811,7 @@ module DecentJob
 
     def wait(interval)
       deadline = monotonic_time + interval
+
       @mutex.synchronize do
         loop do
           break if @stopping

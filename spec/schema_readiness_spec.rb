@@ -9,6 +9,7 @@ describe "schema readiness" do
 
   it "returns false for an absent metadata table without installing anything" do
     _(DecentJob::Schema.new(database).migrated?).must_equal false
+
     database.with_connection do |connection|
       _(connection.exec("SELECT tablename FROM pg_tables WHERE schemaname = current_schema()").column_values(0)).must_be_empty
     end
@@ -21,6 +22,7 @@ describe "schema readiness" do
       _(DecentJob::Schema.new(database).migrated?).must_equal false
       _(connection.exec("SELECT value FROM application_data").getvalue(0, 0)).must_equal "42"
     end
+
     database.with_connection do |connection|
       _(connection.exec("SELECT value FROM application_data").getvalue(0, 0)).must_equal "42"
     end
@@ -32,6 +34,7 @@ describe "schema readiness" do
     _(schema.migrated?).must_equal false
     versions = Dir[File.join(DecentJob::Schema::MIGRATIONS_PATH, "*.sql")].sort.map { |path| File.basename(path).split("_").first.to_i }
     _(versions).wont_be_empty
+
     database.with_connection do |connection|
       versions.drop(1).each { |version| connection.exec_params("INSERT INTO decent_job_schema_migrations VALUES ($1)", [version]) }
       _(schema.migrated?).must_equal false
@@ -47,6 +50,7 @@ describe "schema readiness" do
   it "observes a fully installed schema in a read-only transaction without an advisory lock" do
     schema = DecentJob::Schema.new(database)
     schema.migrate
+
     database.transaction do |connection|
       connection.exec("SET TRANSACTION READ ONLY")
       _(schema.migrated?).must_equal true
@@ -86,13 +90,16 @@ describe "schema readiness" do
     admin = @admin
     metadata = "#{admin.quote_ident(@schema_name)}.decent_job_schema_migrations"
     admin.exec("CREATE TABLE #{metadata} (version integer PRIMARY KEY)")
+
     database.transaction do |connection|
       connection.exec("CREATE TABLE application_data (value integer)")
       connection.exec("INSERT INTO application_data VALUES (42)")
+
       connection.define_singleton_method(:exec) do |sql, *args, &block|
         admin.exec("DROP TABLE #{metadata}") if sql == "SELECT version FROM decent_job_schema_migrations"
         super(sql, *args, &block)
       end
+
       begin
         _(DecentJob::Schema.new(database).migrated?).must_equal false
         _(connection.exec("SELECT value FROM application_data").getvalue(0, 0)).must_equal "42"
@@ -105,9 +112,11 @@ describe "schema readiness" do
   it "propagates metadata permission errors without aborting the caller transaction" do
     role = @admin.quote_ident("decent_job_readiness_#{SecureRandom.hex(8)}")
     @admin.exec("CREATE ROLE #{role}")
+
     begin
       @admin.exec("GRANT USAGE ON SCHEMA #{@admin.quote_ident(@schema_name)} TO #{role}")
       database.with_connection { |connection| connection.exec("CREATE TABLE decent_job_schema_migrations (version integer PRIMARY KEY)") }
+
       database.transaction do |connection|
         connection.exec("SET LOCAL ROLE #{role}")
         _ { DecentJob::Schema.new(database).migrated? }.must_raise PG::InsufficientPrivilege
@@ -122,10 +131,12 @@ describe "schema readiness" do
   it "follows installation search_path resolution including quoted schema names" do
     schema = DecentJob::Schema.new(database)
     schema.migrate
+
     database.with_connection do |connection|
       connection.set_notice_processor {}
       quoted = connection.quote_ident("Readiness \" Schema")
       connection.exec("CREATE SCHEMA #{quoted}")
+
       begin
         connection.exec("SET search_path TO #{quoted}")
         _(schema.migrated?).must_equal false

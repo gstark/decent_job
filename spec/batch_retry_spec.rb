@@ -11,6 +11,7 @@ class BatchManualRetryJob < ActiveJob::Base
 
   before_enqueue do
     enqueue_events << [:before, executions]
+
     if executions.positive?
       throw :abort if abort_retry
       self.decent_job_labels = ["manual-retry"]
@@ -20,6 +21,7 @@ class BatchManualRetryJob < ActiveJob::Base
       retry_action&.call(self)
     end
   end
+
   after_enqueue { enqueue_events << [:after, executions] }
 
   def perform(value, *)
@@ -37,6 +39,7 @@ class BatchRetryChildJob < ActiveJob::Base
 
   class_attribute :parent_id
   class_attribute :enqueue_events, default: []
+
   before_enqueue do
     enqueue_events << job_id
     connection = queue_adapter.database.connect
@@ -127,6 +130,7 @@ describe "manual batch retries" do
         def perform
         end
       end
+
       Object.const_set(:RemovedSuccessfulBatchMemberJob, successful_class)
       successful_class.queue_adapter = @adapter
       successful = successful_class.new
@@ -151,6 +155,7 @@ describe "manual batch retries" do
       def perform
       end
     end
+
     Object.const_set(:RemovedSuccessfulBatchMemberJob, successful_class)
     successful_class.queue_adapter = @adapter
     successful = successful_class.new
@@ -182,9 +187,11 @@ describe "manual batch retries" do
     batch = DecentJob::Batch.enqueue([BatchManualRetryJob.new("fail")], database: database)
     @performer.perform_one
     member = batch.job_instances.first
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET error = $2 WHERE id = $1", [member.provider_job_id, JSON.generate("class" => "RemovedBatchRetryError", "message" => "old failure")])
     end
+
     errors = []
     subscriber = ->(_name, _start, _finish, _id, payload) { errors << payload[:error] }
     ActiveSupport::Notifications.subscribed(subscriber, "enqueue_retry.active_job") { batch.retry }
@@ -271,6 +278,7 @@ describe "manual batch retries" do
     batch = DecentJob::Batch.enqueue([BatchManualRetryJob.new("fail")], database: database)
     member = batch.job_instances.first
     @performer.perform_one
+
     BatchManualRetryJob.retry_action = lambda do |_job|
       connection = database.connect
       connection.exec_params("UPDATE decent_jobs SET state = 'succeeded' WHERE id = $1", [member.provider_job_id])

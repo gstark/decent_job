@@ -30,6 +30,7 @@ module DecentJob
       return save_all([attributes]).first unless id
 
       values = normalize_attributes(attributes)
+
       @database.with_connection do |connection|
         return find(id) if values.empty?
         assignments = values.keys.each_with_index.map { |key, index| "#{key} = $#{index + 2}" }
@@ -47,11 +48,13 @@ module DecentJob
       ids = values.map { SecureRandom.uuid }
       columns = ["id", *ATTRIBUTES]
       params = []
+
       placeholders = values.zip(ids).map do |entry, id|
         offset = params.size
         params.concat([id, *ATTRIBUTES.map { |name| entry.fetch(name, (name == "properties") ? "{}" : nil) }])
         "(#{columns.each_index.map { |index| "$#{offset + index + 1}" }.join(", ")})"
       end
+
       @database.with_connection do |connection|
         rows = connection.exec_params("INSERT INTO decent_job_batches (#{columns.join(", ")}) VALUES #{placeholders.join(", ")} RETURNING *", params)
         by_id = rows.to_h { |row| [row.fetch("id"), decode(row)] }
@@ -64,6 +67,7 @@ module DecentJob
         Array(ids).compact.uniq.sort.each do |id|
           connection.exec_params("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || '.decent_job.batch.' || $1, 0))", [id])
         end
+
         yield connection
       end
     end
@@ -101,6 +105,7 @@ module DecentJob
     def attach(id, jobs)
       ids = jobs.filter_map(&:provider_job_id).uniq
       return if ids.empty?
+
       @database.transaction do |connection|
         encoded = PG::TextEncoder::Array.new.encode(ids)
         previous = connection.exec_params("SELECT batch_id FROM decent_jobs WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE", [encoded]).column_values(0)
@@ -117,6 +122,7 @@ module DecentJob
       params = [id]
       params << PG::TextEncoder::Array.new.encode(ids) if ids
       filter = ids ? "AND id = ANY($2::uuid[])" : ""
+
       @database.with_connection do |connection|
         connection.exec_params("SELECT payload FROM decent_jobs WHERE #{column} = $1 #{filter} ORDER BY created_at, id", params).map do |row|
           Current.with(database: @database) do
@@ -132,19 +138,23 @@ module DecentJob
       @database.transaction do |connection|
         rows = connection.exec_params("SELECT * FROM decent_jobs WHERE batch_id = $1 AND state = 'discarded' AND NOT (#{FORCE_DISCARD_LOCKED_SQL}) ORDER BY id", [id]).to_a
         retries = rows.map { |row| prepare_retry(row) }
+
         jobs = retries.flat_map do |prepared|
           prepared.fetch(:buffer).jobs.reject { |job| job.job_id == prepared.fetch(:context).fetch(:job_id) }
         end
+
         jobs.each { |job| validate_adapter(job.class) }
         lock_scopes(jobs)
         encoded_ids = PG::TextEncoder::Array.new.encode(rows.map { |row| row.fetch("id") })
         locked = connection.exec_params("SELECT id, state, execution_id, #{FORCE_DISCARD_LOCKED_SQL} AS force_discard_locked FROM decent_jobs WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE", [encoded_ids]).to_h { |row| [row.fetch("id"), row] }
+
         ids = retries.filter_map do |prepared|
           previous = prepared.fetch(:row)
           current = locked[previous.fetch("id")]
           next unless current && current["state"] == "discarded" && current["execution_id"] == previous["execution_id"] && current["force_discard_locked"] == "f"
 
           job = prepared[:job]
+
           if job
             Store.new(@database).reschedule(job, prepared.fetch(:context), payload: prepared.fetch(:payload))
             # The discarded attempt is now deliberately retried. Its completion
@@ -153,11 +163,14 @@ module DecentJob
           else
             request(connection, [id], job_id: previous.fetch("id"), discarded: true)
           end
+
           Bulk.with_buffer(nil) do
             Batch.within_thread(database: @database) { prepared.fetch(:buffer).enqueue }
           end
+
           previous.fetch("id") if job&.successfully_enqueued?
         end
+
         request(connection, [id])
         ids
       end
@@ -176,31 +189,38 @@ module DecentJob
     def reconcile(id)
       locked([id]) do |connection|
         snapshot = completion_snapshot(connection, id)
+
         unless snapshot
           connection.exec_params("DELETE FROM decent_job_batch_updates WHERE batch_id = $1", [id])
           next
         end
+
         updates = JSON.parse(snapshot.delete("pending_updates"))
         members_pending = snapshot.delete("members_pending") == "t"
         callbacks_pending = snapshot.delete("callbacks_pending") == "t"
         row = decode(snapshot)
         discarded = updates.any? { |update| update["discarded"] && update["current_generation"] }
+
         if discarded && !row["discarded_at"]
           timestamp(connection, id, "discarded_at")
           row = find(id)
           create_event(connection, row, "discard")
         end
+
         if row["enqueued_at"] && !row["jobs_finished_at"] && !members_pending
           timestamp(connection, id, "jobs_finished_at")
           create_event(connection, row, "success") unless row["discarded_at"]
           create_event(connection, row, "finish")
         end
+
         dispatch(connection, id)
         row = find(id)
         pending = connection.exec_params("SELECT 1 FROM decent_job_batch_events WHERE batch_id = $1 AND dispatched_at IS NULL LIMIT 1", [id]).ntuples.positive?
+
         if row["jobs_finished_at"] && !row["finished_at"] && !callbacks_pending && !pending && !unfinished?(connection, id, "batch_callback_id")
           timestamp(connection, id, "finished_at")
         end
+
         delete_updates(connection, updates)
       end
     end
@@ -214,6 +234,7 @@ module DecentJob
           ORDER BY reconciled_at NULLS FIRST, id LIMIT $1
         SQL
       end
+
       ids.each do |id|
         @database.with_connection { |connection| connection.exec_params("UPDATE decent_job_batches SET reconciled_at = clock_timestamp() WHERE id = $1", [id]) }
         reconcile(id)
@@ -224,6 +245,7 @@ module DecentJob
           nil
         end
       end
+
       ids.size
     end
 
@@ -259,6 +281,7 @@ module DecentJob
     def normalize_attributes(attributes)
       values = attributes.to_h { |key, value| [key.to_s, value] }
       raise ArgumentError, "Unknown batch attributes" unless (values.keys - ATTRIBUTES).empty?
+
       values.each do |key, value|
         if key.start_with?("on_") && value
           klass = value.is_a?(Class) ? value : Support.constantize(value)
@@ -266,6 +289,7 @@ module DecentJob
           values[key] = klass.name
         end
       end
+
       values["properties"] = JSON.generate(values["properties"]) if values.key?("properties")
       values
     end
@@ -297,28 +321,36 @@ module DecentJob
       events = connection.exec_params("SELECT * FROM decent_job_batch_events WHERE batch_id = $1 AND dispatched_at IS NULL ORDER BY generation, event", [id]).to_a
       return if events.empty?
       batch = Batch.find(id, database: @database)
+
       pairs = events.map do |event|
         klass = Support.constantize(event.fetch("job_class"))
         validate_adapter(klass)
         options = {queue: event["queue_name"], priority: event["priority"]&.to_i}.compact
         [event, klass.new(batch, {event: event.fetch("event").to_sym}).tap { |job| job.set(**options) }]
       end
+
       Batch.within_thread(batch_callback_id: id, database: @database) do
         # Enqueue callbacks can create additional jobs. Persist the whole capture
         # and acquire its scope locks before inserting any of its jobs.
         buffer = Bulk::Buffer.new
+
         buffer.capture do
           pairs.each { |_, job| job.enqueue }
         end
+
         buffer.prepare
+
         buffer.jobs.each do |job|
           unless job.queue_adapter.is_a?(Adapter) && job.queue_adapter.database.equal?(@database)
             raise ArgumentError, "Batch jobs must use a DecentJob adapter with the batch's database"
           end
         end
+
         lock_scopes(buffer.jobs)
+
         Bulk.with_buffer(nil) do
           buffer.enqueue
+
           pairs.each do |event, job|
             next unless buffer.jobs.include?(job)
             next unless job.provider_job_id && job.successfully_enqueued?
@@ -338,6 +370,7 @@ module DecentJob
 
     def decode(row)
       return unless row
+
       row.to_h do |key, value|
         value = if value.nil?
           nil
@@ -350,6 +383,7 @@ module DecentJob
         else
           value
         end
+
         [key, value]
       end
     end

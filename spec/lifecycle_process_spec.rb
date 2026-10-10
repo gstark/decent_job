@@ -42,6 +42,7 @@ describe "explicit lifecycle restart across processes" do
     environment = {"LIFECYCLE_DATABASE" => JSON.generate(@connection_options), "LIFECYCLE_DIRECTORY" => @directory,
                    "LIFECYCLE_SCOPE" => scope}
     command = [RbConfig.ruby, "-Ilib", "spec/support/lifecycle_process.rb"]
+
     Open3.popen3(environment, *command, pgroup: true) do |input, output, error, process|
       input.close
       stdout = Thread.new { output.read }
@@ -54,6 +55,7 @@ describe "explicit lifecycle restart across processes" do
         Process.kill("KILL", -process.pid)
         process.join
       end
+
       stdout&.join
       stderr&.join
     end
@@ -62,6 +64,7 @@ describe "explicit lifecycle restart across processes" do
   %w[adapter global].each do |scope|
     it "keeps #{scope} work stopped through drain and executes queued work after explicit restart" do
       first = LifecycleProcessJob.perform_later(@directory, "started")
+
       run_child(scope) do
         await { File.exist?(File.join(@directory, "started")) }
         original_id = @store.find(first.provider_job_id).fetch("locked_by_id")
@@ -123,6 +126,7 @@ describe "explicit lifecycle restart across processes" do
         _(stopped_runs.map { |event| event.fetch("run_id") }).must_equal [original_run, new_run]
         _(stopped_runs.all? { |event| event.fetch("operation_duration") >= 0 }).must_equal true
       end
+
       _(DecentJob::ProcessRecord.active(database: database)).must_be_empty
     end
   end

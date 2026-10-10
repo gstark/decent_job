@@ -18,18 +18,22 @@ module DecentJob
 
     def pause(**target)
       kind, key = target_pair(**target)
+
       @database.with_connection do |connection|
         connection.exec_params("INSERT INTO decent_job_pauses (kind, key) VALUES ($1, $2) ON CONFLICT DO NOTHING", [kind, key])
       end
+
       true
     end
 
     def unpause(**target)
       kind, key = target_pair(**target)
+
       @database.transaction do |connection|
         connection.exec_params("DELETE FROM decent_job_pauses WHERE kind = $1 AND key = $2", [kind, key])
         Store.new(@database).notify(connection)
       end
+
       true
     end
 

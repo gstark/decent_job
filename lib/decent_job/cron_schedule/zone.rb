@@ -8,6 +8,7 @@ module DecentJob
     class Zone
       def initialize(name)
         @local = name.nil?
+
         if name&.match?(/\A[+-]/)
           match = /\A([+-])([01]\d|2[0-3]):?(00|15|30|45)\z/.match(name)
           raise ArgumentError, "invalid timezone" unless match
@@ -34,6 +35,7 @@ module DecentJob
         timezone = @local ? LocalZone.timezone : @timezone
         return LocalZone.at(wall) unless timezone
         periods = timezone.periods_for_local(wall)
+
         if periods.empty?
           # A skipped wall time begins at the transition, which need not land
           # on an hour or even a minute boundary in historical timezone data.
@@ -42,9 +44,11 @@ module DecentJob
             next_wall = change.at.to_i + change.offset.observed_utc_offset
             wall.to_i >= previous_wall && wall.to_i < next_wall
           end
+
           raise ArgumentError, "timezone has no valid local time" unless transition
           return Time.at(transition.at.to_i).utc
         end
+
         Time.at(wall.to_i - periods.first.observed_utc_offset).utc
       end
 

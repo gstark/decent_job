@@ -18,9 +18,11 @@ describe "dequeue policy" do
 
   def enqueue_candidate(value, created: 60, scheduled: 60, **options)
     job = RecordingJob.set(**options).perform_later(value)
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET created_at = statement_timestamp() - $2::interval, scheduled_at = statement_timestamp() - $3::interval WHERE id = $1", [job.provider_job_id, "#{created} seconds", "#{scheduled} seconds"])
     end
+
     job
   end
 
@@ -60,9 +62,11 @@ describe "dequeue policy" do
       enqueue_candidate("lower priority", priority: 10, created: 1000, scheduled: 1000)
       enqueue_candidate("later", priority: 0, created: 20, scheduled: 20)
       tied = 2.times.map { |index| enqueue_candidate("tie #{index}", priority: 0, created: 50, scheduled: 50) }
+
       database.with_connection do |connection|
         connection.exec_params("UPDATE decent_jobs SET created_at = '2020-01-01', scheduled_at = '2020-01-01' WHERE id = ANY($1::uuid[])", [PG::TextEncoder::Array.new.encode(tied.map(&:provider_job_id))])
       end
+
       values = 5.times.map { perform_value(queues: "+default,other") }
       _(values).must_equal [*tied.sort_by(&:provider_job_id).map { |job| job.arguments.first }, "later", "lower priority", "other queue"]
     end
@@ -87,9 +91,11 @@ describe "dequeue policy" do
     held = 2.times.map { |index| enqueue_candidate("held #{index}", created: 100 - index, scheduled: 100 - index) }
     available = enqueue_candidate("available", created: 30, scheduled: 30)
     separate = database.connect
+
     held.each do |job|
       separate.exec_params("SELECT pg_advisory_lock(hashtextextended(current_schema() || '.decent_jobs.' || $1, 0))", [job.provider_job_id])
     end
+
     DecentJob.configuration.queue_select_limit = 2
     _(@performer.perform_one).must_be_nil
     DecentJob.configuration.queue_select_limit = 3

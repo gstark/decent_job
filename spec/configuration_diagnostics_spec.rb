@@ -109,9 +109,11 @@ describe "configuration diagnostics" do
     refute config.valid?
     messages = config.errors[:cron]
     assert_equal 8, messages.size
+
     %w[malformed invalid string_key MissingDiagnosticsJob AnotherMissingDiagnosticsJob args kwargs set].each do |part|
       assert_includes messages.join("; "), part
     end
+
     assert_raises(ArgumentError) { config.cron_entries }
   end
 
@@ -131,6 +133,7 @@ describe "configuration diagnostics" do
         raise "cannot build this entry"
       end
     end.new
+
     config = DecentJob::Configuration.new
     config.cron = {broken: attributes, later: {cron: "wrong"}}
     assert_respond_to config, :valid?
@@ -214,6 +217,7 @@ describe "configuration diagnostics" do
     active = DecentJob.configuration
     assert active.valid?
     rejected = nil
+
     error = assert_raises(ArgumentError) do
       DecentJob.configure do |config|
         rejected = config
@@ -221,6 +225,7 @@ describe "configuration diagnostics" do
         config.cron[:new] = []
       end
     end
+
     assert_includes error.message, "existing"
     assert_includes error.message, "new"
     refute_empty rejected.errors

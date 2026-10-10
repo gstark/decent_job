@@ -15,6 +15,7 @@ end
 if ENV["DECENT_JOB_CRON_SPEC_CONNECTION"]
   ActiveJob::Base.logger = Logger.new(File::NULL)
   CronProcessJob.queue_adapter = :decent_job
+
   DecentJob.configure do |configuration|
     configuration.database_url = JSON.parse(ENV.fetch("DECENT_JOB_CRON_SPEC_CONNECTION"))
     configuration.queues = "cron"

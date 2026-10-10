@@ -27,25 +27,30 @@ describe DecentJob::Dashboard do
   def request(method, path, params: {}, script_name: "", headers: {})
     query = ""
     body = ""
+
     if method == "GET"
       query = URI.encode_www_form(params)
     else
       params = params.merge("authenticity_token" => @cookies["decent_job_csrf"]) unless params.key?("authenticity_token")
       body = URI.encode_www_form(params)
     end
+
     env = {"REQUEST_METHOD" => method, "PATH_INFO" => path, "QUERY_STRING" => query, "SCRIPT_NAME" => script_name,
            "CONTENT_TYPE" => "application/x-www-form-urlencoded", "rack.input" => StringIO.new(body),
            "HTTP_COOKIE" => @cookies.map { |key, value| "#{key}=#{value}" }.join("; ")}.merge(headers)
     status, response_headers, body = @app.call(env)
+
     response_headers.fetch("set-cookie", "").split("\n").each do |cookie|
       pair, *attributes = cookie.split("; ")
       name, value = pair.split("=", 2)
+
       if attributes.include?("Max-Age=0")
         @cookies.delete(name)
       else
         @cookies[name] = value
       end
     end
+
     [status, response_headers, body.join]
   end
 
@@ -330,10 +335,12 @@ describe DecentJob::Dashboard do
     it "shows registered worker processes" do
       _, _, body = get("/processes")
       _(body).must_include "No worker has registered"
+
       database.with_connection do |connection|
         connection.exec_params("INSERT INTO decent_job_processes (id, state, heartbeat_mode) VALUES ($1, $2, 'heartbeat')",
           [SecureRandom.uuid, JSON.generate(hostname: "worker-1", pid: 4242, proctitle: "decent_job", schedulers: [{queues: "*", max_threads: 5, active_threads: 2}])])
       end
+
       _, _, body = get("/processes")
       _(body).must_include "worker-1"
       _(body).must_include "pid 4242"

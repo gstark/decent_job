@@ -15,6 +15,7 @@ class PausedLabelRetryJob < RecordingJob
       self.decent_job_labels = ["after-retry"]
       raise "retry with changed labels"
     end
+
     super
   end
 end
@@ -67,12 +68,15 @@ describe "persistent pauses" do
     @pauses.pause(queue: "default")
     RecordingJob.perform_later("unpaused notification")
     connections = Queue.new
+
     database.define_singleton_method(:connect) do
       super().tap { |connection| connections << connection.backend_pid }
     end
+
     worker = DecentJob::Worker.new(database: database, max_threads: 1, poll_interval: 60).start
     # The listener and the heartbeat monitor each open a session; either may connect first.
     pids = []
+
     Timeout.timeout(5) do
       loop do
         pids << connections.pop until connections.empty?
@@ -80,6 +84,7 @@ describe "persistent pauses" do
         sleep 0.01
       end
     end
+
     sleep 0.1
     _(RecordingJob.events.size).must_equal 0
     @pauses.unpause(queue: "default")
@@ -94,9 +99,11 @@ describe "persistent pauses" do
     @pauses.pause(job_class: RecordingJob)
     _(@performer.perform_one).must_be_nil
     @pauses.unpause(job_class: RecordingJob)
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET labels = ARRAY['email', 'account'] WHERE id = $1", [job.provider_job_id])
     end
+
     @pauses.pause(label: "account")
     _(@performer.perform_one).must_be_nil
     @pauses.unpause(label: "account")

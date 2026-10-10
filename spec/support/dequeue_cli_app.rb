@@ -28,8 +28,10 @@ if ENV["DEQUEUE_PROCESS_DATABASE"]
     config.queue_select_limit = ENV["DEQUEUE_APP_LIMIT"] if ENV["DEQUEUE_APP_LIMIT"]
     config.on_thread_error = ->(error) { DequeueProcessLog.write(type: "error", message: error.message) }
   end
+
   DequeueProcessJob.queue_adapter = :decent_job
   ActiveJob::Base.logger = Logger.new(File::NULL)
+
   ActiveSupport::Notifications.subscribe("finished_job_task.decent_job") do |event|
     DequeueProcessLog.write(type: "empty") unless event.payload[:result]
   end

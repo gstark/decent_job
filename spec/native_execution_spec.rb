@@ -119,6 +119,7 @@ describe "native job execution" do
     batch = DecentJob::Batch.enqueue(database: database, on_finish: NativeBatchCallback) do
       NativeExecutionJob.perform_later(2)
     end
+
     2.times { _(@performer.perform_one.state).must_equal "succeeded" }
     _(NativeExecution::EVENTS).must_equal [[:perform, 2, nil, batch.id], [:callback, batch.id, :finish]]
     _(batch.reload.finished?).must_equal true
@@ -148,6 +149,7 @@ describe "native job execution" do
       raise "loaded: \#{loaded.keys}" unless loaded.empty?
       database.close
     RUBY
+
     Dir.mktmpdir do |directory|
       result = File.join(directory, "result.json")
       environment = {"CONNECTION" => JSON.generate(@connection_options), "RESULT" => result}
@@ -162,6 +164,7 @@ describe "native job execution" do
       NativeExecutionJob.perform_later(3)
       NativeExecutionJob.perform_later(4)
     end
+
     _(captured.map(&:provider_job_id).compact.size).must_equal 2
     DecentJob.perform_all_later([NativeExecutionJob.new(5)])
     3.times { @performer.perform_one }

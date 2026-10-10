@@ -104,10 +104,12 @@ describe "job notifications" do
     @adapter.enqueue_at(job, timestamp)
     _(events(:enqueue_job).last.payload[:scheduled_at]).must_equal timestamp
     at = Time.utc(2026, 1, 1)
+
     DecentJob::CronEntry.with_context(key: :event, at: at, database: database) do
       EventValueJob.perform_later
       _(EventValueJob.perform_later).must_equal false
     end
+
     payload = events(:enqueue_job).last.payload
     _(payload[:accepted]).must_equal false
     _(payload[:job_instance].provider_job_id).must_be_nil
@@ -118,6 +120,7 @@ describe "job notifications" do
   it "finishes perform while the attempt is still running and keeps observer mutations detached" do
     job = EventValueJob.perform_later({"nested" => [1]})
     observed = nil
+
     callback = ActiveSupport::Notifications.subscribe("perform_job.decent_job") do |event|
       observed = @store.executions(job.provider_job_id).first
       event.payload[:job].payload["arguments"].clear
@@ -125,6 +128,7 @@ describe "job notifications" do
       event.payload[:error] = RuntimeError.new("invented")
       event.payload[:retried] = true
     end
+
     result = @performer.perform_one
     _(observed["state"]).must_equal "running"
     _(observed["duration"]).must_be_nil
@@ -157,6 +161,7 @@ describe "job notifications" do
       payload = events(:perform_job).last.payload
       _(payload[:error]).must_be_kind_of Exception
       _(payload[:error_event]).must_equal event
+
       if event == :unhandled
         _(payload[:unhandled_error]).must_be_same_as payload[:error]
         _(payload).wont_include :value
@@ -193,6 +198,7 @@ describe "job notifications" do
       payload = events(:perform_job).last.payload
       _(payload[:error_event]).must_equal kind
       _(payload[:error]).must_be_same_as result.error
+
       if kind == :handled
         _(payload[:value]).must_be_nil
         _(payload[:handled_error]).must_be_same_as result.error
@@ -225,9 +231,11 @@ describe "job notifications" do
 
   it "retains forced discard from a finish observer" do
     job = EventValueJob.perform_later
+
     observer = ActiveSupport::Notifications.subscribe("perform_job.decent_job") do |event|
       event.payload[:job].force_discard_job("observer stopped it")
     end
+
     result = @performer.perform_one
     _(result.state).must_equal "discarded"
     _(result.error).must_be_kind_of DecentJob::Job::DiscardJobError
@@ -256,10 +264,12 @@ describe "job notifications" do
 
   it "suppresses individual events for plain bulk and capture but emits checked bulk events" do
     ActiveJob.perform_all_later(EventValueJob.new, EventValueJob.new)
+
     DecentJob::Bulk.enqueue do
       EventValueJob.perform_later
       _(events(:enqueue_job)).must_be_empty
     end
+
     _(events(:enqueue_job)).must_be_empty
     EventControlledJob.decent_job_control_concurrency_with(key: "bulk", total_limit: 1)
     ActiveJob.perform_all_later(EventControlledJob.new, EventControlledJob.new)
@@ -270,10 +280,12 @@ describe "job notifications" do
   it "reports SQL enqueue failure and leaves an outer transaction usable" do
     job = EventValueJob.perform_later
     previous_id = job.provider_job_id
+
     database.transaction do |connection|
       _(job.enqueue).must_equal false
       _(connection.exec("SELECT 42").getvalue(0, 0)).must_equal "42"
     end
+
     payload = events(:enqueue_job).last.payload
     _(payload[:accepted]).must_equal false
     _(payload[:exception_object]).must_be_kind_of DecentJob::EnqueueError
@@ -286,10 +298,12 @@ describe "job notifications" do
     poison = ->(*) { database.with_connection { |connection| connection.exec("SELECT missing_observer_column") } }
     observer = ActiveSupport::Notifications.subscribe("enqueue_concurrency_limit_exceeded.decent_job", &poison)
     DecentJob.configuration.on_thread_error = poison
+
     database.transaction do |connection|
       _(EventControlledJob.perform_later).must_equal false
       _(connection.exec("SELECT count(*) FROM decent_jobs").getvalue(0, 0)).must_equal "0"
     end
+
     _(events(:enqueue_job)).must_be_empty
   ensure
     ActiveSupport::Notifications.unsubscribe(observer) if observer
@@ -324,14 +338,17 @@ describe "job notifications" do
     phases = []
     pool = database
     observer = Object.new
+
     [:start, :finish].each do |phase|
       observer.define_singleton_method(phase) do |*|
         phases << phase
         pool.with_connection { |connection| connection.exec("SELECT missing_observer_column") }
       end
     end
+
     subscription = ActiveSupport::Notifications.subscribe("enqueue_job.decent_job", observer)
     job = nil
+
     assert_raises(RuntimeError) do
       database.transaction do
         job = EventValueJob.perform_later
@@ -340,6 +357,7 @@ describe "job notifications" do
         raise "rollback"
       end
     end
+
     _(phases).must_equal [:start, :finish]
     _(@store.find(job.provider_job_id)).must_be_nil
   ensure
@@ -348,12 +366,15 @@ describe "job notifications" do
 
   it "uses INSERT and UPDATE returned metadata without event-only SELECTs" do
     statements = []
+
     database.with_connection do |connection|
       original = connection.method(:exec_params)
+
       connection.define_singleton_method(:exec_params) do |sql, *args|
         statements << sql
         original.call(sql, *args)
       end
+
       EventValueJob.perform_later
       _(events(:enqueue_job).last.payload[:job].created_at).must_be_kind_of Time
       _(statements.grep(/SELECT/).reject { |sql| sql.include?("pg_notify") }).must_be_empty
@@ -374,12 +395,15 @@ describe "job notifications" do
     _(events(:perform_job).last.payload[:retried]).must_equal false
     _(@store.find(job.provider_job_id)["state"]).must_equal "succeeded"
   end
+
   it "performs successfully when its start observer freezes the notification payload" do
     observer = Object.new
+
     observer.define_singleton_method(:start) do |name, id, payload|
       payload.freeze
       raise "frozen observer"
     end
+
     observer.define_singleton_method(:finish) { |*| }
     subscription = ActiveSupport::Notifications.subscribe("perform_job.decent_job", observer)
     job = EventValueJob.perform_later(42)
@@ -394,11 +418,13 @@ describe "job notifications" do
     observed = nil
     observer = Object.new
     observer.define_singleton_method(:start) { |*| }
+
     observer.define_singleton_method(:finish) do |name, id, payload|
       observed = payload
       entered << true
       Queue.new.pop
     end
+
     subscription = ActiveSupport::Notifications.subscribe("perform_job.decent_job", observer)
     job = EventValueJob.perform_later(42)
     thread = Thread.new { @performer.perform_one }

@@ -28,6 +28,7 @@ module DecentJob
         acquired = false
         databases = nil
         prepared = []
+
         Thread.handle_interrupt(Object => :never) do
           @registry_mutex.synchronize do
             raise ForkInProgress, "databases are already preparing to fork" if @fork_prepared
@@ -36,6 +37,7 @@ module DecentJob
             databases = @registry.keys
           end
         end
+
         databases.each do |database|
           Thread.handle_interrupt(Object => :never) do
             # Register cleanup before preparation can close sessions or fail.
@@ -43,6 +45,7 @@ module DecentJob
             database.prepare_fork
           end
         end
+
         yield
       ensure
         if acquired && Process.pid == owner
@@ -65,6 +68,7 @@ module DecentJob
 
     def prepare_fork
       raise ForkedDatabase, "create a new Database after forking" if @pid != Process.pid
+
       @mutex.synchronize do
         raise ForkInProgress, "database has borrowed or connecting sessions" unless @size == @idle.size
         @fork_prepared = true
@@ -95,12 +99,15 @@ module DecentJob
 
     def resize(pool_size)
       raise ArgumentError, "pool_size must be positive" unless pool_size.is_a?(Integer) && pool_size.positive?
+
       @mutex.synchronize do
         @pool_size = pool_size
+
         while @size > @pool_size && (connection = @idle.pop)
           connection.finish unless connection.finished?
           @size -= 1
         end
+
         @available.broadcast
       end
     end
@@ -155,6 +162,7 @@ module DecentJob
           callbacks = {commit: [], rollback: []}
           frames << callbacks
           committed = false
+
           begin
             connection.exec(nested ? "SAVEPOINT #{savepoint}" : "BEGIN")
             result = Thread.handle_interrupt(Object => :immediate) { yield connection }
@@ -176,6 +184,7 @@ module DecentJob
               frames.pop
               @mutex.synchronize { @transaction_callbacks.delete(connection) } if frames.empty?
             end
+
             if committed
               if frames.empty?
                 Thread.handle_interrupt(Object => :immediate) { callbacks[:commit].each(&:call) }
@@ -200,6 +209,7 @@ module DecentJob
 
     def after_commit(&block)
       frames = @mutex.synchronize { @transaction_callbacks[@borrowed[IsolatedState.context]] }
+
       if frames && !frames.empty?
         frames.last[:commit] << block
       else
@@ -222,6 +232,7 @@ module DecentJob
         (@connection_release_callbacks[current] ||= []) << block if current
         current
       end
+
       block.call unless connection
     end
 
@@ -253,12 +264,14 @@ module DecentJob
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + @checkout_timeout
       reserved = false
       registered = false
+
       @mutex.synchronize do
         loop do
           raise ForkInProgress, "database is preparing to fork" if @fork_prepared
           raise ClosedDatabase, "database is closed" if @closed
 
           connection = @idle.pop
+
           if connection
             @borrowed[owner] = connection
             return connection
@@ -273,17 +286,21 @@ module DecentJob
           @available.wait(@mutex, remaining)
         end
       end
+
       connection = connect
+
       @mutex.synchronize do
         raise ClosedDatabase, "database is closed" if @closed
         @borrowed[owner] = connection
         registered = true
       end
+
       connection
     ensure
       if reserved && !registered
         Thread.handle_interrupt(Object => :never) do
           connection&.finish unless connection&.finished?
+
           @mutex.synchronize do
             @size -= 1
             @available.signal
@@ -294,6 +311,7 @@ module DecentJob
 
     def cancel_interrupted_query(connection)
       return if connection.finished? || connection.status != PG::CONNECTION_OK || connection.transaction_status != PG::PQTRANS_ACTIVE
+
       unless defined?(PG::CancelConnection)
         # Older libpq clients expose only pg's interruptible cancellation API.
         # This remains owned cleanup; shutdown callers need not wait for it.
@@ -304,6 +322,7 @@ module DecentJob
       cancellation = PG::CancelConnection.new(connection)
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 1
       cancellation.start
+
       loop do
         state = cancellation.poll
         return if state == PG::PGRES_POLLING_OK || state == PG::PGRES_POLLING_FAILED
@@ -327,21 +346,26 @@ module DecentJob
       callbacks = @mutex.synchronize do
         @borrowed.delete(owner)
         @transaction_callbacks.delete(connection)
+
         if interrupted || @closed || @size > @pool_size || connection.finished? || connection.status != PG::CONNECTION_OK
           connection.finish unless connection.finished?
           @size -= 1
         else
           @idle << connection
         end
+
         @available.signal
         @connection_release_callbacks.delete(connection) || []
       end
+
       failure = nil
+
       callbacks.each do |callback|
         callback.call
       rescue Exception => error # standard:disable Lint/RescueException
         failure ||= error
       end
+
       raise failure if failure
     end
   end

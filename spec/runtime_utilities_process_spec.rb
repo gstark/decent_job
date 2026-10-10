@@ -42,6 +42,7 @@ describe "runtime utility ownership across processes" do
     environment = {"UTILITY_DATABASE" => JSON.generate(@connection_options),
                    "UTILITY_DIRECTORY" => @directory, "UTILITY_ISOLATION" => isolation}
     command = [RbConfig.ruby, "-Ilib", "spec/support/runtime_utilities_process.rb"]
+
     Open3.popen3(environment, *command, pgroup: true) do |input, output, error, process|
       input.close
       stdout = Thread.new { output.read }
@@ -54,6 +55,7 @@ describe "runtime utility ownership across processes" do
         Process.kill("KILL", -process.pid)
         process.join
       end
+
       stdout&.join
       stderr&.join
       warn "Child diagnostics: #{stderr&.value}\n#{stdout&.value}" if $!
@@ -64,6 +66,7 @@ describe "runtime utility ownership across processes" do
     it "keeps notifications and heartbeat active through blocked work with #{isolation} isolation" do
       active_job = RuntimeUtilitiesJob.perform_later(@directory)
       job = DecentJob::Job.find(active_job.provider_job_id, database: database)
+
       run_child(isolation) do |process|
         await { snapshot("ready") && snapshot("job") && snapshot("cron") }
         ready = snapshot("ready")
@@ -72,6 +75,7 @@ describe "runtime utility ownership across processes" do
         _(ready.fetch("pool").fetch("active")).must_equal 2
         _(job_state.fetch("current")).must_equal active_job.job_id
         _(cron_state.fetch("current")).must_equal "hold"
+
         if isolation == "thread"
           _(job_state.fetch("nested")).must_equal active_job.job_id
           _(cron_state.fetch("nested")).must_equal "hold"
@@ -79,12 +83,15 @@ describe "runtime utility ownership across processes" do
           _(job_state.fetch("nested")).must_be_nil
           _(cron_state.fetch("nested")).must_be_nil
         end
+
         process_id = ready.fetch("process_id")
         record = DecentJob::ProcessRecord.find(process_id, database: database)
         await { DecentJob::ProcessRecord.find(process_id, database: database).updated_at > record.updated_at }
+
         database.with_connection do |connection|
           DecentJob::Notifier.notify(connection, queue_name: "utility-probe")
         end
+
         await { File.exist?(File.join(@directory, "notified")) }
         _(job.reload.locked_by_id).must_equal process_id
         _(DecentJob::ProcessRecord.active(database: database).map(&:id)).must_include process_id
@@ -108,6 +115,7 @@ describe "runtime utility ownership across processes" do
         _(finished.fetch("drained")).must_equal true
         _(finished.fetch("pool").fetch("active")).must_equal 0
       end
+
       _(DecentJob::ProcessRecord.active(database: database)).must_be_empty
       _(job.executions.size).must_equal 1
     end

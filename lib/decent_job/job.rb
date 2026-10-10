@@ -121,17 +121,21 @@ module DecentJob
           raise StateMismatchError, "Only discarded jobs can be retried" unless discarded?
           prepared = JobRetry.new(self).prepare
           scopes = ConcurrencyControls.new(database).scopes_for(prepared.fetch(:buffer).jobs.reject { |job| job.job_id == active_job_id })
+
           ConcurrencyClaims.new(database).synchronize(id, scopes: scopes, wait: false) do |connection|
             lock_row(connection)
             raise StateMismatchError, "Only discarded jobs can be retried" unless discarded?
             job = prepared[:job]
+
             if job
               job.queue_adapter.reschedule(job, prepared.fetch(:context), payload: prepared.fetch(:payload), attributes: @attributes, scheduled_at: job.scheduled_at&.to_f)
               job.queue_adapter.after_enqueue([id])
             end
+
             isolated_context do
               Bulk.with_buffer(nil) { prepared.fetch(:buffer).enqueue }
             end
+
             reload
             job || false
           end
@@ -190,6 +194,7 @@ module DecentJob
         error_details = {"class" => exception.class.name, "message" => exception.message, "backtrace" => []}
         error_details["force_discarded"] = true if force
         details = JSON.generate(error_details)
+
         update = proc do
           connection.exec_params(<<~SQL, [id, details])
             WITH finished AS (
@@ -202,10 +207,12 @@ module DecentJob
           ConcurrencyClaims.new(database).release_all(connection, id)
           batch_ids = [batch_id, batch_callback_id].compact.uniq
           BatchStore.new(database).request(connection, batch_ids, job_id: id, discarded: true)
+
           database.after_commit do
             isolated_context { batch_ids.sort.each { |batch_id| BatchStore.new(database).reconcile(batch_id) } }
           end
         end
+
         job = job_instance(ignore_deserialization_errors: true)
         job ? Integrations.for_job(job).discarding(job, exception, &update) : update.call
         reload
@@ -219,6 +226,7 @@ module DecentJob
           block.call(connection)
         end
       end
+
       force ? operation.call : with_job_lock(&operation)
     rescue PG::LockNotAvailable
       raise LockedError, "Job #{id} is locked"

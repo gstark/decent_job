@@ -40,6 +40,7 @@ describe "scheduled execution across worker processes" do
 
   def events(path)
     return [] unless File.exist?(path)
+
     File.readlines(path).filter_map do |line|
       JSON.parse(line)
     rescue JSON::ParserError
@@ -58,12 +59,15 @@ describe "scheduled execution across worker processes" do
   def run_worker(*options)
     command = [RbConfig.ruby, "-Ilib", "exe/decent_job", "start", "--require", "spec/support/scheduler_cli_app.rb",
       "--poll-interval", "-1", "--max-cache", "2", "--shutdown-timeout", "3", "--probe-port", @port.to_s, *options]
+
     Open3.popen3(@environment, *command, pgroup: true) do |input, output, error, process|
       input.close
       stdout = Thread.new { output.read }
       stderr = Thread.new { error.read }
+
       await do
         raise "Worker stopped: #{stderr.value}\n#{stdout.value}" unless process.alive?
+
         begin
           Net::HTTP.start("127.0.0.1", @port, nil, open_timeout: 0.2, read_timeout: 0.2) do |http|
             http.get("/status/connected").code == "200"
@@ -72,6 +76,7 @@ describe "scheduled execution across worker processes" do
           false
         end
       end
+
       yield process
       Process.kill("TERM", process.pid)
       status = Timeout.timeout(6) { process.value }
@@ -82,6 +87,7 @@ describe "scheduled execution across worker processes" do
         Process.kill("KILL", -process.pid)
         process.join
       end
+
       stdout&.join
       stderr&.join
     end
@@ -91,17 +97,20 @@ describe "scheduled execution across worker processes" do
     at = Time.now + 2
     times = [at, at + 0.35, at + 0.7]
     times.each_with_index { |time, index| enqueue("future #{index}", at: time, notify: false) }
+
     run_worker("--no-listen-notify") do
       await { scheduler_stats.any? { |stats| stats.fetch("active_cache", 0).positive? } }
       stats = scheduler_stats.first
       _(stats.fetch("max_cache")).must_equal 2
       _(stats.fetch("active_cache")).must_be :<=, 2
       await { events(@finished).size == 3 }
+
       events(@started).each do |event|
         index = event.fetch("value").split.last.to_i
         _(event.fetch("at")).must_be :>=, times.fetch(index).to_f - 0.01
       end
     end
+
     _(DecentJob::ProcessRecord.all(database: database)).must_be_empty
   end
 
@@ -122,10 +131,12 @@ describe "scheduled execution across worker processes" do
       times = [Time.now + 0.6, Time.now + 1]
       times.each_with_index { |time, index| enqueue("zero #{index}", at: time) }
       await { events(@finished).size == 2 }
+
       events(@started).each do |event|
         index = event.fetch("value").split.last.to_i
         _(event.fetch("at")).must_be :>=, times.fetch(index).to_f - 0.01
       end
+
       _(scheduler_stats.first.fetch("max_cache")).must_equal 0
     end
   end
@@ -138,9 +149,11 @@ describe "scheduled execution across worker processes" do
       await { scheduler_stats.any? { |stats| stats.fetch("active_cache", 0).positive? } }
       later = Time.now + 2
       DecentJob::Job.find(moved.provider_job_id, database: database).reschedule_job(later)
+
       database.with_connection do |connection|
         connection.exec_params("DELETE FROM decent_jobs WHERE id = $1", [removed.provider_job_id])
       end
+
       await { Time.now > original + 0.15 }
       _(events(@started)).must_be_empty
       await { events(@finished).size == 1 }
@@ -155,9 +168,11 @@ describe "scheduled execution across worker processes" do
       sleep 0.1
       baseline = scheduler_stats.find { |stats| stats.fetch("queues") == "ordinary" }.fetch("empty_executions_count")
       release = File.join(@directory, "release")
+
       jobs = 2.times.map do |index|
         SchedulerProcessJob.new("bulk #{index}", release: release).tap { |job| job.queue_name = "urgent" }
       end
+
       @adapter.enqueue_all(jobs)
       await { events(@started).size == 2 }
       await { scheduler_stats.find { |stats| stats.fetch("queues") == "urgent" }.fetch("active_threads") == 2 }
@@ -171,9 +186,11 @@ describe "scheduled execution across worker processes" do
   it "warms missed future work after its notification connection reconnects" do
     run_worker do
       listener_pid = nil
+
       await do
         listener_pid = @admin.exec_params("SELECT pid FROM pg_stat_activity WHERE application_name = $1 AND query = 'LISTEN decent_job'", [@application_name]).first&.fetch("pid")
       end
+
       @admin.exec_params("SELECT pg_terminate_backend($1)", [listener_pid])
       at = Time.now + 0.7
       enqueue("reconnected", at: at, notify: false)

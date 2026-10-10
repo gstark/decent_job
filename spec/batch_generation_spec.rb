@@ -45,11 +45,13 @@ describe "batch reopening during execution" do
     Timeout.timeout(5) { BatchGenerationMemberJob.started.pop }
     entered = Queue.new
     release = @reopen_release
+
     batch.send(:store).define_singleton_method(gate) do |id|
       super(id)
       entered << true
       release.pop
     end
+
     @threads << Thread.new { batch.public_send(operation) }
     Timeout.timeout(5) { entered.pop }
     BatchGenerationMemberJob.release << true
@@ -98,9 +100,11 @@ describe "batch reopening during execution" do
       on_success: BatchGenerationCallbackJob, on_discard: BatchGenerationCallbackJob)
     BatchGenerationMemberJob.release << true
     DecentJob::Performer.new(database: database).perform_one(job_id: member.provider_job_id)
+
     database.transaction do |connection|
       DecentJob::BatchStore.new(database).request(connection, [batch.id], job_id: member.provider_job_id, discarded: true)
     end
+
     batch.enqueue
 
     _(batch.reload.discarded?).must_equal false

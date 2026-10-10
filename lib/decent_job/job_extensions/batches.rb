@@ -8,8 +8,10 @@ module DecentJob
       def self.included(base)
         base.before_enqueue do |job|
           context = Batch.current_context
+
           if context
             adapter = job.queue_adapter
+
             unless adapter.is_a?(Adapter) && adapter.database.equal?(context.fetch(:database))
               raise ArgumentError, "Batch jobs must use a DecentJob adapter with the batch database"
             end

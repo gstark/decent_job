@@ -23,16 +23,19 @@ describe "cron shutdown after fatal callback errors" do
     @callback_release << true
     @callback_thread&.join
     @releaser&.join
+
     begin
       @manager&.shutdown
     rescue CronShutdownFailure
       nil
     end
+
     begin
       DecentJob.reset!
     rescue CronShutdownFailure
       nil
     end
+
     Thread.report_on_exception = @previous_reporting
   end
 
@@ -66,10 +69,12 @@ describe "cron shutdown after fatal callback errors" do
     _(first).must_be_same_as @fatal_error
     _(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).must_be :<, 0.5
     _(@manager.shutdown?).must_equal false
+
     @releaser = Thread.new do
       sleep 0.05
       @callback_release << true
     end
+
     second = _ { @manager.shutdown }.must_raise CronShutdownFailure
     _(second).must_be_same_as @fatal_error
     _(@callback_completed.size).must_equal 1
@@ -83,10 +88,12 @@ describe "cron shutdown after fatal callback errors" do
     DecentJob.configuration.cron = entries(connection_pool)
     @manager = DecentJob.start_cron
     await_callbacks
+
     @releaser = Thread.new do
       sleep 0.05
       @callback_release << true
     end
+
     error = _ { DecentJob.reset! }.must_raise CronShutdownFailure
     _(error).must_be_same_as @fatal_error
     _(@callback_completed.size).must_equal 1

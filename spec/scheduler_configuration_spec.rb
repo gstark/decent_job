@@ -9,18 +9,23 @@ describe "scheduler configuration" do
     _(config.max_cache).must_equal 10_000
     _(config.worker_options.fetch(:max_cache)).must_equal 10_000
   end
+
   it "accepts finite real disabled and fractional polling intervals" do
     config = DecentJob::Configuration.new
+
     [0, -1, -0.5, 0.025, Rational(1, 10)].each do |interval|
       config.poll_interval = interval
       _(config.validate!.worker_options.fetch(:poll_interval)).must_equal interval
     end
+
     [nil, false, true, "1", Float::NAN, Float::INFINITY, Complex(1, 0)].each do |interval|
       _ { config.poll_interval = interval }.must_raise ArgumentError
     end
+
     [-1, 1.5, nil, false, "1"].each do |value|
       _ { config.max_cache = value }.must_raise ArgumentError
     end
+
     config.max_cache = 0
     _(config.worker_options.fetch(:max_cache)).must_equal 0
   end

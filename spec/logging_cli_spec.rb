@@ -41,12 +41,14 @@ describe "DecentJob CLI logging" do
 
   it "adds one tagged stdout destination across repeated calls" do
     DecentJob::CLI.within_exe = true
+
     DecentJob.stub(:cleanup_preserved_jobs, ->(**) {
       DecentJob::Notifications.instrument("notifier_listen.decent_job")
       0
     }) do
       2.times { _(@cli.run(["cleanup"])).must_equal 0 }
     end
+
     _(DecentJob::LogSubscriber.loggers.size).must_equal 1
     _(@stdout.string.scan("[DecentJob] Notifier subscribed with LISTEN").size).must_equal 2
   end
@@ -76,12 +78,14 @@ describe "DecentJob CLI logging" do
     destination = ActiveSupport::BroadcastLogger.new(inner)
     DecentJob::LogSubscriber.loggers << destination
     DecentJob::LogSubscriber.reset_logger
+
     DecentJob.stub(:cleanup_preserved_jobs, ->(**) {
       DecentJob::Notifications.instrument("notifier_listen.decent_job")
       0
     }) do
       2.times { _(@cli.run(["cleanup"])).must_equal 0 }
     end
+
     _(DecentJob::LogSubscriber.loggers).must_equal [destination]
     _(destination.broadcasts).must_equal [inner]
     _(inner.broadcasts).must_equal [error_logger, stdout_logger]

@@ -87,10 +87,12 @@ describe "batch recovery after record deletion" do
       _(batch.discarded?).must_equal fail_execution
       _(batch.succeeded?).must_equal !fail_execution
       _(batch.callback_job_instances).must_be_empty
+
       callbacks.each do |callback|
         _(store.find(callback.provider_job_id)).must_be_nil
         _(store.executions(callback.provider_job_id)).must_be_empty
       end
+
       expected = [:finish, fail_execution ? :discard : :success].sort
       actual = 2.times.map { PreservationRecoveryCallbackJob.events.pop }
       _(actual.map(&:first)).must_equal [batch.id, batch.id]
@@ -105,6 +107,7 @@ describe "batch recovery after record deletion" do
           nil
         end
       end
+
       reader&.close
       writer&.close unless writer&.closed?
     end

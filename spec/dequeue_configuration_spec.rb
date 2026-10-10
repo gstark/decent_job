@@ -27,10 +27,12 @@ describe "dequeue configuration" do
 
   it "normalizes exact sort names and decimal nonnegative limits" do
     config = DecentJob::Configuration.new
+
     [:created_at, :scheduled_at, "created_at", "scheduled_at"].each do |value|
       config.dequeue_query_sort = value
       _(config.dequeue_query_sort).must_equal value.to_sym
     end
+
     [0, 1, 100_000, "0", "001", "100000"].each do |value|
       config.queue_select_limit = value
       _(config.queue_select_limit).must_equal value.to_i
@@ -39,10 +41,12 @@ describe "dequeue configuration" do
 
   it "rejects invalid values without replacing the current policy" do
     config = DecentJob::Configuration.new
+
     [false, true, 1, "Created_at", " scheduled_at", "id", "created_at; DROP TABLE decent_jobs"].each do |value|
       _ { config.dequeue_query_sort = value }.must_raise ArgumentError
       _(config.dequeue_query_sort).must_equal :created_at
     end
+
     [false, true, -1, 1.0, Float::INFINITY, "", " ", "-1", "+1", " 1", "1.0", "1e3", "0x10", "1_000", "1; SELECT 1"].each do |value|
       _ { config.queue_select_limit = value }.must_raise ArgumentError
       _(config.queue_select_limit).must_equal 1000
@@ -95,6 +99,7 @@ describe "dequeue configuration" do
       _ { DecentJob::Configuration.new }.must_raise ArgumentError
       ENV.delete(key)
     end
+
     [{dequeue_query_sort: false}, {queue_select_limit: false}, {queue_select_limit: 1.5}].each do |options|
       _ { DecentJob::Configuration.new.apply_rails_config(options, environment: "test", logger: nil) }.must_raise ArgumentError
     end
@@ -120,9 +125,11 @@ describe "dequeue configuration" do
     error = StringIO.new
     cli = DecentJob::CLI.new(stdout: output, stderr: error)
     DecentJob.configuration.apply_rails_config({dequeue_query_sort: :created_at, queue_select_limit: 8}, environment: "production", logger: nil)
+
     DecentJob.stub(:install, nil) do
       _(cli.run(["migrate", "--dequeue-query-sort", "scheduled_at", "--queue-select-limit", "0"])).must_equal 0
     end
+
     config = DecentJob.configuration
     config.apply_rails_config({dequeue_query_sort: :created_at, queue_select_limit: 3}, environment: "production", logger: nil)
     _(config.dequeue_query_sort).must_equal :scheduled_at

@@ -14,9 +14,11 @@ describe "execution recovery across processes" do
   before do
     DecentJob::Schema.new(database).migrate
     adapter = DecentJob::Adapter.new(database: database)
+
     [RecoveryProcessJob, RecoveryProcessRetryJob, RecoveryProcessDiscardJob, RecoveryProcessPlainJob, RecoveryProcessErrorJob].each do |klass|
       klass.queue_adapter = adapter
     end
+
     @directory = Dir.mktmpdir("decent_job_recovery")
     @started = File.join(@directory, "started")
     @completed = File.join(@directory, "completed")
@@ -32,6 +34,7 @@ describe "execution recovery across processes" do
       Process.kill("KILL", @process.pid)
       @process.join
     end
+
     [@input, @output, @stderr].compact.each { |io| io.close unless io.closed? }
     FileUtils.remove_entry(@directory)
     DecentJob.reset!
@@ -129,9 +132,11 @@ describe "execution recovery across processes" do
     failed = RecoveryProcessErrorJob.perform_later(@completed, true)
     successful = RecoveryProcessErrorJob.perform_later(@completed, false)
     start_worker
+
     Timeout.timeout(8) do
       sleep 0.01 until @store.find(failed.provider_job_id).fetch("finished_at") && @store.find(successful.provider_job_id).fetch("finished_at") && File.exist?(@errors)
     end
+
     Process.kill("TERM", @process.pid)
     _(@process.join(5)).wont_be_nil
     _(@process.value.exitstatus).must_equal 0

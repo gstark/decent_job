@@ -43,8 +43,10 @@ describe "adapter stopping reasons" do
     DecentJob::Current.with(database: database, stopping: -> { true }) do
       _(@adapter.stopping?).must_equal :stopping
     end
+
     _(@adapter.stopping?).must_equal false
     other = DecentJob::Database.new(url: @connection_options)
+
     DecentJob::Current.with(database: other, stopping: -> { true }) do
       _(@adapter.stopping?).must_equal false
     end
@@ -55,6 +57,7 @@ describe "adapter stopping reasons" do
   it "observes completed execution rows and current persisted pause targets without a job argument" do
     aj = RecordingJob.perform_later("pause")
     DecentJob.configuration.enable_pauses = true
+
     DecentJob::Claim.new(database).with_next do |row|
       DecentJob::Current.with(database: database, id: row.fetch("id"), job_id: aj.job_id, execution_id: row.fetch("execution_id")) do
         DecentJob::Pauses.new(database).pause(queue: "default")
@@ -73,6 +76,7 @@ describe "adapter stopping reasons" do
     _(@adapter.stopping?(RecordingJob.new)).must_equal :job_class_paused
     _(@adapter.stopping?).must_equal false
   end
+
   [:individual, :batch].each do |kind|
     it "does not treat historical attempts as executing during #{kind} retry callbacks" do
       batch = DecentJob::Batch.enqueue([StoppingManualRetryJob.new], database: database) if kind == :batch
@@ -94,6 +98,7 @@ describe "adapter stopping reasons" do
 
   it "still observes direct shutdown during manual retry context" do
     @adapter.shutdown
+
     DecentJob::Current.with(database: database, manual_retry: true) do
       _(@adapter.stopping?).must_equal :stopping
     end

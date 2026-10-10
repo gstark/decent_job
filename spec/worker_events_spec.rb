@@ -65,6 +65,7 @@ describe "worker task and poll events" do
     _(attempts.map { |payload| payload[:result].state }.sort).must_equal %w[discarded retried succeeded succeeded]
     _(attempts.map { |payload| payload[:error] }).must_equal [nil] * 4
     _(attempts.count { |payload| payload[:result].unhandled_error }).must_equal 1
+
     results.each do |payload|
       _(payload[:scheduler]).must_be_same_as @worker
       _(payload[:queues]).must_equal "*"
@@ -80,12 +81,14 @@ describe "worker task and poll events" do
     order = Queue.new
     worker(on_thread_error: ->(error) { order << [:report, @worker.stats[:errored_executions_count], error] })
     @worker.define_singleton_method(:cleanup_after_attempt) { order << [:cleanup] }
+
     subscribe("finished_job_task") do |event|
       next unless event.payload[:result]
       order << [:event, event.payload[:error], event.payload[:result]]
       event.payload[:result] = nil
       event.payload[:error] = RuntimeError.new("changed")
     end
+
     FailingJob.perform_later
     @worker.start
     report, event, cleanup = Array.new(3) { pop(order) }
@@ -98,26 +101,32 @@ describe "worker task and poll events" do
   it "captures retry routing before an observer mutates the result strings" do
     routed = Queue.new
     job = RetryingJob.perform_later("retried")
+
     subscribe("finished_job_task") do |event|
       result = event.payload[:result]
+
       if result&.state == "retried"
         result.job_id.replace("changed")
         result.state.replace("succeeded") unless result.state.frozen?
       end
     end
+
     worker
     # The worker builds its own Store, so intercept the class method body.
     original = DecentJob::Store.instance_method(:scheduling_hints)
     DecentJob::Store.remove_method(:scheduling_hints)
+
     DecentJob::Store.define_method(:scheduling_hints) do |ids|
       routed << ids
       []
     end
+
     @worker.start
     _(pop(routed)).must_equal [job.provider_job_id]
     _(pop(RecordingJob.events)).must_equal "retried"
   ensure
     @worker&.shutdown(timeout: 5)
+
     if original
       DecentJob::Store.remove_method(:scheduling_hints)
       DecentJob::Store.define_method(:scheduling_hints, original)
@@ -127,12 +136,15 @@ describe "worker task and poll events" do
   it "emits a task error after execution persistence fails and no extra event for cache maintenance" do
     constructor = DecentJob::Performer.method(:new)
     error = IOError.new("finish failed")
+
     factory = lambda do |**options|
       constructor.call(**options).tap { |performer| performer.define_singleton_method(:finish) { |*| raise error } }
     end
+
     subscribe("finished_job_task") { |event| @events << event.payload.dup }
     worker
     BlockingJob.perform_later
+
     DecentJob::Performer.stub(:new, factory) do
       @worker.start
       pop(BlockingJob.started)
@@ -142,15 +154,18 @@ describe "worker task and poll events" do
       _(payload[:result]).must_be_nil
       @worker.shutdown(timeout: 5)
     end
+
     _(@errors.pop).must_be_same_as error
   end
 
   it "emits one empty attempt before failing cache maintenance" do
     subscribe("finished_job_task") { |event| @events << event.payload.dup }
+
     worker(on_thread_error: ->(error) {
       @errors << error
       @worker.shutdown(timeout: 0)
     })
+
     @worker.define_singleton_method(:refresh_cache) { |*| raise IOError, "cache failed" }
     @worker.start
     _(pop[:result]).must_be_nil
@@ -191,6 +206,7 @@ describe "worker task and poll events" do
       event.payload[:scheduler].shutdown(timeout: 0)
       raise "worker observer failed"
     end
+
     worker.start
     pop
     _(pop(@errors).message).must_equal "worker observer failed"
@@ -202,6 +218,7 @@ describe "worker task and poll events" do
     worker(queues: "fast:1;slow:1", poll_interval: 0.03, max_cache: 0).start
     received = []
     received << pop until received.map { |payload| payload[:queues] }.uniq.size == 2
+
     received.each do |payload|
       _(payload[:result]).must_equal 1
       _(payload[:error]).must_be_nil
@@ -217,21 +234,26 @@ describe "worker task and poll events" do
     attempts = Queue.new
     error = IOError.new("poll wake failed")
     subscribe("finished_job_task") { |event| attempts << event.payload.dup }
+
     subscribe("finished_timer_task") do |event|
       order << [:event, event.payload.dup]
       @worker.shutdown(timeout: 0)
     end
+
     constructor = DecentJob::SchedulerCache.method(:new)
+
     factory = lambda do |**options|
       constructor.call(**options).tap do |cache|
         cache.define_singleton_method(:wake) { |*| raise error }
       end
     end
+
     DecentJob::SchedulerCache.stub(:new, factory) do
       worker(poll_interval: 0.02, max_cache: 0, on_thread_error: ->(error) {
         @worker.stats
         order << [:report, error]
       }).start
+
       _(pop(order)).must_equal [:report, error]
       event = pop(order)
       _(event.first).must_equal :event
@@ -262,6 +284,7 @@ describe "worker task and poll events" do
       @events << Thread.current
       Queue.new.pop
     }
+
     worker(poll_interval: 0.02, max_cache: 0).start
     thread = pop
     thread.kill.join

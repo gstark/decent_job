@@ -15,11 +15,13 @@ module DecentJob
       def self.timezone
         name = ENV["TZ"]&.delete_prefix(":")
         name = "UTC" if name == "Z"
+
         environment_timezone = begin
           TZInfo::Timezone.get(name) if name && !name.empty?
         rescue TZInfo::InvalidTimezoneIdentifier
           nil
         end
+
         environment_timezone || (Time.zone&.tzinfo if Time.respond_to?(:zone))
       end
 
@@ -34,14 +36,17 @@ module DecentJob
         # Time.local's normalization, which may overshoot the gap boundary.
         lower = native.to_i - 172_800
         upper = native.to_i + 172_800
+
         while upper - lower > 1
           middle = (lower + upper).div(2)
+
           if local_seconds(Time.at(middle)) >= wall.to_i
             upper = middle
           else
             lower = middle
           end
         end
+
         Time.at(upper).utc
       end
 

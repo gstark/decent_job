@@ -76,17 +76,21 @@ describe "execution failure configuration" do
   it "rejects invalid exception lists and nonboolean retry policies" do
     config = DecentJob::Configuration.new
     _(config.respond_to?(:handled_exceptions=)).must_equal true
+
     [nil, "StandardError", [Object], [Object.new], [""]].each do |invalid|
       _ {
         config.handled_exceptions = invalid
         config.validate!
       }.must_raise ArgumentError
     end
+
     [["String"], ["MissingRecoveryError"]].each do |invalid|
       config.handled_exceptions = invalid
       _ { config.handled_exception_classes }.must_raise ArgumentError
     end
+
     config.handled_exceptions = [StandardError]
+
     [nil, "true", 1].each do |invalid|
       _ {
         config.retry_on_unhandled_error = invalid
@@ -162,10 +166,12 @@ describe "execution recovery" do
     _(result.state).must_equal "retried"
     _(result.unhandled_error).must_be_kind_of RuntimeError
     row = @store.find(job.provider_job_id)
+
     %w[id active_job_id payload queue_name priority labels scheduled_at cron_key cron_at batch_id batch_callback_id].each do |key|
       _(row[key]).must_equal original[key] unless original[key].nil?
       _(row[key]).must_be_nil if original[key].nil?
     end
+
     _(row.fetch("state")).must_equal "ready"
     _(row.fetch("finished_at")).must_be_nil
     _(row.fetch("scheduled_at")).must_be :<=, Time.now
@@ -185,6 +191,7 @@ describe "execution recovery" do
     _(@store.find(job.provider_job_id).fetch("state")).must_equal "ready"
     _(batch.reload.finished?).must_equal false
     _(batch.discarded?).must_equal false
+
     database.with_connection do |connection|
       _(connection.exec("SELECT count(*) FROM decent_job_batch_events").getvalue(0, 0)).must_equal "0"
     end
@@ -194,9 +201,11 @@ describe "execution recovery" do
     DecentJob.configuration.retry_on_unhandled_error = true
     DecentJob.configuration.preserve_job_records = ->(*) { flunk "unfinished job reached preservation predicate" }
     job = RecoveryErrorJob.new
+
     batch = DecentJob::CronEntry.with_context(database: database, key: "recovery-cron", at: Time.now) do
       DecentJob::Batch.enqueue([job], database: database)
     end
+
     original = @store.find(job.provider_job_id)
     _(original.fetch("cron_key")).must_equal "recovery-cron"
     _(original.fetch("batch_id")).must_equal batch.id
@@ -234,11 +243,14 @@ describe "execution recovery" do
     _(@threads.last.value.state).must_equal "retried"
     _(@store.find(first.provider_job_id).fetch("state")).must_equal "ready"
     _(@store.find(second.provider_job_id).fetch("scheduled_at")).must_be :<=, Time.now
+
     database.with_connection do |connection|
       _(connection.exec("SELECT count(*) FROM decent_job_concurrency_claims WHERE state = 'granted'").getvalue(0, 0)).must_equal "0"
     end
+
     RecoveryBlockingErrorJob.release << true
     _(@performer.perform_one(job_id: second.provider_job_id).state).must_equal "retried"
+
     database.with_connection do |connection|
       _(connection.exec("SELECT count(*) FROM decent_job_concurrency_claims").getvalue(0, 0)).must_equal "0"
     end
@@ -270,6 +282,7 @@ describe "execution recovery" do
     DecentJob.configuration.preserve_job_records = false
     job = RecoveryBlockingErrorJob.new
     batch = DecentJob::Batch.enqueue([job], database: database)
+
     database.with_connection do |connection|
       connection.exec(<<~SQL)
         CREATE FUNCTION reject_retry_finish() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -279,6 +292,7 @@ describe "execution recovery" do
           FOR EACH ROW WHEN (NEW.finished_at IS NOT NULL) EXECUTE FUNCTION reject_retry_finish();
       SQL
     end
+
     RecoveryBlockingErrorJob.release << true
     _ { @performer.perform_one }.must_raise PG::RaiseException
     row = @store.find(job.provider_job_id)
@@ -287,6 +301,7 @@ describe "execution recovery" do
     _(@store.executions(job.provider_job_id).first.fetch("finished_at")).must_be_nil
     _(@store.executions(job.provider_job_id).first.fetch("duration")).must_be_nil
     _(batch.reload.finished?).must_equal false
+
     database.with_connection do |connection|
       _(connection.exec("SELECT count(*) FROM decent_job_concurrency_claims WHERE state = 'granted'").getvalue(0, 0)).must_equal "1"
       _(connection.exec("SELECT count(*) FROM decent_job_batch_updates").getvalue(0, 0)).must_equal "0"

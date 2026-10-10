@@ -101,6 +101,7 @@ describe "process runtime logging" do
   it "logs watchdog start and callback exceptions while preserving service shutdown" do
     errors = Queue.new
     service = DecentJob::SystemdService.new(on_thread_error: ->(error) { errors << error })
+
     DecentJob::SdNotify.stub(:ready, nil) do
       DecentJob::SdNotify.stub(:stopping, nil) do
         DecentJob::SdNotify.stub(:watchdog_interval, 0.02) do
@@ -112,6 +113,7 @@ describe "process runtime logging" do
         end
       end
     end
+
     _(@output.string).must_include "Pinging systemd watchdog every"
     _(@output.string).must_include "Error pinging systemd: IOError: watchdog unavailable"
   ensure

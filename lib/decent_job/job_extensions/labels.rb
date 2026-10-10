@@ -32,9 +32,11 @@ module DecentJob
       # defaults on first access, after arguments are available.
       def decent_job_labels
         deserialize_arguments_if_needed
+
         @decent_job_labels ||= normalize_decent_job_labels(Array(self.class.decent_job_labels).map do |label|
           label.respond_to?(:call) ? instance_exec(&label) : label
         end)
+
         @decent_job_labels.replace(normalize_decent_job_labels(@decent_job_labels + Array(decent_job_applied_labels)))
       end
 

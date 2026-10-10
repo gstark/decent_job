@@ -33,11 +33,13 @@ describe "daemon and idle CLI lifecycle" do
 
   after do
     children = Dir.glob(File.join(@directory, "child-*")).map { |path| File.basename(path).delete_prefix("child-").to_i }
+
     (@daemon_pids + children).uniq.each do |pid|
       Process.kill("KILL", pid)
     rescue Errno::ESRCH
       nil
     end
+
     FileUtils.remove_entry(@directory)
   end
 
@@ -59,6 +61,7 @@ describe "daemon and idle CLI lifecycle" do
 
   def launch(*arguments)
     command = [RbConfig.ruby, "-Ilib", "exe/decent_job", "start", "--require", File.expand_path("support/daemon_idle_cli_app.rb", __dir__), "--shutdown-timeout", "2", *arguments]
+
     Open3.popen3(@environment, *command, pgroup: true) do |input, output, error, process|
       input.close
       yield process, output, error
@@ -68,16 +71,19 @@ describe "daemon and idle CLI lifecycle" do
       rescue Errno::ESRCH
         nil
       end
+
       process.join
     end
   end
 
   def daemon_pid
     pid = nil
+
     await do
       pid = Integer(File.read(@pidfile), exception: false) if File.exist?(@pidfile)
       pid && pid > 1 && pid != Process.pid
     end
+
     @daemon_pids << pid
     pid
   end
@@ -96,6 +102,7 @@ describe "daemon and idle CLI lifecycle" do
     future_id = DecentJob::Store.new(database).enqueue_all([future]).first
     @environment["DECENT_JOB_IDLE_TIMEOUT"] = "10"
     @environment["DECENT_JOB_IDLE_SPEC_CONFIG_TIMEOUT"] = "5"
+
     launch("--idle-timeout", "0.2") do |process, output, error|
       _(Timeout.timeout(4) { process.value.exitstatus }).must_equal 0
       _(output.read).must_include "DecentJob stopped"
@@ -113,6 +120,7 @@ describe "daemon and idle CLI lifecycle" do
     release = job_file("release")
     finished = job_file("finished")
     DecentJob::Store.new(database).enqueue_all([DaemonIdleProcessJob.new(started, release, finished)])
+
     launch("--idle-timeout", "0.2") do |process, _output, error|
       await { File.exist?(started) }
       sleep 0.4
@@ -134,6 +142,7 @@ describe "daemon and idle CLI lifecycle" do
     started = job_file("started")
     release = job_file("release")
     DecentJob::Store.new(database).enqueue_all([DaemonIdleProcessJob.new(started, release)])
+
     launch("--daemonize", "--idle-timeout", "0.2") do |process, _output, error|
       _(Timeout.timeout(4) { process.value.exitstatus }).must_equal 0
       _(error.read).must_equal ""
@@ -157,10 +166,12 @@ describe "daemon and idle CLI lifecycle" do
       _(error.read).must_equal ""
       pid = daemon_pid
       await_connected
+
       launch("--daemonize") do |duplicate, _other_output, duplicate_error|
         _(Timeout.timeout(4) { duplicate.value.exitstatus }).must_equal 1
         _(duplicate_error.read).must_match(/already|running|locked/i)
       end
+
       _(File.read(@pidfile).to_i).must_equal pid
       _(response("/status/connected").code).must_equal "200"
       Process.kill("TERM", pid)
@@ -173,6 +184,7 @@ describe "daemon and idle CLI lifecycle" do
     File.write(@pidfile, "not a pid")
     started = job_file("started")
     DecentJob::Store.new(database).enqueue_all([DaemonIdleProcessJob.new(started, job_file("never"))])
+
     launch("--daemonize", "--shutdown-timeout", "0.1") do |process, _output, error|
       _(Timeout.timeout(4) { process.value.exitstatus }).must_equal 0
       _(error.read).must_equal ""
@@ -216,12 +228,14 @@ describe "daemon and idle CLI lifecycle" do
       child = Dir.glob(job_file("child-*")).first.then { |path| File.basename(path).delete_prefix("child-").to_i }
       Process.kill("STOP", child)
       Process.kill("KILL", old_pid)
+
       await do
         Process.kill(0, old_pid)
         false
       rescue Errno::ESRCH
         true
       end
+
       launch("--daemonize", "--subprocesses", "1") do |replacement, _replacement_output, replacement_error|
         _(Timeout.timeout(4) { replacement.value.exitstatus }).must_equal 0
         _(replacement_error.read).must_equal ""
@@ -240,6 +254,7 @@ describe "daemon and idle CLI lifecycle" do
 
   it "removes the daemon PID file when worker startup fails" do
     occupied = TCPServer.new("0.0.0.0", @port)
+
     launch("--daemonize") do |process, _output, _error|
       _(Timeout.timeout(4) { process.value.exitstatus }).must_equal 0
       # Native daemonization returns in the launcher before detached startup.

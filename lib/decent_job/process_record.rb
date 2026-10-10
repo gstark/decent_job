@@ -42,6 +42,7 @@ module DecentJob
       database = resolve_database(database)
       deleted = 0
       cursor = nil
+
       until stopping&.call
         rows = database.with_connection do |connection|
           connection.exec_params(<<~SQL, [cursor, in_batches_of]).to_a
@@ -49,15 +50,19 @@ module DecentJob
               AND ($1::uuid IS NULL OR id > $1::uuid) ORDER BY id LIMIT $2
           SQL
         end
+
         break if rows.empty?
+
         rows.each do |row|
           return deleted if stopping&.call
           record = new(row)
           deleted += 1 if record.cleanup(database, in_batches_of: in_batches_of, stopping: stopping)
         end
+
         cursor = rows.last.fetch("id")
         break if rows.size < in_batches_of
       end
+
       deleted
     end
 
@@ -102,6 +107,7 @@ module DecentJob
     def cleanup(database, in_batches_of: 1000, stopping: nil)
       claims = ConcurrencyClaims.new(database)
       cursor = nil
+
       until stopping&.call
         jobs = database.with_connection do |connection|
           connection.exec_params(<<~SQL, [id, cursor, in_batches_of]).column_values(0)
@@ -109,14 +115,18 @@ module DecentJob
               AND ($2::uuid IS NULL OR id > $2::uuid) ORDER BY id LIMIT $3
           SQL
         end
+
         break if jobs.empty?
+
         jobs.each do |job_id|
           return false if stopping&.call
           release_job(database, claims, job_id)
         end
+
         cursor = jobs.last
         break if jobs.size < in_batches_of
       end
+
       return false if stopping&.call
 
       without_waiting(database) do |connection|
@@ -153,6 +163,7 @@ module DecentJob
         previous = timeout.fetch("previous")
         milliseconds = timeout.fetch("milliseconds").to_i
         connection.exec("SET LOCAL lock_timeout = '100ms'") if milliseconds.zero? || milliseconds > 100
+
         begin
           yield connection
         ensure

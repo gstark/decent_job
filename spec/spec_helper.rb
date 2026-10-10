@@ -27,10 +27,12 @@ module DatabaseSpec
 
   def after_teardown
     @database&.close
+
     if @admin
       @admin.exec("DROP SCHEMA #{@admin.quote_ident(@schema_name)} CASCADE")
       @admin.finish
     end
+
     super
   end
 

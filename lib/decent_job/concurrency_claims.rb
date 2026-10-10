@@ -73,6 +73,7 @@ module DecentJob
         # Lock before filtering so an in-flight promotion cannot be missed.
         rows = connection.exec_params("SELECT * FROM decent_job_concurrency_claims WHERE job_id = $1 FOR UPDATE", [context.fetch(:id)])
         state = connection.exec_params("SELECT state FROM decent_jobs WHERE id = $1", [context.fetch(:id)]).getvalue(0, 0)
+
         if %w[succeeded discarded].include?(state)
           # The finisher has verified execution ownership. Completed jobs can
           # also retain waiting claims from an earlier attempt's rule set.
@@ -81,6 +82,7 @@ module DecentJob
           schedule(connection, context.fetch(:id))
           connection.exec_params("UPDATE decent_job_concurrency_claims SET state = 'promoted', updated_at = clock_timestamp() WHERE job_id = $1 AND execution_id = $2 AND state = 'promotion_pending'", [context.fetch(:id), context.fetch(:execution_id)])
         end
+
         # Terminal cleanup must follow release and its state read, and commit
         # atomically with finishing the attempt and promoting its waiters.
         after_release.call(connection)
@@ -98,6 +100,7 @@ module DecentJob
             OR (decent_job_concurrency_claims.state IN ('granted', 'promotion_pending')
               AND NOT (#{EXECUTION_LOCKED_SQL}))
         SQL
+
         scopes.sort.each do |scope|
           @database.transaction do
             lock(connection, scope)
@@ -115,10 +118,12 @@ module DecentJob
                 AND decent_jobs.state = 'ready' AND NOT (#{EXECUTION_LOCKED_SQL})
               FOR UPDATE OF decent_job_concurrency_claims
             SQL
+
             pending.each do |row|
               schedule(connection, row.fetch("job_id"))
               connection.exec_params("UPDATE decent_job_concurrency_claims SET state = 'promoted', updated_at = clock_timestamp() WHERE scope = $1 AND job_id = $2", [scope, row.fetch("job_id")])
             end
+
             connection.exec_params(<<~SQL, [scope])
               DELETE FROM decent_job_concurrency_claims USING decent_jobs
               WHERE job_id = decent_jobs.id AND scope = $1 AND decent_jobs.state IN ('succeeded', 'discarded')
@@ -151,13 +156,16 @@ module DecentJob
         id = row.fetch("job_id")
         job = connection.exec_params("SELECT state, #{EXECUTION_LOCKED_SQL} AS locked FROM decent_jobs WHERE id = $1 FOR UPDATE", [id]).first
         state = job&.fetch("state")
+
         if !state || %w[succeeded discarded].include?(state)
           connection.exec_params("DELETE FROM decent_job_concurrency_claims WHERE scope = $1 AND job_id = $2", [scope, id])
           next
         end
+
         promoted = state == "ready" && job.fetch("locked") != "t"
         schedule(connection, id) if promoted
         connection.exec_params("UPDATE decent_job_concurrency_claims SET state = $3, updated_at = clock_timestamp() WHERE scope = $1 AND job_id = $2", [scope, id, promoted ? "promoted" : "promotion_pending"])
+
         return
       end
     end

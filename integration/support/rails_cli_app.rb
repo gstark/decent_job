@@ -34,6 +34,7 @@ class RailsCliHostApplication < Rails::Application
   config.decent_job.execution_mode = :async_all
   config.decent_job.max_threads = 2
   config.decent_job.poll_interval = 0.02
+
   config.after_initialize do
     File.write(ENV.fetch("HOST_BOOT_RESULT"), JSON.generate(DecentJob.started?))
   end

@@ -14,6 +14,7 @@ end
 
 class SimultaneousLimitedJob < LimitedBlockingJob
   class_attribute :entered, :proceed
+
   before_perform(prepend: true) do
     self.class.entered << true
     self.class.proceed.pop
@@ -22,6 +23,7 @@ end
 
 class PendingPromotionJob < LimitedRecordingJob
   class_attribute :retry_entered, :retry_release
+
   before_enqueue do
     if executions.positive?
       self.class.retry_entered << true
@@ -36,12 +38,14 @@ describe "perform concurrency controls" do
   before do
     DecentJob::Schema.new(database).migrate
     @adapter = DecentJob::Adapter.new(database: database)
+
     [LimitedBlockingJob, LimitedRecordingJob, SimultaneousLimitedJob, PendingPromotionJob].each do |job|
       job.queue_adapter = @adapter
       job.decent_job_concurrency_config = {}
       job.decent_job_concurrency_rules = []
       job.decent_job_labels = []
     end
+
     LimitedBlockingJob.started = Queue.new
     LimitedBlockingJob.release = Queue.new
     LimitedRecordingJob.events = Queue.new
@@ -96,6 +100,7 @@ describe "perform concurrency controls" do
     [LimitedBlockingJob, LimitedRecordingJob].each do |job|
       job.decent_job_concurrency_rule(label: "account", apply_label: true, perform_limit: 1)
     end
+
     first = LimitedBlockingJob.perform_later
     second = LimitedRecordingJob.perform_later("next")
     start_blocking(first)
@@ -129,10 +134,12 @@ describe "perform concurrency controls" do
     rejected = @performer.perform_one(job_id: second.provider_job_id)
     _(rejected.state).must_equal "retried"
     _(rejected.error).must_be_kind_of DecentJob::ActiveJobExtensions::Concurrency::ThrottleExceededError
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_job_executions SET started_at = clock_timestamp() - interval '61 seconds' WHERE job_id = $1", [first.provider_job_id])
       connection.exec_params("UPDATE decent_jobs SET scheduled_at = clock_timestamp() WHERE id = $1", [second.provider_job_id])
     end
+
     _(@performer.perform_one(job_id: second.provider_job_id).state).must_equal "succeeded"
     _(LimitedRecordingJob.events.size).must_equal 2
   end
@@ -141,9 +148,11 @@ describe "perform concurrency controls" do
     SimultaneousLimitedJob.decent_job_control_concurrency_with(perform_limit: 1)
     jobs = 2.times.map { SimultaneousLimitedJob.perform_later }
     results = Queue.new
+
     jobs.each do |job|
       @threads << Thread.new { results << @performer.perform_one(job_id: job.provider_job_id) }
     end
+
     2.times { Timeout.timeout(5) { SimultaneousLimitedJob.entered.pop } }
     2.times { SimultaneousLimitedJob.proceed << true }
     _(Timeout.timeout(5) { results.pop }.state).must_equal "retried"
@@ -168,9 +177,11 @@ describe "perform concurrency controls" do
     LimitedRecordingJob.decent_job_control_concurrency_with(perform_throttle: [1, 60])
     job = LimitedRecordingJob.perform_later("first")
     _(@performer.perform_one.state).must_equal "succeeded"
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET state = 'ready', finished_at = NULL WHERE id = $1", [job.provider_job_id])
     end
+
     _(@performer.perform_one.state).must_equal "succeeded"
     _(LimitedRecordingJob.events.size).must_equal 2
   end
@@ -191,6 +202,7 @@ describe "perform concurrency controls" do
     [LimitedBlockingJob, PendingPromotionJob].each do |job|
       job.decent_job_concurrency_rule(label: "shared", apply_label: true, perform_limit: 1)
     end
+
     first = LimitedBlockingJob.perform_later
     second = PendingPromotionJob.perform_later("waiting")
     start_blocking(first)
@@ -209,9 +221,11 @@ describe "perform concurrency controls" do
     LimitedRecordingJob.decent_job_control_concurrency_with(perform_limit: 0)
     job = LimitedRecordingJob.perform_later("waiting")
     _(@performer.perform_one.state).must_equal "retried"
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_job_concurrency_claims SET state = 'promotion_pending' WHERE job_id = $1", [job.provider_job_id])
     end
+
     _(@performer.perform_one(job_id: SecureRandom.uuid)).must_be_nil
     _(claims(job).first.fetch("state")).must_equal "promoted"
     _(@store.find(job.provider_job_id).fetch("scheduled_at")).must_be :<=, Time.now
@@ -221,11 +235,13 @@ describe "perform concurrency controls" do
     [LimitedBlockingJob, LimitedRecordingJob].each do |job|
       job.decent_job_concurrency_rule(label: "shared", apply_label: true, perform_limit: 2)
     end
+
     2.times { start_blocking(LimitedBlockingJob.perform_later) }
     waiters = 2.times.map { |index| LimitedRecordingJob.perform_later(index) }
     waiters.each { |job| _(@performer.perform_one(job_id: job.provider_job_id).state).must_equal "retried" }
     2.times { LimitedBlockingJob.release << true }
     @threads.each(&:value)
+
     waiters.each do |job|
       _(claims(job).first.fetch("state")).must_equal "promoted"
       _(@store.find(job.provider_job_id).fetch("scheduled_at")).must_be :<=, Time.now
@@ -237,9 +253,11 @@ describe "perform concurrency controls" do
     job = LimitedBlockingJob.perform_later
     start_blocking(job)
     registry = DecentJob::ConcurrencyClaims.new(database)
+
     registry.synchronize(job.provider_job_id) do |connection|
       registry.release(connection, id: job.provider_job_id, execution_id: SecureRandom.uuid)
     end
+
     _(claims(job).first.fetch("state")).must_equal "granted"
   end
 
@@ -247,18 +265,22 @@ describe "perform concurrency controls" do
     [LimitedBlockingJob, LimitedRecordingJob].each do |job|
       job.decent_job_concurrency_rule(label: "shared", apply_label: true, perform_limit: 1)
     end
+
     first = LimitedBlockingJob.perform_later
     waiter = LimitedRecordingJob.perform_later("waiting")
     start_blocking(first)
     _(@performer.perform_one(job_id: waiter.provider_job_id).state).must_equal "retried"
+
     created_at = database.with_connection do |connection|
       connection.exec_params("SELECT created_at FROM decent_job_concurrency_claims WHERE job_id = $1", [waiter.provider_job_id]).getvalue(0, 0)
     end
+
     LimitedBlockingJob.release << true
     @threads.first.value
     start_blocking(LimitedBlockingJob.perform_later)
     _(@performer.perform_one(job_id: waiter.provider_job_id).state).must_equal "retried"
     _(claims(waiter).first.fetch("state")).must_equal "waiting"
+
     database.with_connection do |connection|
       _(connection.exec_params("SELECT created_at FROM decent_job_concurrency_claims WHERE job_id = $1", [waiter.provider_job_id]).getvalue(0, 0)).must_equal created_at
     end
@@ -270,9 +292,11 @@ describe "perform concurrency controls" do
     _(@performer.perform_one.state).must_equal "retried"
     LimitedRecordingJob.decent_job_concurrency_rules = []
     LimitedRecordingJob.decent_job_concurrency_rule(key: "new", perform_limit: 1)
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_jobs SET scheduled_at = clock_timestamp() WHERE id = $1", [job.provider_job_id])
     end
+
     _(@performer.perform_one.state).must_equal "succeeded"
     _(claims(job)).must_be_empty
   end

@@ -21,6 +21,7 @@ module DecentJob
           ON CONFLICT (cron_key) DO UPDATE SET enabled = EXCLUDED.enabled
         SQL
       end
+
       enabled
     end
 
@@ -34,12 +35,14 @@ module DecentJob
       return {} if keys.empty?
 
       params = [PG::TextEncoder::Array.new.encode(keys.map(&:to_s))]
+
       cutoff = if before
         params << before.getutc.iso8601(6)
         "AND cron_at <= $2"
       else
         ""
       end
+
       @database.with_connection do |connection|
         connection.exec_params(<<~SQL, params).to_h { |row| [row.fetch("cron_key"), @store.decode(row)] }
           SELECT latest.* FROM unnest($1::text[]) AS keys(cron_key)

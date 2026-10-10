@@ -24,6 +24,7 @@ describe "lifecycle observation boundaries" do
     it "flushes nested receipts after all locks release and restores #{isolation} scopes on throw" do
       ActiveSupport::IsolatedExecutionState.isolation_level = isolation
       mutex = Mutex.new
+
       catch(:done) do
         DecentJob::LifecycleEvents.defer do
           mutex.synchronize do
@@ -34,6 +35,7 @@ describe "lifecycle observation boundaries" do
           end
         end
       end
+
       _(@events).must_equal [:first, :second]
       _(DecentJob::ExecutionState[:lifecycle_events]).must_be_nil
     end
@@ -41,16 +43,19 @@ describe "lifecycle observation boundaries" do
     it "does not inherit pending receipts into a shared #{isolation} context" do
       ActiveSupport::IsolatedExecutionState.isolation_level = isolation
       source = ActiveSupport::IsolatedExecutionState.context
+
       child = lambda do
         ActiveSupport::IsolatedExecutionState.share_with(source) do
           DecentJob::LifecycleEvents.defer { record(:child) }
         end
       end
+
       DecentJob::LifecycleEvents.defer do
         record(:parent)
         (isolation == :thread) ? Thread.new(&child).value : Fiber.new(&child).resume
         _(@events).must_equal [:child]
       end
+
       _(@events).must_equal [:child, :parent]
     end
   end
@@ -58,15 +63,18 @@ describe "lifecycle observation boundaries" do
   it "restores scope and observation guards when a delivery thread is killed" do
     entered = Queue.new
     restored = Queue.new
+
     blocker = ActiveSupport::Notifications.subscribe("test_lifecycle.decent_job") do
       entered << true
       Queue.new.pop
     end
+
     thread = Thread.new do
       DecentJob::LifecycleEvents.defer { record(:killed) }
     ensure
       restored << [DecentJob::ExecutionState[:lifecycle_events], DecentJob::ExecutionState[:lifecycle_observers]]
     end
+
     Timeout.timeout(2) { entered.pop }
     thread.kill.join
     _(restored.pop).must_equal [nil, nil]
@@ -80,10 +88,12 @@ describe "lifecycle observation boundaries" do
 
   it "detaches receipt strings and arrays from later observations" do
     original = {label: +"original", nested: [+"queue"]}
+
     mutator = ActiveSupport::Notifications.subscribe("test_lifecycle.decent_job") do |event|
       event.payload[:label].replace("changed")
       event.payload[:nested].first.replace("changed")
     end
+
     DecentJob::LifecycleEvents.record(@resource, "test_lifecycle", original)
     _(original).must_equal({label: "original", nested: ["queue"]})
   ensure

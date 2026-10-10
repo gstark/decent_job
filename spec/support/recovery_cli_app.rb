@@ -6,6 +6,7 @@ require "json"
 module RecoveryProcessBody
   def perform(started, completed)
     File.write(started, provider_job_id)
+
     if ENV["DECENT_JOB_RECOVERY_SPEC_BLOCK"]
       sleep 60
     else
@@ -40,9 +41,11 @@ end
 
 if ENV["DECENT_JOB_RECOVERY_SPEC_CONNECTION"]
   ActiveJob::Base.logger = Logger.new(File::NULL)
+
   [RecoveryProcessJob, RecoveryProcessRetryJob, RecoveryProcessDiscardJob, RecoveryProcessPlainJob, RecoveryProcessErrorJob].each do |klass|
     klass.queue_adapter = :decent_job
   end
+
   DecentJob.configure do |config|
     config.database_url = JSON.parse(ENV.fetch("DECENT_JOB_RECOVERY_SPEC_CONNECTION"))
     config.max_threads = 1
@@ -50,6 +53,7 @@ if ENV["DECENT_JOB_RECOVERY_SPEC_CONNECTION"]
     config.enable_listen_notify = false
     config.cleanup_interval_jobs = false
     config.cleanup_interval_seconds = false
+
     config.on_thread_error = lambda do |error|
       File.open(ENV.fetch("DECENT_JOB_RECOVERY_SPEC_ERRORS"), "a") do |file|
         file.puts JSON.generate(class: error.class.name, message: error.message)

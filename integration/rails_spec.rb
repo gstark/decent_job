@@ -35,6 +35,7 @@ describe "Rails 8.1 host integration" do
                    "DECENT_JOB_ADVISORY_LOCK_HEARTBEAT" => (scenario == "heartbeat_environment") ? "off" : nil,
                    "DECENT_JOB_CRON" => scenario.start_with?("cron_sources") ? JSON.generate(from_environment: {cron: "@daily", class: "RailsHostJob"}) : nil,
                    "DECENT_JOB_EXECUTION_MODE" => nil, "DECENT_JOB_ENABLE_CRON" => "false"}
+
     Open3.popen3(environment, RbConfig.ruby, "-Ilib", "integration/support/rails_host.rb", pgroup: true) do |input, output, error, process|
       input.close
       stdout = Thread.new { output.read }
@@ -50,6 +51,7 @@ describe "Rails 8.1 host integration" do
         Process.kill("KILL", -process.pid)
         process.join
       end
+
       stdout&.join
       stderr&.join
     end
@@ -231,13 +233,16 @@ describe "Rails 8.1 host integration" do
                    "HOST_RESULT" => result_path, "HOST_BOOT_RESULT" => boot_path, "RAILS_ENV" => "test"}
     command = [RbConfig.ruby, "-Ilib", "exe/decent_job", "start", "--require", "integration/support/rails_cli_app.rb",
       "--max-threads", "1", "--shutdown-timeout", "3"]
+
     Open3.popen3(environment, *command, pgroup: true) do |input, output, error, process|
       input.close
       stdout = Thread.new { output.read }
       stderr = Thread.new { error.read }
+
       Timeout.timeout(12) do
         sleep 0.01 until File.exist?(result_path) || !process.alive?
       end
+
       _(File.exist?(result_path)).must_equal true, "CLI stopped early: #{stderr.value unless process.alive?}"
       result = JSON.parse(File.read(result_path))
       _(JSON.parse(File.read(boot_path))).must_equal false
@@ -252,6 +257,7 @@ describe "Rails 8.1 host integration" do
         Process.kill("KILL", -process.pid)
         process.join
       end
+
       stdout&.join
       stderr&.join
     end

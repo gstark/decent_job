@@ -30,11 +30,13 @@ module DecentJob
       buffer = Buffer.new
       jobs.flatten.each { |job| buffer.add(job, callbacks_run: Integrations.job?(job) && job.successfully_enqueued?) }
       capture_block(buffer, &block) if block
+
       if parent
         parent.append(buffer)
       else
         with_buffer(nil) { buffer.enqueue }
       end
+
       buffer.jobs
     end
 
@@ -69,6 +71,7 @@ module DecentJob
 
           Entry.new(job: job, adapter: queue_adapter || job.queue_adapter, callbacks_run: callbacks_run)
         end
+
         @entries.concat(entries)
         @jobs.concat(entries.map(&:job))
         entries.each { |entry| @on_capture&.call(entry.job) }
@@ -94,8 +97,10 @@ module DecentJob
         pending = @entries.reverse
         callbacks_prepared = @entries.select(&:callbacks_run).to_h { |entry| [entry.job.object_id, true] }
         added = {}
+
         while (entry = pending.pop)
           identity = entry.job.object_id
+
           if !entry.callbacks_run && !entry.job.provider_job_id && entry.job.respond_to?(:decent_job_resolved_concurrency_rules)
             next if callbacks_prepared[identity]
             callbacks_prepared[identity] = true
@@ -110,6 +115,7 @@ module DecentJob
             prepared.add(entry.job, queue_adapter: entry.adapter, callbacks_run: entry.callbacks_run)
           end
         end
+
         @entries = prepared.entries
         @jobs.replace(prepared.jobs)
         self
@@ -117,8 +123,10 @@ module DecentJob
 
       def enqueue
         entries = @entries.uniq { |entry| entry.job.object_id }.reject { |entry| entry.job.provider_job_id }
+
         entries.group_by { |entry| [entry.adapter, entry.callbacks_run] }.each do |(adapter, callbacks_run), group|
           jobs = group.map(&:job)
+
           if adapter.is_a?(Adapter)
             adapter.enqueue_all(jobs, callbacks: !callbacks_run)
           elsif adapter.respond_to?(:enqueue_all)
@@ -127,6 +135,7 @@ module DecentJob
             jobs.each(&:enqueue)
           end
         end
+
         retain_accepted
       end
 

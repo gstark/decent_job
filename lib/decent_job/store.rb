@@ -32,11 +32,14 @@ module DecentJob
 
       ids = nil
       accepted_ids = {}
+
       @database.transaction do |connection|
         attributes ||= jobs.map { |job| enqueue_attributes(job) }
         ids = attributes.map { |row| row.fetch("id") }
+
         attributes.each_slice(500) do |entries|
           params = []
+
           values = entries.map do |row|
             offset = params.size
             params.concat([row.fetch("id"), row.fetch("active_job_id"), row.fetch("queue_name"), row.fetch("job_class"), row.fetch("priority"),
@@ -46,19 +49,23 @@ module DecentJob
               row["batch_id"], row["batch_callback_id"], row["cron_key"], row["cron_at"]&.iso8601(6)])
             "(#{(1..13).map { |index| "$#{offset + index}" }.join(", ")})"
           end
+
           result = connection.exec_params(<<~SQL, params)
             INSERT INTO decent_jobs (id, active_job_id, queue_name, job_class, priority, payload, scheduled_at, labels, concurrency_keys, batch_id, batch_callback_id, cron_key, cron_at)
             VALUES #{values.join(", ")}
             ON CONFLICT #{"(cron_key, cron_at) WHERE cron_key IS NOT NULL AND cron_at IS NOT NULL" unless skip_duplicates} DO NOTHING
             RETURNING #{block_given? ? "*" : "id"}
           SQL
+
           result.each do |row|
             accepted_ids[row.fetch("id")] = true
             yield decode(row) if block_given?
           end
         end
+
         Notifier.notify_jobs(connection, jobs.zip(ids).filter_map { |job, id| job if accepted_ids[id] })
       end
+
       ids.map { |id| id if accepted_ids[id] }
     end
 
@@ -105,11 +112,13 @@ module DecentJob
         raise EnqueueError, "execution ownership lost" unless result.cmd_tuples == 1
         yield decode(result.first) if block_given?
         Notifier.notify_jobs(connection, [job])
+
         unless context[:manual_retry]
           context[:reenqueues] = context.fetch(:reenqueues, 0) + 1
           @database.after_rollback { context[:reenqueues] -= 1 }
         end
       end
+
       job.successfully_enqueued = true
     end
 
@@ -140,6 +149,7 @@ module DecentJob
         else
           value
         end
+
         [key, decoded]
       end
     end

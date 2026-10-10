@@ -12,9 +12,11 @@ module DecentJob
       def notify(state, unset_env = false)
         address = ENV["NOTIFY_SOCKET"]
         return nil unless address
+
         if !address.start_with?("/") && (!address.start_with?("@") || address.bytesize <= 1)
           raise NotifyError, "NOTIFY_SOCKET must be an absolute path or @abstract name"
         end
+
         address = "\0#{address.delete_prefix("@")}" if address.start_with?("@")
         socket = Socket.new(Socket::AF_UNIX, Socket::SOCK_DGRAM, 0)
         socket.sendmsg_nonblock(String(state), 0, Socket.sockaddr_un(address))

@@ -19,6 +19,7 @@ module DecentJob
       claimed = nil
       original_error = nil
       capture = ->(row) { claimed = row }
+
       if strategy == :advisory
         with_advisory(queues: queues, job_id: job_id, stopping: stopping, migrated: migrated, capture: capture) { |row| yield row }
       else
@@ -32,16 +33,19 @@ module DecentJob
 
     def with_advisory(queues:, job_id:, stopping:, migrated:, capture:)
       selection = queues.is_a?(QueueSelection) ? queues : QueueSelection.new(queues)
+
       @database.with_connection do |connection|
         candidates(connection, selection, job_id).each do |candidate|
           return nil if stopping.call
           key = candidate.fetch("lock_key")
+
           # A session lock is reentrant. Skip keys already owned by this
           # checkout so nested performers cannot interrupt an active attempt.
           Thread.handle_interrupt(Object => :on_blocking) do
             locked = false
             ownership_known = false
             original_error = nil
+
             begin
               locked = connection.exec_params(<<~SQL, [key]).getvalue(0, 0) == "t"
                 SELECT CASE WHEN EXISTS (
@@ -56,15 +60,18 @@ module DecentJob
               next unless locked
 
               acquired = false
+
               result = Thread.handle_interrupt(Object => :immediate) do
                 @process_tracker.register(stopping: stopping) do |process_id|
                   row = start(candidate.fetch("id"), process_id, strategy: :advisory, migrated: migrated, capture: capture)
+
                   if row
                     acquired = true
                     yield(row)
                   end
                 end
               end
+
               return result if acquired
             rescue Exception => original_error # standard:disable Lint/RescueException
               raise
@@ -76,6 +83,7 @@ module DecentJob
                   connection.finish
                 elsif locked && connection.status == PG::CONNECTION_OK
                   released = false
+
                   begin
                     connection.exec_params("SELECT pg_advisory_unlock($1::bigint)", [key])
                     released = true
@@ -90,6 +98,7 @@ module DecentJob
           end
         end
       end
+
       nil
     end
 
@@ -97,6 +106,7 @@ module DecentJob
 
     def next_scheduled_at(queues: "*", limit: 100, now_limit: 0)
       selection = queues.is_a?(QueueSelection) ? queues : QueueSelection.new(queues)
+
       filter = if selection.queues.empty?
         "TRUE"
       elsif selection.exclude?
@@ -104,15 +114,18 @@ module DecentJob
       else
         "queue_name = ANY($1::text[])"
       end
+
       unless [limit, now_limit].all? { |value| value.is_a?(Integer) && value >= 0 }
         raise ArgumentError, "discovery limits must be nonnegative integers"
       end
+
       scope = <<~SQL
         SELECT scheduled_at FROM decent_jobs
         WHERE state = 'ready' AND finished_at IS NULL AND NOT (#{ConcurrencyClaims::EXECUTION_LOCKED_SQL})
           AND #{filter} AND $1::text[] IS NOT NULL
           AND #{@enable_pauses ? Pauses::EXCLUDED_SQL : "TRUE"}
       SQL
+
       @database.with_connection do |connection|
         connection.exec_params(<<~SQL, [PG::TextEncoder::Array.new.encode(selection.queues), limit, now_limit]).map { |row| Time.parse(row.fetch("scheduled_at")) }
           (#{scope} AND scheduled_at <= statement_timestamp()
@@ -134,8 +147,10 @@ module DecentJob
 
     def with_row_claim(queues:, job_id:, stopping:, strategy:, capture:)
       selection = queues.is_a?(QueueSelection) ? queues : QueueSelection.new(queues)
+
       @process_tracker.register(stopping: stopping) do |process_id|
         next if stopping.call
+
         if strategy == :hybrid
           @database.with_connection do |connection|
             Thread.handle_interrupt(Object => :on_blocking) do
@@ -143,13 +158,16 @@ module DecentJob
               row = nil
               ownership_known = false
               original_error = nil
+
               begin
                 @database.transaction do
                   candidate = candidates(connection, selection, job_id, row_lock: true).first
+
                   if candidate
                     key = candidate.fetch("lock_key")
                     locked = connection.exec_params("SELECT pg_try_advisory_lock($1::bigint)", [key]).getvalue(0, 0) == "t"
                     ownership_known = true
+
                     if locked
                       row = start(candidate.fetch("id"), process_id, strategy: strategy, migrated: true, capture: capture)
                     else
@@ -157,6 +175,7 @@ module DecentJob
                     end
                   end
                 end
+
                 Thread.handle_interrupt(Object => :immediate) { yield row } if row
               rescue Exception => original_error # standard:disable Lint/RescueException
                 raise
@@ -166,6 +185,7 @@ module DecentJob
                     connection.finish
                   elsif connection.status == PG::CONNECTION_OK
                     released = false
+
                     begin
                       connection.exec_params("SELECT pg_advisory_unlock($1::bigint)", [key])
                       released = true
@@ -181,10 +201,12 @@ module DecentJob
           end
         else
           row = nil
+
           @database.transaction do |connection|
             candidate = candidates(connection, selection, job_id, row_lock: true).first
             row = start(candidate.fetch("id"), process_id, strategy: strategy, migrated: true, capture: capture) if candidate
           end
+
           yield row if row
         end
       end
@@ -198,8 +220,10 @@ module DecentJob
             WHERE id = $1 AND execution_id = $2 AND locked_by_id = $3
           SQL
         end
+
         released = false
         delegated = false
+
         begin
           if Thread.current.status == "aborting"
             delegated = true
@@ -228,6 +252,7 @@ module DecentJob
         aborting = Thread.current.status == "aborting"
         released = false
         connection = nil
+
         begin
           Thread.handle_interrupt(Object => (aborting ? :never : :on_blocking)) do
             connection = @database.connect
@@ -238,6 +263,7 @@ module DecentJob
           raise unless original_error || Thread.current.status == "aborting"
         ensure
           connection&.finish unless connection&.finished?
+
           # A live fallback remains cancellable. If it is killed, close its
           # interrupted session before handing cleanup to the aborting path.
           if !released && !aborting && Thread.current.status == "aborting"
@@ -255,6 +281,7 @@ module DecentJob
       else
         "queue_name = ANY($1::text[])"
       end
+
       order = selection.ordered? ? "array_position($1::text[], queue_name), " : ""
       encoded = PG::TextEncoder::Array.new.encode(selection.queues)
       configuration = DecentJob.configuration
@@ -283,6 +310,7 @@ module DecentJob
           AND NOT #{ConcurrencyClaims::PERSISTED_LOCKED_SQL}
           #{(strategy == :advisory) ? "FOR UPDATE" : "FOR NO KEY UPDATE SKIP LOCKED"}
         SQL
+
         if row
           interrupted_at = interrupt_previous(connection, row)
           execution_id = SecureRandom.uuid

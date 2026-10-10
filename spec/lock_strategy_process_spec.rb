@@ -28,9 +28,11 @@ describe "lock strategies across worker processes" do
         Process.kill("KILL", -worker.fetch(:process).pid)
         worker.fetch(:process).join
       end
+
       worker.fetch(:stdout).join
       worker.fetch(:stderr).join
     end
+
     @adapter.shutdown
     DecentJob.reset!
     FileUtils.remove_entry(@directory)
@@ -38,11 +40,13 @@ describe "lock strategies across worker processes" do
 
   def records(type = nil, role: nil)
     return [] unless File.exist?(@log)
+
     rows = File.readlines(@log).filter_map do |line|
       JSON.parse(line)
     rescue JSON::ParserError
       nil
     end
+
     rows.select { |row| (!type || row.fetch("type") == type) && (!role || row.fetch("role") == role) }
   end
 
@@ -53,6 +57,7 @@ describe "lock strategies across worker processes" do
           next if worker.fetch(:process).alive?
           raise "Worker stopped: #{worker.fetch(:stderr).value}\n#{worker.fetch(:stdout).value}"
         end
+
         sleep 0.01
       end
     end
@@ -113,11 +118,13 @@ describe "lock strategies across worker processes" do
       await { records("completed").any? { |row| row["job_id"] == owner_job.provider_job_id } }
       stop_worker(contender)
       stop_worker(owner)
+
       [owner_job, peer].each do |job|
         row = @store.find(job.provider_job_id)
         _(row.values_at("state", "locked_by_id", "locked_at", "lock_type")).must_equal ["succeeded", nil, nil, nil]
         _(@store.executions(job.provider_job_id).map { |attempt| attempt.fetch("state") }).must_equal ["succeeded"]
       end
+
       _(records("error")).must_be_empty
     end
   end
@@ -154,13 +161,16 @@ describe "lock strategies across worker processes" do
     await { records("empty", role: "replacement").any? }
     _(records("started").size).must_equal 1
     _(@store.find(job.provider_job_id).fetch("locked_by_id")).must_equal owner_id
+
     database.with_connection do |connection|
       connection.exec_params("UPDATE decent_job_processes SET updated_at = clock_timestamp() - interval '6 minutes' WHERE id = $1", [owner_id])
     end
+
     await do
       DecentJob::ProcessRecord.cleanup(database: database)
       @store.find(job.provider_job_id).fetch("locked_by_id") != owner_id
     end
+
     await { records("completed", role: "replacement").any? }
     stop_worker(replacement)
     _(records("started").map { |row| row.fetch("role") }).must_equal %w[owner replacement]

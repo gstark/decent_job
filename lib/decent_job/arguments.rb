@@ -123,6 +123,7 @@ module DecentJob
         rescue => error
           raise SerializationError, error.message unless fallback_value
         end
+
         return fallback_value if fallback_value
 
         raise SerializationError, "Unsupported argument type: #{argument.class.name}"
@@ -176,6 +177,7 @@ module DecentJob
 
       def deserialize_hash(hash)
         result = hash.transform_values { |value| deserialize_argument(value) }
+
         if result.delete(INDIFFERENT_KEY)
           defined?(::ActiveSupport::HashWithIndifferentAccess) ? ::ActiveSupport::HashWithIndifferentAccess.new(result) : result
         elsif (symbol_keys = result.delete(SYMBOL_KEYS_KEY))

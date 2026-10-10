@@ -276,6 +276,7 @@ describe "legacy concurrency key resolution" do
     payload = ConcurrencyKeyJob.new("original").serialize
     payload["arguments"] = [{"_aj_serialized" => "RemovedConcurrencyArgumentSerializer"}]
     job = ConcurrencyKeyJob.deserialize(payload)
+
     captured = DecentJob::Current.with(job_id: job.job_id) do
       DecentJob::Bulk.capture { job.enqueue }
     end

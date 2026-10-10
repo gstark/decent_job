@@ -44,9 +44,11 @@ module DecentJob
       def url(path, params = nil)
         target = "#{root}#{path}"
         return target unless params
+
         pairs = params.compact.flat_map do |key, value|
           Array(value).map { |item| [value.is_a?(Array) ? "#{key}[]" : key.to_s, item.to_s] }
         end
+
         pairs.empty? ? target : "#{target}?#{URI.encode_www_form(pairs)}"
       end
 
@@ -71,12 +73,14 @@ module DecentJob
         seconds = (now - value).round
         past = seconds >= 0
         seconds = seconds.abs
+
         text = if seconds < 5 then "now"
         elsif seconds < 60 then "#{seconds}s"
         elsif seconds < 3600 then "#{seconds / 60}m"
         elsif seconds < 86_400 then "#{seconds / 3600}h #{(seconds % 3600) / 60}m"
         else "#{seconds / 86_400}d #{(seconds % 86_400) / 3600}h"
         end
+
         return text if text == "now"
         past ? "#{text} ago" : "in #{text}"
       end
@@ -84,6 +88,7 @@ module DecentJob
       def duration(seconds)
         return "" if seconds.nil?
         seconds = seconds.to_f
+
         if seconds < 0.001 then "<1 ms"
         elsif seconds < 1 then "#{(seconds * 1000).round} ms"
         elsif seconds < 60 then "#{seconds.round(2)} s"

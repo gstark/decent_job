@@ -232,6 +232,7 @@ describe "configuration sources" do
   it "isolates rejected configure edits from the active configuration" do
     DecentJob.configure { |config| config.database_url = {host: +"original"} }
     original = DecentJob.configuration
+
     assert_raises(ArgumentError) do
       DecentJob.configure do |config|
         config.database_url[:host].replace("rejected")
@@ -240,6 +241,7 @@ describe "configuration sources" do
         config.max_threads = 0
       end
     end
+
     assert_same original, DecentJob.configuration
     assert_equal({host: +"original"}, original.database_url)
     assert_empty original.cron
@@ -361,6 +363,7 @@ describe "configuration environment parsing" do
     it "casts #{name} environment booleans without changing the absent default" do
       variable = "DECENT_JOB_#{name.upcase}"
       ENV["DECENT_JOB_CRON"] = '{"task":{"cron":"@hourly","class":"ActiveJob::Base"}}' if name == :enable_cron
+
       {nil => default, "" => false, "0" => false, "f" => false, "F" => false,
        "false" => false, "FALSE" => false, "off" => false, "OFF" => false,
        "true" => true, "1" => true, "yes" => true, "False" => true, " " => true}.each do |value, expected|
@@ -385,6 +388,7 @@ describe "configuration environment parsing" do
     ENV["DECENT_JOB_MAX_THREADS"] = "3"
     assert_equal 3, DecentJob::Configuration.new.max_threads
     ENV.delete("DECENT_JOB_MAX_THREADS")
+
     ["", "3workers", "2.5"].each do |value|
       ENV["RAILS_MAX_THREADS"] = value
       assert_raises(ArgumentError) { DecentJob::Configuration.new }

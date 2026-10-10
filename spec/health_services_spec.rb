@@ -49,11 +49,14 @@ describe "health probes" do
       attr_accessor :closed
       def close = self.closed = true
     }.new(["é"])
+
     environments = []
+
     probe = server(app: ->(env) {
       environments << env
       [201, {"X-Probe" => "yes"}, body]
     })
+
     response = request(probe, "HEAD /status?ready=yes HTTP/1.1\r\nHost: localhost\r\nX-Test: value\r\n\r\n")
     _(response).must_include "Content-Length: 2\r\n"
     _(response.split("\r\n\r\n", 2).last).must_equal ""
@@ -64,11 +67,13 @@ describe "health probes" do
   it "rejects malformed and oversized requests and continues serving after app errors" do
     errors = []
     count = 0
+
     probe = server(on_thread_error: ->(error) { errors << error }, app: ->(_) {
       count += 1
       raise "app failed" if count == 1
       [200, {}, ["fine"]]
     })
+
     _(request(probe, "nonsense\r\n\r\n")).must_include "400 Bad Request"
     _(request(probe, "GET / HTTP/1.1\r\nX: #{"x" * 20_000}\r\n\r\n")).must_include "400 Bad Request"
     _(request(probe)).must_include "500 Internal Server Error"
@@ -106,6 +111,7 @@ describe "health probes" do
       attr_accessor :closed
       def close = self.closed = true
     }.new(["unsafe"])
+
     probe = server(app: ->(_) { [200, {"X-Test" => "yes\r\nInjected: true"}, body] }, on_thread_error: ->(_) {})
     response = request(probe)
     _(response).must_include "500 Internal Server Error"
@@ -143,11 +149,13 @@ describe "systemd notifications" do
 
   def notifications
     messages = []
+
     loop do
       message = @socket.recv_nonblock(4096, exception: false)
       break if message == :wait_readable
       messages << message
     end
+
     messages
   end
 
@@ -170,6 +178,7 @@ describe "systemd notifications" do
     ENV["NOTIFY_SOCKET"] = @path
     @socket.setsockopt(Socket::SOL_SOCKET, Socket::SO_RCVBUF, 1024)
     sent = 0
+
     error = _ {
       Timeout.timeout(2) do
         loop do
@@ -178,6 +187,7 @@ describe "systemd notifications" do
         end
       end
     }.must_raise DecentJob::SdNotify::NotifyError
+
     _(sent).must_be :>, 0
     _(error.message).must_match(/EAGAIN|EWOULDBLOCK|ENOBUFS/)
   end
@@ -186,10 +196,12 @@ describe "systemd notifications" do
     ENV["NOTIFY_SOCKET"] = "@decent-job-test"
     address = nil
     socket = Object.new
+
     socket.define_singleton_method(:sendmsg_nonblock) { |state, _flags, destination|
       address = Socket.unpack_sockaddr_un(destination)
       state.bytesize
     }
+
     socket.define_singleton_method(:close) {}
     Socket.stub(:new, socket) { _(DecentJob::SdNotify.ready).must_equal 7 }
     _(address).must_equal "\0decent-job-test"
@@ -200,6 +212,7 @@ describe "systemd notifications" do
       ENV["WATCHDOG_USEC"] = value
       _(DecentJob::SdNotify.watchdog?).must_equal false
     end
+
     ENV["WATCHDOG_USEC"] = "100000"
     _(DecentJob::SdNotify.watchdog_interval).must_equal 0.1
     _(DecentJob::SdNotify.watchdog?).must_equal true
@@ -225,12 +238,14 @@ describe "systemd notifications" do
     @service = DecentJob::SystemdService.new
     @service.start
     @service.start
+
     _ {
       @service.stop {
         sleep 0.07
         raise "drain failed"
       }
     }.must_raise RuntimeError
+
     @service.stop
     messages = notifications
     _(messages.first(2)).must_equal ["READY=1", "STOPPING=1"]
@@ -251,11 +266,13 @@ describe "systemd notifications" do
     started = ActiveSupport::Notifications.subscribe("systemd_watchdog_start.decent_job") { |event| starts << event.payload }
     failed = ActiveSupport::Notifications.subscribe("systemd_watchdog_error.decent_job") { |event| errors << event.payload.fetch(:error) }
     @service = DecentJob::SystemdService.new(on_thread_error: ->(_) {})
+
     DecentJob::SdNotify.stub(:watchdog, -> { raise DecentJob::SdNotify::NotifyError, "manager unavailable" }) do
       @service.start
       _(Timeout.timeout(2) { errors.pop }).must_be_kind_of DecentJob::SdNotify::NotifyError
       @service.stop
     end
+
     _(starts).must_equal [{interval: 0.02}]
   ensure
     ActiveSupport::Notifications.unsubscribe(started) if started
@@ -266,10 +283,12 @@ describe "systemd notifications" do
     ENV["NOTIFY_SOCKET"] = "/no/such/socket"
     ENV["WATCHDOG_USEC"] = "20000"
     errors = []
+
     @service = DecentJob::SystemdService.new(on_thread_error: ->(error) {
       errors << error
       raise "report failed"
     })
+
     @service.start
     sleep 0.04
     drained = false
@@ -294,12 +313,14 @@ describe "systemd notifications" do
     @service.start
     entered = Queue.new
     release = Queue.new
+
     thread = Thread.new {
       @service.stop {
         entered << true
         release.pop
       }
     }
+
     Timeout.timeout(2) { entered.pop }
     @service.stop
     @service.start
@@ -324,10 +345,12 @@ describe "systemd notifications" do
     ENV["WATCHDOG_USEC"] = "10000"
     senders = Queue.new
     calls = 0
+
     @service = DecentJob::SystemdService.new(on_thread_error: ->(_) {
       @service.stop
       @service.start
     })
+
     DecentJob::SdNotify.stub(:watchdog, lambda {
       calls += 1
       raise DecentJob::SdNotify::NotifyError, "transient" if calls == 1
@@ -337,6 +360,7 @@ describe "systemd notifications" do
       Timeout.timeout(2) { sleep 0.005 until senders.size >= 6 }
       @service.stop
     end
+
     threads = []
     threads << senders.pop until senders.empty?
     _(threads.uniq.size).must_equal 1
@@ -351,12 +375,14 @@ describe "systemd notifications" do
     @service = DecentJob::SystemdService.new
     entered = Queue.new
     release = Queue.new
+
     thread = Thread.new {
       @service.stop {
         entered << true
         release.pop
       }
     }
+
     Timeout.timeout(2) { entered.pop }
     @service.start
     _(@service.notifying?).must_equal false
@@ -384,6 +410,7 @@ describe "systemd notifications" do
     rescue RangeError
       nil
     end
+
     Thread.report_on_exception = previous_reporting
   end
 
@@ -409,10 +436,12 @@ describe "probe configuration and resource limits" do
     _(configuration.probe_handler).must_equal :simple
     configuration.probe_port = nil
     _(configuration.probe_port).must_be_nil
+
     [0, 65_535].each { |port|
       configuration.probe_port = port
       _(configuration.probe_port).must_equal port
     }
+
     [-1, 65_536, "7001", false, 1.5].each { |port| _ { configuration.probe_port = port }.must_raise ArgumentError }
     _ { configuration.probe_app = Object.new }.must_raise ArgumentError
     callable = ->(_) { [200, {}, []] }
@@ -433,17 +462,20 @@ describe "probe configuration and resource limits" do
     ensure
       probe&.stop
     end
+
     _(error).must_include "not supported"
     _(error).must_include "WEBrick is not in the load path" unless defined?(WEBrick)
   end
 
   it "only closes forked socket copies, leaving the parent available" do
     probe = DecentJob::ProbeServer.new(port: 0).start
+
     pid = fork do
       probe.close_socket
       probe.stop
       exit! 0
     end
+
     Process.wait(pid)
     _(probe.running?).must_equal true
     socket = TCPSocket.new("127.0.0.1", probe.port)
@@ -459,6 +491,7 @@ describe "probe configuration and resource limits" do
       attr_accessor :closed
       def close = self.closed = true
     }.new(["x" * 1_048_577])
+
     probe = DecentJob::ProbeServer.new(port: 0, app: ->(_) { [200, {}, body] }, on_thread_error: ->(_) {}).start
     socket = TCPSocket.new("127.0.0.1", probe.port)
     socket.write("GET / HTTP/1.1\r\n\r\n")
@@ -474,11 +507,13 @@ describe "probe configuration and resource limits" do
     listener.setsockopt(Socket::SOL_SOCKET, Socket::SO_SNDBUF, 1024)
     entered = Queue.new
     calls = 0
+
     app = lambda do |_|
       calls += 1
       entered << true
       [200, {}, [(calls == 2) ? "healthy" : "x" * 1_048_576]]
     end
+
     probe = DecentJob::ProbeServer.new(port: 0, response_timeout: 0.1, app: app)
     TCPServer.stub(:new, listener) { probe.start }
     slow = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
@@ -507,11 +542,13 @@ describe "probe configuration and resource limits" do
   it "offers a bounded stop while a custom app is blocked without killing its thread" do
     entered = Queue.new
     release = Queue.new
+
     probe = DecentJob::ProbeServer.new(port: 0, app: ->(_) {
       entered << true
       release.pop
       [200, {}, ["done"]]
     }).start
+
     socket = TCPSocket.new("127.0.0.1", probe.port)
     socket.write("GET / HTTP/1.1\r\n\r\n")
     Timeout.timeout(2) { entered.pop }
