@@ -382,27 +382,29 @@ module DecentJob
       result = nil
       attempted = false
 
-      Bulk.with_buffer(nil) do
-        connection_pool.transaction do
-          self.class.with_context(key: key, at: cron_at, database: connection_pool) do
-            with_default_locale do
-              buffer.capture { result = enqueue_definition }
-              buffer.prepare
-              self.class.validate_jobs(buffer.jobs)
-              # Take the concurrency scope locks of all captured jobs before the
-              # insert. They are transaction locks, held until this transaction ends.
-              ConcurrencyControls.new(connection_pool).lock_scopes(buffer.jobs)
-              attempted = !buffer.jobs.empty?
-              pending = buffer.jobs.reject(&:provider_job_id)
+      connection_pool.with_enqueue_connection do
+        Bulk.with_buffer(nil) do
+          connection_pool.transaction do
+            self.class.with_context(key: key, at: cron_at, database: connection_pool) do
+              with_default_locale do
+                buffer.capture { result = enqueue_definition }
+                buffer.prepare
+                self.class.validate_jobs(buffer.jobs)
+                # Take the concurrency scope locks of all captured jobs before the
+                # insert. They are transaction locks, held until this transaction ends.
+                ConcurrencyControls.new(connection_pool).lock_scopes(buffer.jobs)
+                attempted = !buffer.jobs.empty?
+                pending = buffer.jobs.reject(&:provider_job_id)
 
-              connection_pool.after_rollback do
-                pending.each do |job|
-                  job.provider_job_id = nil
-                  job.successfully_enqueued = false
+                connection_pool.after_rollback do
+                  pending.each do |job|
+                    job.provider_job_id = nil
+                    job.successfully_enqueued = false
+                  end
                 end
-              end
 
-              buffer.enqueue
+                buffer.enqueue
+              end
             end
           end
         end

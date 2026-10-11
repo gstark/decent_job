@@ -65,7 +65,7 @@ module DecentJob
     # Settings with a separate value per source and a resolving getter. A nil
     # assignment clears the explicit value, so the lower sources apply again.
     # poll_interval is the exception: its setter rejects nil.
-    SPECIAL_OPTIONS = %i[execution_mode logger poll_interval dequeue_query_sort queue_select_limit lock_strategy].freeze
+    SPECIAL_OPTIONS = %i[execution_mode logger poll_interval dequeue_query_sort queue_select_limit lock_strategy connection].freeze
 
     # Marks a {GENERIC_OPTIONS} setting as explicit after its setter succeeds.
     #
@@ -275,6 +275,9 @@ module DecentJob
       @cron_graceful_restart_period = Float(ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]) if ENV["DECENT_JOB_CRON_GRACEFUL_RESTART_PERIOD"]
       @cron = Support.present?(ENV["DECENT_JOB_CRON"]) ? JSON.parse(ENV.fetch("DECENT_JOB_CRON"), symbolize_names: true) : {}
       @database_url = ENV["DECENT_JOB_DATABASE_URL"] || ENV["DATABASE_URL"]
+      # DATABASE_URL usually names the Active Record database, so only the
+      # DecentJob variable counts as an explicit database for {#connection}.
+      @environment_database_url = ENV.key?("DECENT_JOB_DATABASE_URL")
       @environment_execution_mode = ENV["DECENT_JOB_EXECUTION_MODE"]&.to_sym
       @queues = ENV.fetch("DECENT_JOB_QUEUES", "*")
       @max_threads = Integer(ENV["DECENT_JOB_MAX_THREADS"] || ENV["RAILS_MAX_THREADS"] || "5")
@@ -398,11 +401,13 @@ module DecentJob
     # @param options [#each] option names and values, with Symbol or String keys
     # @param environment [String] the Rails environment name
     # @param logger [Logger] the Rails logger, used unless options has :logger
+    # @param active_record [Boolean] true when the host loaded the Active
+    #   Record Railtie. It selects the default of {#connection}.
     # @return [Configuration] self
     # @raise [ArgumentError] for an unknown option name or an invalid value
     # @note Mutates self. Callers pass a candidate copy.
     # @api private
-    def apply_rails_config(options, environment:, logger:)
+    def apply_rails_config(options, environment:, logger:, active_record: false)
       # Use the public iterator: host options can be lazy application objects.
       normalized = {}
 
@@ -420,6 +425,8 @@ module DecentJob
       @rails_environment = environment
       @rails_poll_interval = options[:poll_interval]
       @rails_lock_strategy = normalize_lock_strategy(options[:lock_strategy])
+      @rails_connection = normalize_connection(options[:connection])
+      @rails_active_record = active_record
       @rails_dequeue_query_sort = normalize_dequeue_query_sort(options[:dequeue_query_sort])
       @rails_queue_select_limit = normalize_queue_select_limit(options[:queue_select_limit])
       @rails_default_execution_mode = {"development" => :async, "test" => :inline}.fetch(environment, :external)
@@ -472,6 +479,47 @@ module DecentJob
     # @raise [ArgumentError] for an unknown strategy
     def lock_strategy=(value)
       @lock_strategy = normalize_lock_strategy(value)
+    end
+
+    # Returns the connection that enqueues use.
+    #
+    # - :active_record inserts jobs through the Active Record connection of
+    #   the current context, so an enqueue commits or rolls back with the
+    #   application's transaction. The global {Database} pool, which workers
+    #   use, connects with the Active Record settings.
+    # - :own inserts jobs through the global {Database} pool.
+    #
+    # Default: :own when {#database_url} was set explicitly, through
+    # DECENT_JOB_DATABASE_URL, a Rails option, or an assignment. Otherwise
+    # :active_record when the Rails host loaded Active Record, and :own
+    # without it. A DATABASE_URL fallback does not count as explicit. The
+    # value is read when the global pool opens.
+    #
+    # @return [Symbol] :active_record or :own
+    def connection
+      explicit = @connection || @rails_connection
+      return explicit if explicit
+      return :own if explicit_database_url?
+
+      @rails_active_record ? :active_record : :own
+    end
+
+    # @param value [Symbol, String, nil] :active_record, :own, or nil to clear it
+    # @raise [ArgumentError] for any other value
+    def connection=(value)
+      @connection = normalize_connection(value)
+    end
+
+    # @return [Boolean] true when {#database_url} came from
+    #   DECENT_JOB_DATABASE_URL, a Rails option, or an assignment
+    def explicit_database_url?
+      !@database_url.nil? && (@environment_database_url || @explicit_options&.key?(:database_url) || @rails_options&.key?(:database_url) || false)
+    end
+
+    # @return [Boolean] true when the global {Database} pool can open:
+    #   {#database_url} is set, or {#connection} is :active_record
+    def database_configured?
+      !database_url.nil? || connection == :active_record
     end
 
     # Returns the column that orders claim candidates within one priority.
@@ -893,6 +941,15 @@ module DecentJob
       unless %i[advisory skiplocked hybrid].include?(value)
         raise ArgumentError, "lock_strategy must be advisory, skiplocked, or hybrid"
       end
+
+      value
+    end
+
+    def normalize_connection(value)
+      return if value.nil?
+
+      value = value.to_sym if value.is_a?(String)
+      raise ArgumentError, "connection must be active_record or own" unless %i[active_record own].include?(value)
 
       value
     end

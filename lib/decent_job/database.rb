@@ -37,7 +37,14 @@ module DecentJob
   # Connections from {#connect} are not in the pool, so fork preparation and
   # {#close} do not close them.
   #
-  # See docs/runtime-resources.md and docs/pgbouncer.md.
+  # Lending: {#lend} makes a host connection, such as the Active Record
+  # connection, the current context's checkout for one block. Nested pool
+  # calls then run on it, and commit callbacks go to the host transaction.
+  # The pool never counts, closes, or returns a lent connection. Enqueue code
+  # enters lending through {#with_enqueue_connection}.
+  #
+  # See docs/runtime-resources.md, docs/pgbouncer.md, and
+  # docs/rails-integration.md.
   class Database
     @registry_mutex = Mutex.new
     @registry = ObjectSpace::WeakMap.new
@@ -167,6 +174,7 @@ module DecentJob
       @borrowed = {}
       @transaction_callbacks = {}
       @connection_release_callbacks = {}
+      @lenders = {}
       @idle = []
       @size = 0
       @fork_prepared = false
@@ -198,24 +206,30 @@ module DecentJob
 
     # Creates an empty pool. Connections open on demand.
     #
-    # @param url [String] the PostgreSQL connection string for PG.connect
+    # @param url [String, Hash] the PostgreSQL connection input for PG.connect
     # @param pool_size [Integer] the maximum number of pooled connections
     # @param checkout_timeout [Numeric] seconds to wait for a free connection
+    # @param enqueue_connection [#with, #defer, nil] lends a host connection
+    #   for {#with_enqueue_connection} and defers callbacks to its open
+    #   transaction, for example {ActiveRecordConnection}, or nil to enqueue
+    #   through this pool
     # @raise [ArgumentError] when pool_size or checkout_timeout is not positive
     # @raise [ForkInProgress] while {.with_prepared_fork} is running
-    def initialize(url:, pool_size: 5, checkout_timeout: 5)
+    def initialize(url:, pool_size: 5, checkout_timeout: 5, enqueue_connection: nil)
       raise ArgumentError, "pool_size must be positive" unless pool_size.is_a?(Integer) && pool_size.positive?
       raise ArgumentError, "checkout_timeout must be positive" unless checkout_timeout.positive?
 
       @url = url
       @pool_size = pool_size
       @checkout_timeout = checkout_timeout
+      @enqueue_connection = enqueue_connection
       @mutex = Mutex.new
       @available = ConditionVariable.new
       @idle = []
       @borrowed = {}
       @transaction_callbacks = {}
       @connection_release_callbacks = {}
+      @lenders = {}
       @size = 0
       @closed = false
       @pid = @owner_pid = Process.pid
@@ -309,7 +323,7 @@ module DecentJob
 
             if committed
               if frames.empty?
-                Thread.handle_interrupt(Object => :immediate) { callbacks[:commit].each(&:call) }
+                Thread.handle_interrupt(Object => :immediate) { finish_commit(connection, callbacks[:commit], callbacks[:rollback]) }
               else
                 frames.last[:commit].concat(callbacks[:commit])
                 frames.last[:rollback].concat(callbacks[:rollback])
@@ -336,16 +350,24 @@ module DecentJob
     # Runs the block after the outermost {#transaction} of this context
     # commits. Runs it at once when there is no such transaction.
     #
+    # With no open {#transaction} frame, a pool with an enqueue_connection
+    # hands the callback to the open host transaction, for example the
+    # Active Record transaction. Inside {#lend} without a host transaction,
+    # the callback runs when the lend ends.
+    #
     # @yield the callback
     # @return [void]
-    # @note Only transactions opened with {#transaction} count. A raw BEGIN on
-    #   the connection does not defer the callback.
+    # @note Only transactions opened with {#transaction} or a host
+    #   transaction count. A raw BEGIN on the connection does not defer the
+    #   callback.
     def after_commit(&block)
-      frames = @mutex.synchronize { @transaction_callbacks[@borrowed[IsolatedState.context]] }
+      connection, frames = current_frames
 
       if frames && !frames.empty?
         frames.last[:commit] << block
-      else
+      elsif @mutex.synchronize { @lenders[connection] }
+        finish_commit(connection, [block], [])
+      elsif !@enqueue_connection&.defer([block], [])
         block.call
       end
     end
@@ -356,10 +378,93 @@ module DecentJob
     # @yield the callback, run when the innermost open {#transaction} frame or
     #   an enclosing frame rolls back
     # @return [void]
-    # @note Without an open {#transaction} the block is dropped.
+    # @note Without an open {#transaction} the block is dropped, unless a
+    #   host transaction is open. The host rollback then runs it.
     def after_rollback(&block)
-      frames = @mutex.synchronize { @transaction_callbacks[@borrowed[IsolatedState.context]] }
-      frames.last[:rollback] << block if frames && !frames.empty?
+      connection, frames = current_frames
+
+      if frames && !frames.empty?
+        frames.last[:rollback] << block
+      elsif (lender = @mutex.synchronize { @lenders[connection] })
+        lender[:defer].call([], [block])
+      else
+        @enqueue_connection&.defer([], [block])
+      end
+    end
+
+    # Runs enqueue work on the host connection when this pool has an
+    # enqueue_connection, and on this pool otherwise.
+    #
+    # Adapters, batches, and cron entries wrap each enqueue in this call. It
+    # nests: an inner call inside an outer one does nothing more.
+    #
+    # @yield the enqueue work
+    # @return [Object] the block result
+    # @api private
+    def with_enqueue_connection(&block)
+      @enqueue_connection ? @enqueue_connection.with(self, &block) : yield
+    end
+
+    # Makes connection this context's checkout for the duration of the block.
+    #
+    # {ActiveRecordConnection} lends the Active Record connection, so enqueue
+    # SQL runs in the application's transaction. {#transaction} then opens a
+    # savepoint when the host transaction is open. Commit callbacks of an
+    # outermost frame go to defer. When defer returns false, because no host
+    # transaction is open, they run after the block, when the previous
+    # checkout is back.
+    #
+    # The pool never owns the lent connection: it does not count it, close it,
+    # or return it to the idle list.
+    #
+    # @param connection [PG::Connection] the host connection
+    # @param defer [#call] receives (commit_callbacks, rollback_callbacks).
+    #   Returns true when it registered them with an open host transaction.
+    # @yield the work that must use connection
+    # @return [Object] the block result
+    # @note The lend is skipped when this context already has an open
+    #   {#transaction} on a pool connection. The work then joins that
+    #   transaction, so cron and batch locks stay atomic with their inserts.
+    #   A nested lend of the same connection is skipped too.
+    # @api private
+    def lend(connection, defer:)
+      owner = IsolatedState.context
+      previous = nil
+      lender = nil
+
+      Thread.handle_interrupt(Object => :never) do
+        @mutex.synchronize do
+          previous = @borrowed[owner]
+
+          unless previous.equal?(connection) || @transaction_callbacks[previous]
+            lender = @lenders[connection] = {defer: defer, pending: []}
+            @borrowed[owner] = connection
+          end
+        end
+      end
+
+      return yield unless lender
+
+      completed = false
+
+      begin
+        result = yield
+        completed = true
+        result
+      ensure
+        release = Thread.handle_interrupt(Object => :never) do
+          @mutex.synchronize do
+            previous ? @borrowed[owner] = previous : @borrowed.delete(owner)
+            @transaction_callbacks.delete(connection)
+            @lenders.delete(connection)
+            @connection_release_callbacks.delete(connection) || []
+          end
+        end
+
+        # A killed thread must not start inline jobs or wakeups.
+        pending = (Thread.current.status == "aborting") ? [] : lender[:pending]
+        run_all(release + pending, raising: completed)
+      end
     end
 
     # Internal cleanup that must wait until this context releases its outer
@@ -417,6 +522,41 @@ module DecentJob
     end
 
     private
+
+    # @return [Array(PG::Connection, Array<Hash>)] this context's checkout and
+    #   its open {#transaction} frames, each nil when absent
+    def current_frames
+      @mutex.synchronize do
+        connection = @borrowed[IsolatedState.context]
+        [connection, @transaction_callbacks[connection]]
+      end
+    end
+
+    # Runs the commit callbacks of a finished outermost frame. On a lent
+    # connection they go to the host transaction, or wait for the lend to end.
+    def finish_commit(connection, commit, rollback)
+      lender = @mutex.synchronize { @lenders[connection] }
+
+      if lender.nil?
+        commit.each(&:call)
+      elsif !lender[:defer].call(commit, rollback)
+        lender[:pending].concat(commit)
+      end
+    end
+
+    # Runs every callback. The first error is raised after the last callback,
+    # unless raising is false because another error is already propagating.
+    def run_all(callbacks, raising: true)
+      failure = nil
+
+      callbacks.each do |callback|
+        callback.call
+      rescue Exception => error # standard:disable Lint/RescueException
+        failure ||= error
+      end
+
+      raise failure if failure && raising
+    end
 
     # Reserves a slot under the mutex, then connects outside it so a slow
     # connect does not block other checkouts. The ensure frees the slot if the
@@ -528,15 +668,7 @@ module DecentJob
         @connection_release_callbacks.delete(connection) || []
       end
 
-      failure = nil
-
-      callbacks.each do |callback|
-        callback.call
-      rescue Exception => error # standard:disable Lint/RescueException
-        failure ||= error
-      end
-
-      raise failure if failure
+      run_all(callbacks)
     end
   end
 end

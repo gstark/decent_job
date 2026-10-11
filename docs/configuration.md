@@ -21,7 +21,7 @@ Explicit assignments survive initial Rails boot and subsequent changes to host o
 
 Cron definitions replace the lower source's whole hash; entries are not merged. Blank Rails cron values, including `{}`, fall through to the captured environment/default definitions. An explicit Ruby `cron = {}` suppresses all lower sources. Reapplying unchanged Rails options preserves edits made through mutable configuration getters. Changing or removing a host value replaces those edits unless the setting was explicitly assigned. Prefer assigning the complete value when an application override must survive later host changes.
 
-`nil` retains each setter's meaning. It clears explicit `execution_mode`, `logger`, `lock_strategy`, `dequeue_query_sort`, and `queue_select_limit` overrides. It is an explicit value for settings that permit it, such as `idle_timeout` or `database_url`. It does not clear every setting: `poll_interval = nil` is invalid, and `max_threads = nil` fails validation.
+`nil` retains each setter's meaning. It clears explicit `execution_mode`, `logger`, `lock_strategy`, `dequeue_query_sort`, `queue_select_limit`, and `connection` overrides. It is an explicit value for settings that permit it, such as `idle_timeout` or `database_url`. It does not clear every setting: `poll_interval = nil` is invalid, and `max_threads = nil` fails validation.
 
 Configuration copies own their nested hashes, arrays, and strings. A rejected `DecentJob.configure`, Rails, or CLI candidate cannot change those containers on the active configuration. Application objects such as job classes, callables, and loggers retain their identity; changing those objects' own internal state is outside configuration rollback.
 

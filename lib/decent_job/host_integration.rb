@@ -98,7 +98,7 @@ module DecentJob
     #   early pass before autoloaders exist
     # @return [Integer] the new lifecycle revision
     # @raise [ArgumentError] for unknown options, invalid settings, or a
-    #   database_url change after the global database opened
+    #   database_url or connection change after the global database opened
     # @raise [LifecycleInProgress] when another transition is active
     # @raise [ForkInProgress] while the runtime prepares to fork
     # @note Resizes the open global {Database} pool to the new
@@ -108,14 +108,15 @@ module DecentJob
     def configure_rails(application, validate: true)
       with_runtime_transition(:configuring) do
         candidate = runtime_mutex.synchronize { @configuration.dup }
-        candidate.apply_rails_config(application.config.decent_job, environment: Rails.env.to_s, logger: Rails.logger)
+        candidate.apply_rails_config(application.config.decent_job, environment: Rails.env.to_s, logger: Rails.logger,
+          active_record: !defined?(::ActiveRecord::Railtie).nil?)
         # Cron validation can autoload jobs and create adapters. Run application
         # code outside the registry lock and only after Rails installs autoloaders.
         candidate.validate! if validate
 
         runtime_mutex.synchronize do
-          if @database && candidate.database_url != @configuration.database_url
-            raise ArgumentError, "configure the Rails database_url before opening the database"
+          if @database && (candidate.database_url != @configuration.database_url || candidate.connection != @configuration.connection)
+            raise ArgumentError, "configure the Rails database_url and connection before opening the database"
           end
 
           @configuration = candidate

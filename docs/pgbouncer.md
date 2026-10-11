@@ -21,7 +21,7 @@ DECENT_JOB_ADVISORY_LOCK_HEARTBEAT=false
 DECENT_JOB_POLL_INTERVAL=5
 ```
 
-Use a positive polling interval. Five seconds is an example; choose an interval that fits the required pickup latency and database load. Notifications are unnecessary for this configuration. Application enqueues, workers, timestamp monitors, and ownership cleanup use the same endpoint.
+Use a positive polling interval. Five seconds is an example; choose an interval that fits the required pickup latency and database load. Notifications are unnecessary for this configuration. Application enqueues, workers, timestamp monitors, and ownership cleanup use the same endpoint. The example sets `database_url`, so the enqueue connection is `:own`. In a Rails host with `connection = :active_record`, enqueues use the Active Record connection and workers connect with the Active Record settings; see [Rails integration](rails-integration.md#pgbouncer).
 
 ## Install before switching
 

@@ -162,12 +162,16 @@ module DecentJob
     # application classes. When the configuration changes during validation,
     # the call starts over with the new one.
     #
+    # In :active_record mode ({Configuration#connection}) the pool connects
+    # with the Active Record settings and lends the Active Record connection
+    # to enqueues. See {ActiveRecordConnection}.
+    #
     # @param automatic [Boolean] true for automatic starts: return nil instead
-    #   of raising during a transition, stop, or fork, or when no
-    #   database_url is set
+    #   of raising during a transition, stop, or fork, or when
+    #   {Configuration#database_configured?} is false
     # @return [Database, nil] the pool, or nil for a skipped automatic call
-    # @raise [ArgumentError] when no database_url is set or the configuration
-    #   is invalid
+    # @raise [ArgumentError] when no database is configured or the
+    #   configuration is invalid
     # @raise [LifecycleInProgress] when a transition is active and no pool is
     #   open yet
     def database(automatic: false)
@@ -185,11 +189,11 @@ module DecentJob
         pool = runtime_mutex.synchronize do
           return if automatic && (@runtime_transition || @stopping || @forking)
           next unless candidate.equal?(@configuration)
-          return if automatic && !candidate.database_url
+          return if automatic && !candidate.database_configured?
           raise LifecycleInProgress, "runtime is #{@runtime_transition}" if @runtime_transition && !@database
-          raise ArgumentError, "set DECENT_JOB_DATABASE_URL or configure database_url" unless candidate.database_url
+          raise ArgumentError, "set DECENT_JOB_DATABASE_URL or configure database_url" unless candidate.database_configured?
 
-          @database ||= Database.new(url: candidate.database_url, pool_size: candidate.pool_size)
+          @database ||= open_database(candidate)
         end
 
         return pool if pool
@@ -731,6 +735,16 @@ module DecentJob
     end
 
     private
+
+    # Active Record mode connects the pool with the Active Record settings and
+    # lends the Active Record connection to enqueues. Callers hold the
+    # registry lock.
+    def open_database(configuration)
+      return Database.new(url: configuration.database_url, pool_size: configuration.pool_size) unless configuration.connection == :active_record
+
+      require "decent_job/active_record_connection"
+      Database.new(url: ActiveRecordConnection.connection_options, pool_size: configuration.pool_size, enqueue_connection: ActiveRecordConnection)
+    end
 
     # Scans ObjectSpace because application-owned resources are not in the
     # registry. reset! must not close a pool that one of them still uses.

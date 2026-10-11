@@ -157,8 +157,10 @@ module DecentJob
     def self.within_thread(batch_id: nil, batch_callback_id: nil, batch_ids: nil, database: nil)
       database ||= default_database
 
-      database.transaction do
-        with_context(batch_id: batch_id, batch_callback_id: batch_callback_id, batch_ids: batch_ids, database: database) { yield }
+      database.with_enqueue_connection do
+        database.transaction do
+          with_context(batch_id: batch_id, batch_callback_id: batch_callback_id, batch_ids: batch_ids, database: database) { yield }
+        end
       end
     end
 
@@ -201,32 +203,36 @@ module DecentJob
       committed = false
 
       Bulk.with_buffer(nil) do
-        database.transaction do
-          database.after_commit { committed = true }
-          store = BatchStore.new(database)
-          rows = store.save_all(batches.map { |batch| batch.send(:serialized_attributes) })
-          batches.zip(rows).each { |batch, row| batch.instance_variable_set(:@row, row) }
+        database.with_enqueue_connection do
+          database.transaction do
+            database.after_commit { committed = true }
+            store = BatchStore.new(database)
+            rows = store.save_all(batches.map { |batch| batch.send(:serialized_attributes) })
+            batches.zip(rows).each { |batch, row| batch.instance_variable_set(:@row, row) }
 
-          store.locked(batches.map(&:id)) do
-            buffers = pairs.map { |batch, jobs| batch.send(:prepare_members, jobs) }
-            batch_ids = member_batches(batches.zip(buffers.map(&:jobs))).transform_values(&:id)
-            existing_members = buffers.map { |buffer| buffer.jobs.select(&:provider_job_id) }
-            store.lock_scopes(buffers.flat_map(&:jobs))
-            batches.each { |batch| store.open(batch.id) }
-            combined = Bulk::Buffer.new
-            buffers.each { |buffer| combined.append(buffer) }
-            within_thread(batch_ids: batch_ids, database: database) { combined.enqueue }
+            store.locked(batches.map(&:id)) do
+              buffers = pairs.map { |batch, jobs| batch.send(:prepare_members, jobs) }
+              batch_ids = member_batches(batches.zip(buffers.map(&:jobs))).transform_values(&:id)
+              existing_members = buffers.map { |buffer| buffer.jobs.select(&:provider_job_id) }
+              store.lock_scopes(buffers.flat_map(&:jobs))
+              batches.each { |batch| store.open(batch.id) }
+              combined = Bulk::Buffer.new
+              buffers.each { |buffer| combined.append(buffer) }
+              within_thread(batch_ids: batch_ids, database: database) { combined.enqueue }
 
-            batches.zip(existing_members).each do |batch, existing|
-              store.attach(batch.id, existing) unless existing.empty?
-              store.mark_enqueued(batch.id)
-              batch.send(:request_reconciliation)
+              batches.zip(existing_members).each do |batch, existing|
+                store.attach(batch.id, existing) unless existing.empty?
+                store.mark_enqueued(batch.id)
+                batch.send(:request_reconciliation)
+              end
             end
           end
+
+          batches.each(&:reload)
         end
       end
 
-      batches.each(&:reload)
+      batches
     rescue
       unless committed
         Array(batches).zip(snapshots || []).each { |batch, row| batch.instance_variable_set(:@row, row) if row }
@@ -392,16 +398,20 @@ module DecentJob
       assign_properties(properties)
       validate_members(Array(jobs).compact)
 
-      accepted = transaction do
-        save_and_lock do
-          buffer = prepare_members(jobs, &block)
-          store.lock_scopes(buffer.jobs)
-          enqueue_buffer(buffer)
+      # Reload on the enqueue connection: an open host transaction hides the
+      # new rows from the worker pool.
+      database.with_enqueue_connection do
+        accepted = transaction do
+          save_and_lock do
+            buffer = prepare_members(jobs, &block)
+            store.lock_scopes(buffer.jobs)
+            enqueue_buffer(buffer)
+          end
         end
-      end
 
-      reload
-      accepted
+        reload
+        accepted
+      end
     end
 
     # Inserts or attaches jobs without marking the batch enqueued.
@@ -416,16 +426,20 @@ module DecentJob
     def add(jobs = [], &block)
       validate_members(Array(jobs).compact)
 
-      accepted = transaction do
-        save_and_lock do
-          buffer = prepare_members(jobs, &block)
-          store.lock_scopes(buffer.jobs)
-          flush_members(buffer)
+      # Reload on the enqueue connection: an open host transaction hides the
+      # new rows from the worker pool.
+      database.with_enqueue_connection do
+        accepted = transaction do
+          save_and_lock do
+            buffer = prepare_members(jobs, &block)
+            store.lock_scopes(buffer.jobs)
+            flush_members(buffer)
+          end
         end
-      end
 
-      reload
-      accepted
+        reload
+        accepted
+      end
     end
 
     # @return [Array<Object>] deserialized member jobs still stored, oldest
@@ -451,24 +465,26 @@ module DecentJob
     # @note Inline members run after commit. Async adapters wake their worker
     #   after commit.
     def retry
-      transaction do
-        save unless persisted?
+      database.with_enqueue_connection do
+        transaction do
+          save unless persisted?
 
-        store.locked([id]) do
-          store.open(id)
-          ids = store.retry_members(id)
-          store.mark_enqueued(id)
-          request_reconciliation
+          store.locked([id]) do
+            store.open(id)
+            ids = store.retry_members(id)
+            store.mark_enqueued(id)
+            request_reconciliation
 
-          # Each adapter runs inline members or wakes its async worker after
-          # commit, as it does for a single job retry.
-          store.members(id, ids: ids, deserialize_arguments: false).group_by(&:queue_adapter).each do |adapter, jobs|
-            adapter.after_enqueue(jobs.map(&:provider_job_id))
+            # Each adapter runs inline members or wakes its async worker after
+            # commit, as it does for a single job retry.
+            store.members(id, ids: ids, deserialize_arguments: false).group_by(&:queue_adapter).each do |adapter, jobs|
+              adapter.after_enqueue(jobs.map(&:provider_job_id))
+            end
           end
         end
-      end
 
-      reload
+        reload
+      end
     end
 
     private
@@ -488,9 +504,11 @@ module DecentJob
       committed = false
 
       Bulk.with_buffer(nil) do
-        database.transaction do
-          database.after_commit { committed = true }
-          yield
+        database.with_enqueue_connection do
+          database.transaction do
+            database.after_commit { committed = true }
+            yield
+          end
         end
       end
     rescue

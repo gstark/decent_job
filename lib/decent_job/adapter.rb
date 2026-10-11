@@ -118,6 +118,8 @@ module DecentJob
     #   it; a direct adapter caller gets it.
     # @note Writes decent_jobs and sends NOTIFY in the caller's transaction
     #   when one is open. Inline execution and async wakeups wait for commit.
+    #   In :active_record mode the caller's Active Record transaction counts,
+    #   see {Database#with_enqueue_connection}.
     def enqueue(job)
       raising_integration_errors(job) { enqueue_job(job) }
     end
@@ -163,20 +165,22 @@ module DecentJob
           return jobs.size
         end
 
-        controlled, plain = jobs.partition { |job| ConcurrencyControls.controlled?(job) }
-        count = persist(plain, skip_duplicates: true)
+        database.with_enqueue_connection do
+          controlled, plain = jobs.partition { |job| ConcurrencyControls.controlled?(job) }
+          count = persist(plain, skip_duplicates: true)
 
-        controlled.each do |job|
-          if callbacks
-            job.enqueue
-          else
-            enqueue_without_callbacks(job)
+          controlled.each do |job|
+            if callbacks
+              job.enqueue
+            else
+              enqueue_without_callbacks(job)
+            end
+
+            count += 1 if job.successfully_enqueued?
           end
 
-          count += 1 if job.successfully_enqueued?
+          count
         end
-
-        count
       end
     end
 
@@ -402,7 +406,7 @@ module DecentJob
     def start_async
       LifecycleEvents.defer do
         return unless DecentJob.async_ready? && execute_async?
-        return unless @database || DecentJob.configuration.database_url
+        return unless @database || DecentJob.configuration.database_configured?
 
         return if @worker_mutex.synchronize { @stopping }
 
@@ -447,6 +451,9 @@ module DecentJob
     # The admission check and the insert share one transaction that holds the
     # concurrency scope locks. A nil provider ID after the insert means the
     # cron occurrence constraint skipped the row.
+    #
+    # A bulk capture needs no database, so the enqueue connection is chosen
+    # after it. A running job's own retry stays on the worker pool.
     def enqueue_job(job, scheduled_at: nil)
       return if Bulk.capture(job, queue_adapter: self, callbacks_run: true)
 
@@ -457,13 +464,15 @@ module DecentJob
         return job.provider_job_id
       end
 
-      ConcurrencyControls.new(database).enqueue(job) do
-        instrument_enqueue(job, scheduled_at: scheduled_at) do |payload, attributes|
-          persist([job], attributes: [attributes], dispatch: false) { |row| payload[:job] = Job.from_attributes(row, database: database) }
-          payload[:accepted] = !job.provider_job_id.nil?
-        end
+      database.with_enqueue_connection do
+        ConcurrencyControls.new(database).enqueue(job) do
+          instrument_enqueue(job, scheduled_at: scheduled_at) do |payload, attributes|
+            persist([job], attributes: [attributes], dispatch: false) { |row| payload[:job] = Job.from_attributes(row, database: database) }
+            payload[:accepted] = !job.provider_job_id.nil?
+          end
 
-        after_enqueue([job.provider_job_id]) if job.provider_job_id
+          after_enqueue([job.provider_job_id]) if job.provider_job_id
+        end
       end
 
       raise EnqueueError, "cron occurrence already enqueued" unless job.provider_job_id

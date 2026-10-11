@@ -72,11 +72,29 @@ module DecentJob
         end
 
         validate_cron
+        validate_connection
 
         @errors
       end
 
       private
+
+      # Active Record mode inserts jobs through Active Record, while workers
+      # use the global pool. Both must reach the same database, or workers
+      # never see the jobs.
+      def validate_connection
+        return unless @configuration.connection == :active_record
+
+        if !defined?(::ActiveRecord::Base)
+          @errors.add(:connection, "active_record requires Active Record")
+        elsif @configuration.explicit_database_url?
+          require "decent_job/active_record_connection"
+
+          unless ActiveRecordConnection.same_database?(@configuration.database_url)
+            @errors.add(:connection, "active_record requires database_url to name the Active Record database; set connection to :own to use another database")
+          end
+        end
+      end
 
       def finite_real?(value)
         value.is_a?(Numeric) && value.real? && value.finite?
