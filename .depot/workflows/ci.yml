@@ -32,7 +32,8 @@ jobs:
           bundler-cache: true
       - run: bundle exec standardrb
       - run: bundle exec rake spec
-      - run: sudo apt-get update && sudo apt-get install -y pgbouncer
+      # The runner ships pg_dump 16, which refuses a PostgreSQL 17 server.
+      - run: sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y && sudo apt-get install -y pgbouncer postgresql-client-17
       - run: bundle exec rake spec:pgbouncer
       - run: gem build decent_job.gemspec
       - run: bundle install

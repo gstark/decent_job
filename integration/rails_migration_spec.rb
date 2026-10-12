@@ -15,9 +15,11 @@ describe "Rails migration generator" do
 
   def run_host(schema_format)
     FileUtils.mkdir_p(File.join(@directory, "config"))
+    # Rails passes only "username", not "user", to pg_dump as PGUSER.
     File.write(File.join(@directory, "config/database.yml"), YAML.dump(
-      "test" => @connection_options.except(:options).transform_keys(&:to_s)
-        .merge("adapter" => "postgresql", "database" => @connection_options.fetch(:dbname), "schema_search_path" => @schema_name)
+      "test" => @connection_options.slice(:host, :port, :password).transform_keys(&:to_s)
+        .merge("adapter" => "postgresql", "database" => @connection_options.fetch(:dbname),
+          "username" => @connection_options.fetch(:user), "schema_search_path" => @schema_name)
     ))
 
     environment = {"HOST_CONNECTION" => JSON.generate(@connection_options), "HOST_ROOT" => @directory,
